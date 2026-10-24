@@ -67,6 +67,88 @@ export async function POST(req: Request) {
         }
       }
       return NextResponse.json({ success: true, key });
+    } else if (action === "paste") {
+      const sandbox = await getOrCreateAgentSandbox(campaignId, agentId, true);
+      const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
+      if (activeSb && text) {
+        try {
+          // 1. Direct type/write into active window
+          if (typeof activeSb.write === "function") {
+            await activeSb.write(text);
+          } else if (typeof activeSb.commands?.run === "function") {
+            await activeSb.commands.run(`xdotool type --delay 10 "${text.replace(/"/g, '\\"')}"`);
+          }
+
+          // 2. Also populate X11 clipboard so Ctrl+V or right-click paste works inside desktop
+          if (activeSb.commands?.run) {
+            await activeSb.commands.run(
+              `python3 -c "import subprocess; p = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE); p.communicate(input=${JSON.stringify(text)}.encode('utf-8'))" 2>/dev/null || true`
+            );
+          }
+        } catch (err: any) {
+          console.warn("[Sandbox] paste error:", err);
+        }
+      }
+      return NextResponse.json({ success: true, pasted: text.slice(0, 50) });
+    } else if (action === "command" || action === "exec") {
+      const sandbox = await getOrCreateAgentSandbox(campaignId, agentId, true);
+      const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
+      let stdout = "";
+      let stderr = "";
+      let exitCode = 0;
+      const cmdToRun = body.command || text;
+      if (activeSb && cmdToRun) {
+        try {
+          const cmdRes = await activeSb.commands.run(cmdToRun);
+          stdout = cmdRes.stdout || "";
+          stderr = cmdRes.stderr || "";
+          exitCode = cmdRes.exitCode ?? 0;
+        } catch (cmdErr: any) {
+          stderr = cmdErr.message || "Command execution failed";
+          exitCode = 1;
+        }
+      }
+      return NextResponse.json({ success: exitCode === 0, stdout, stderr, exitCode });
+    } else if (action === "install_chrome") {
+      const sandbox = await getOrCreateAgentSandbox(campaignId, agentId, true);
+      const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
+      if (activeSb) {
+        try {
+          const script = `
+            export DEBIAN_FRONTEND=noninteractive
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq wget curl ca-certificates xclip xdotool
+            if ! command -v google-chrome &> /dev/null && ! command -v google-chrome-stable &> /dev/null; then
+              wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+              sudo dpkg -i /tmp/chrome.deb || sudo apt-get install -f -y -qq
+              rm -f /tmp/chrome.deb
+            fi
+            echo "Installed Google Chrome: $(google-chrome --version || echo 'Success')"
+          `;
+          const cmdRes = await activeSb.commands.run(script);
+          return NextResponse.json({
+            success: true,
+            message: "Google Chrome installed successfully",
+            output: cmdRes.stdout || cmdRes.stderr,
+          });
+        } catch (installErr: any) {
+          return NextResponse.json({ success: false, error: installErr.message }, { status: 500 });
+        }
+      }
+      return NextResponse.json({ error: "Sandbox not active" }, { status: 400 });
+    } else if (action === "open_chrome") {
+      const sandbox = await getOrCreateAgentSandbox(campaignId, agentId, true);
+      const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
+      if (activeSb && activeSb.commands?.run) {
+        await activeSb.commands.run(`nohup google-chrome --no-sandbox "${url || "https://google.com"}" >/dev/null 2>&1 &`);
+      }
+      return NextResponse.json({ success: true, url: url || "https://google.com" });
+    } else if (action === "init_all") {
+      const agentIds = ["fb_laxdollar", "fb_jotrainer", "fb_contentor", "ig_real", "ig_shader", "analytics"];
+      const results = await Promise.allSettled(
+        agentIds.map((id) => getOrCreateAgentSandbox(campaignId, id, true))
+      );
+      return NextResponse.json({ success: true, initialized: results.map((r, i) => ({ agentId: agentIds[i], status: r.status })) });
     }
 
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
