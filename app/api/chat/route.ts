@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { agentMessages, agentTasks, agentPlans, agents } from "@/db/schema";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, inArray } from "drizzle-orm";
 import { askMasterAgent, askWorkerAgent } from "@/lib/ai";
 import { runAgentTask } from "@/lib/scheduler";
 import { getAgentContentMemory, buildAntiDuplicationDirective } from "@/lib/memory";
@@ -168,6 +168,51 @@ export async function POST(req: Request) {
         mediaUrl: workerRes.mediaUrl,
       });
     }
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const agentId = searchParams.get("agentId");
+    const campaignId = searchParams.get("campaignId") || "default_campaign";
+    const singleMessageId = searchParams.get("id");
+
+    let body: any = {};
+    try {
+      body = await req.json();
+    } catch {
+      // Body not provided or not JSON (e.g. query params only)
+    }
+
+    const messageIds: string[] = body.messageIds || (singleMessageId ? [singleMessageId] : []);
+    const clearAll = body.clearAll || searchParams.get("clearAll") === "true";
+
+    // 1. Clear entire chat for this agent
+    if (clearAll && agentId) {
+      await db
+        .delete(agentMessages)
+        .where(and(eq(agentMessages.campaignId, campaignId), eq(agentMessages.agentId, agentId)))
+        .run();
+      return NextResponse.json({ success: true, cleared: "all", agentId });
+    }
+
+    // 2. Delete selected or single message(s)
+    if (messageIds.length > 0) {
+      if (messageIds.length === 1) {
+        await db.delete(agentMessages).where(eq(agentMessages.id, messageIds[0])).run();
+      } else {
+        await db.delete(agentMessages).where(inArray(agentMessages.id, messageIds)).run();
+      }
+      return NextResponse.json({ success: true, deletedCount: messageIds.length });
+    }
+
+    return NextResponse.json(
+      { error: "Specify messageIds array or clearAll=true with agentId" },
+      { status: 400 }
+    );
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

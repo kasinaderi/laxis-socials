@@ -29,6 +29,10 @@ import {
   Download,
   ZoomIn,
   Paperclip,
+  Trash2,
+  MoreVertical,
+  CheckSquare,
+  Square,
 } from "lucide-react";
 
 interface AgentTabsProps {
@@ -79,6 +83,68 @@ export function AgentTabs({
 
   // Tasks Tab state
   const [tasks, setTasks] = useState<any[]>([]);
+
+  // Chat Management & Deletion State
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
+  const [showChatOptionsMenu, setShowChatOptionsMenu] = useState(false);
+
+  const handleDeleteSingleMessage = async (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setMessages((prev) => prev.filter((m) => m.id !== id));
+    setSelectedMessageIds((prev) => prev.filter((item) => item !== id));
+    try {
+      await fetch(`/api/chat?id=${id}&campaignId=${campaignId}`, { method: "DELETE" });
+    } catch (err) {
+      console.error("Failed to delete message:", err);
+    }
+  };
+
+  const handleDeleteSelectedMessages = async () => {
+    if (selectedMessageIds.length === 0) return;
+    const toDelete = [...selectedMessageIds];
+    setMessages((prev) => prev.filter((m) => !toDelete.includes(m.id)));
+    setSelectedMessageIds([]);
+    setIsMultiSelectMode(false);
+    try {
+      await fetch("/api/chat", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageIds: toDelete, campaignId }),
+      });
+    } catch (err) {
+      console.error("Failed to delete selected messages:", err);
+    }
+  };
+
+  const handleClearWholeChat = async () => {
+    if (!window.confirm(`Clear entire conversation with ${agentName}? This cannot be undone.`)) return;
+    setMessages([]);
+    setSelectedMessageIds([]);
+    setIsMultiSelectMode(false);
+    setShowChatOptionsMenu(false);
+    try {
+      await fetch(`/api/chat?clearAll=true&agentId=${agentId}&campaignId=${campaignId}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      console.error("Failed to clear chat:", err);
+    }
+  };
+
+  const toggleSelectMessage = (id: string) => {
+    setSelectedMessageIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedMessageIds.length === messages.length && messages.length > 0) {
+      setSelectedMessageIds([]);
+    } else {
+      setSelectedMessageIds(messages.map((m) => m.id));
+    }
+  };
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -396,83 +462,216 @@ export function AgentTabs({
 
       {/* Tab 1: Chat View */}
       {activeTab === "chat" && (
-        <div className="flex-1 flex flex-col min-h-0 bg-slate-50/50 dark:bg-slate-950/50">
-          <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
+        <div className="flex-1 flex flex-col min-h-0 bg-slate-50/50 dark:bg-slate-950/50 relative">
+          {/* Chat Action Header: Multi-Delete & Clear Chat Options */}
+          <div className="px-3 py-1.5 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xs border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between text-xs z-20">
+            {isMultiSelectMode ? (
+              <div className="flex items-center justify-between w-full gap-2 animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={toggleSelectAll}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 cursor-pointer"
+                  >
+                    {selectedMessageIds.length === messages.length && messages.length > 0 ? (
+                      <CheckSquare className="w-4 h-4 text-blue-600" />
+                    ) : (
+                      <Square className="w-4 h-4 text-slate-400" />
+                    )}
+                    <span>{selectedMessageIds.length === messages.length && messages.length > 0 ? "Deselect All" : "Select All"}</span>
+                  </button>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    ({selectedMessageIds.length} of {messages.length})
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMultiSelectMode(false);
+                      setSelectedMessageIds([]);
+                    }}
+                    className="px-2.5 py-1 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 text-xs font-medium cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteSelectedMessages}
+                    disabled={selectedMessageIds.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-1 bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete ({selectedMessageIds.length})</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between w-full">
+                <span className="text-[11px] font-semibold text-slate-400 dark:text-slate-500">
+                  {messages.length} {messages.length === 1 ? "message" : "messages"}
+                </span>
+
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowChatOptionsMenu(!showChatOptionsMenu)}
+                    title="Chat options (Delete, Clear)"
+                    className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center gap-1 text-[11px]"
+                  >
+                    <MoreVertical className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Dropdown Menu */}
+                  {showChatOptionsMenu && (
+                    <div
+                      className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl py-1 z-30 animate-in fade-in zoom-in-95 duration-100"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsMultiSelectMode(true);
+                          setShowChatOptionsMenu(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                      >
+                        <CheckSquare className="w-3.5 h-3.5 text-blue-500" />
+                        <span>Select Messages</span>
+                      </button>
+
+                      <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+
+                      <button
+                        type="button"
+                        onClick={handleClearWholeChat}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-red-600" />
+                        <span>Clear Whole Chat</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div
+            className="flex-1 overflow-y-auto p-4 space-y-3.5"
+            onClick={() => showChatOptionsMenu && setShowChatOptionsMenu(false)}
+          >
             {messages.map((m) => {
               const isUser = m.sender === "user";
               const media = getMessageMedia(m);
+              const isSelected = selectedMessageIds.includes(m.id);
+
               return (
-                <div key={m.id} className={`flex gap-2.5 ${isUser ? "justify-end" : "justify-start"}`}>
+                <div key={m.id} className={`flex items-start gap-2 ${isUser ? "justify-end" : "justify-start"} group relative`}>
+                  {/* Multi-select Checkbox */}
+                  {isMultiSelectMode && (
+                    <button
+                      type="button"
+                      onClick={() => toggleSelectMessage(m.id)}
+                      className="mt-2 text-slate-400 hover:text-blue-600 cursor-pointer flex-shrink-0"
+                    >
+                      {isSelected ? (
+                        <CheckSquare className="w-4 h-4 text-blue-600" />
+                      ) : (
+                        <Square className="w-4 h-4 text-slate-300 dark:text-slate-600" />
+                      )}
+                    </button>
+                  )}
+
                   {!isUser && (
-                    <div className="w-7 h-7 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex-shrink-0 flex items-center justify-center p-0.5 shadow-2xs">
+                    <div className="w-7 h-7 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex-shrink-0 flex items-center justify-center p-0.5 shadow-2xs mt-0.5">
                       <img src={avatar} alt={agentName} className="w-full h-full object-cover rounded-lg" />
                     </div>
                   )}
-                  <div
-                    className={`max-w-[85%] sm:max-w-[78%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed ${
-                      isUser
-                        ? "bg-blue-600 text-white rounded-br-xs shadow-sm font-medium"
-                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700/80 rounded-bl-xs shadow-2xs"
-                    }`}
-                  >
-                    <p className="whitespace-pre-wrap">{m.text}</p>
 
-                    {/* High-Resolution Media Card (Generated or Attached Image) */}
-                    {media.url && (
-                      <div className="mt-2.5 rounded-xl overflow-hidden border border-slate-200/90 dark:border-slate-700 bg-slate-900/5 dark:bg-slate-900/40 relative group max-w-sm">
-                        <img
-                          src={media.url}
-                          alt={media.title || "Social media visual"}
-                          className="w-full h-auto max-h-72 object-cover rounded-lg cursor-pointer hover:opacity-95 transition-all"
-                          onClick={() => setZoomedImage(media.url!)}
-                          onError={(e) => {
-                            const target = e.currentTarget;
-                            if (target.src.includes("model=flux")) {
-                              target.src = target.src.replace("model=flux", "model=turbo");
-                            }
-                          }}
-                        />
-                        <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/70 backdrop-blur-xs p-1 rounded-lg">
-                          <button
-                            type="button"
+                  {/* Message Bubble Container with Hover Delete */}
+                  <div className="relative group/bubble max-w-[85%] sm:max-w-[78%]">
+                    <div
+                      className={`rounded-2xl px-4 py-2.5 text-xs leading-relaxed ${
+                        isUser
+                          ? "bg-blue-600 text-white rounded-br-xs shadow-sm font-medium"
+                          : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700/80 rounded-bl-xs shadow-2xs"
+                      }`}
+                    >
+                      <p className="whitespace-pre-wrap">{m.text}</p>
+
+                      {/* High-Resolution Media Card (Generated or Attached Image) */}
+                      {media.url && (
+                        <div className="mt-2.5 rounded-xl overflow-hidden border border-slate-200/90 dark:border-slate-700 bg-slate-900/5 dark:bg-slate-900/40 relative group max-w-sm">
+                          <img
+                            src={media.url}
+                            alt={media.title || "Social media visual"}
+                            className="w-full h-auto max-h-72 object-cover rounded-lg cursor-pointer hover:opacity-95 transition-all"
                             onClick={() => setZoomedImage(media.url!)}
-                            title="View Full HD"
-                            className="p-1 rounded text-white hover:bg-white/20 cursor-pointer"
-                          >
-                            <ZoomIn className="w-3.5 h-3.5" />
-                          </button>
-                          <a
-                            href={media.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            download="laxis-asset.png"
-                            title="Download Asset"
-                            className="p-1 rounded text-white hover:bg-white/20 cursor-pointer"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </a>
-                        </div>
-                        <div className="px-2.5 py-1.5 bg-slate-950/80 backdrop-blur-xs text-[10px] text-white flex items-center justify-between">
-                          <span className="flex items-center gap-1.5 truncate font-medium">
-                            <Sparkles className="w-3 h-3 text-amber-300 flex-shrink-0" />
-                            <span className="truncate">
-                              {isUser ? "Attached Image" : media.title || "AI Generated Asset (Flux.1)"}
+                            onError={(e) => {
+                              const target = e.currentTarget;
+                              if (target.src.includes("model=flux")) {
+                                target.src = target.src.replace("model=flux", "model=turbo");
+                              }
+                            }}
+                          />
+                          <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/70 backdrop-blur-xs p-1 rounded-lg">
+                            <button
+                              type="button"
+                              onClick={() => setZoomedImage(media.url!)}
+                              title="View Full HD"
+                              className="p-1 rounded text-white hover:bg-white/20 cursor-pointer"
+                            >
+                              <ZoomIn className="w-3.5 h-3.5" />
+                            </button>
+                            <a
+                              href={media.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              download="laxis-asset.png"
+                              title="Download Asset"
+                              className="p-1 rounded text-white hover:bg-white/20 cursor-pointer"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </a>
+                          </div>
+                          <div className="px-2.5 py-1.5 bg-slate-950/80 backdrop-blur-xs text-[10px] text-white flex items-center justify-between">
+                            <span className="flex items-center gap-1.5 truncate font-medium">
+                              <Sparkles className="w-3 h-3 text-amber-300 flex-shrink-0" />
+                              <span className="truncate">
+                                {isUser ? "Attached Image" : media.title || "AI Generated Asset (Flux.1)"}
+                              </span>
                             </span>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setZoomedImage(media.url!)}
-                            className="text-blue-300 hover:text-white text-[9px] underline ml-2 flex-shrink-0 cursor-pointer"
-                          >
-                            Expand
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => setZoomedImage(media.url!)}
+                              className="text-blue-300 hover:text-white text-[9px] underline ml-2 flex-shrink-0 cursor-pointer"
+                            >
+                              Expand
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
 
-                    <span className={`block text-[9px] mt-1.5 ${isUser ? "text-blue-200 text-right" : "text-slate-400 dark:text-slate-500"}`}>
-                      {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    </span>
+                      <span className={`block text-[9px] mt-1.5 ${isUser ? "text-blue-200 text-right" : "text-slate-400 dark:text-slate-500"}`}>
+                        {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </div>
+
+                    {/* Single message instant delete icon on hover */}
+                    {!isMultiSelectMode && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteSingleMessage(m.id, e)}
+                        title="Delete this message"
+                        className={`absolute top-1 p-1 rounded-md bg-white dark:bg-slate-800 text-slate-400 hover:text-red-600 dark:hover:text-red-400 shadow-xs border border-slate-200 dark:border-slate-700 opacity-0 group-hover/bubble:opacity-100 transition-opacity cursor-pointer ${
+                          isUser ? "-left-6" : "-right-6"
+                        }`}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -480,7 +679,7 @@ export function AgentTabs({
             {isLoading && (
               <div className="flex gap-2.5 items-center text-slate-400 dark:text-slate-500 text-xs italic pl-9">
                 <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
-                <span>{agentName} is generating copy &amp; visuals...</span>
+                <span>{agentName} is responding...</span>
               </div>
             )}
             <div ref={chatEndRef} />
