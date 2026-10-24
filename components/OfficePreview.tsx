@@ -45,7 +45,7 @@ export const DEFAULT_AGENT_CONFIGS: AgentOfficePlacement[] = [
     role: "Campaign Orchestrator & Director",
     emoji: "👑",
     niche: "Autonomous Daily Schedule & Cross-Agent Coordination",
-    target: "All 6 Agents & Sandboxes",
+    target: "All 6 Agents & Workstations",
     dailyPosts: "Decides 3-8 posts/day per agent (Randomized Human Times)",
     seatNumber: 1,
     zone: "red",
@@ -59,7 +59,7 @@ export const DEFAULT_AGENT_CONFIGS: AgentOfficePlacement[] = [
     emoji: "📈",
     niche: "Deriv Boom & Crash, Synthetic Indices & Money Memes",
     target: "laxdollar.site & 3x FB Trading Groups",
-    dailyPosts: "3-8 posts/day (Dedicated Sandbox)",
+    dailyPosts: "3-8 posts/day (Dedicated Agent PC)",
     seatNumber: 3,
     zone: "yellow",
     zoneLabel: "Facebook Agency Zone",
@@ -72,7 +72,7 @@ export const DEFAULT_AGENT_CONFIGS: AgentOfficePlacement[] = [
     emoji: "💼",
     niche: "Remote AI Annotation, Outlier & Remotasks Job Alerts",
     target: "Online Jobs Kenya & Remote Work Africa Groups",
-    dailyPosts: "3-8 posts/day (Dedicated Sandbox)",
+    dailyPosts: "3-8 posts/day (Dedicated Agent PC)",
     seatNumber: 4,
     zone: "yellow",
     zoneLabel: "Facebook Agency Zone",
@@ -85,7 +85,7 @@ export const DEFAULT_AGENT_CONFIGS: AgentOfficePlacement[] = [
     emoji: "🔥",
     niche: "Sheng Comedy, Slapstick Video Reels & Viral Banter",
     target: "Nairobi Funniest Memes Group & Profile",
-    dailyPosts: "3-8 posts/day (Dedicated Sandbox)",
+    dailyPosts: "3-8 posts/day (Dedicated Agent PC)",
     seatNumber: 2,
     zone: "yellow",
     zoneLabel: "Facebook Agency Zone",
@@ -98,7 +98,7 @@ export const DEFAULT_AGENT_CONFIGS: AgentOfficePlacement[] = [
     emoji: "🤫",
     niche: "True Dramatic Confessions & Dilemmas with AI Visuals",
     target: "@instareal_confessions & Instagram Explore",
-    dailyPosts: "3-8 posts/day (Dedicated Sandbox)",
+    dailyPosts: "3-8 posts/day (Dedicated Agent PC)",
     seatNumber: 1,
     zone: "green",
     zoneLabel: "Instagram Media Zone",
@@ -111,7 +111,7 @@ export const DEFAULT_AGENT_CONFIGS: AgentOfficePlacement[] = [
     emoji: "✨",
     niche: "The Shade Room Style Celebrity Scoops & AI Scandals",
     target: "@instashader_tea & Instagram Explore",
-    dailyPosts: "3-8 posts/day (Dedicated Sandbox)",
+    dailyPosts: "3-8 posts/day (Dedicated Agent PC)",
     seatNumber: 2,
     zone: "green",
     zoneLabel: "Instagram Media Zone",
@@ -156,7 +156,7 @@ export function OfficePreview({
   const [isEditMode, setIsEditMode] = useState(false);
   const [draggingAgentId, setDraggingAgentId] = useState<string | null>(null);
   const [hoveredAgentId, setHoveredAgentId] = useState<string | null>(null);
-  const [showInfoCards, setShowInfoCards] = useState(true);
+  const [showInfoCards, setShowInfoCards] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [avatarScale, setAvatarScale] = useState<number>(1.0);
@@ -385,16 +385,6 @@ export function OfficePreview({
         </div>
       </div>
 
-      {/* Edit Mode Instruction Strip */}
-      {isEditMode && (
-        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
-          <div className="bg-amber-500/95 text-slate-950 font-bold text-[11px] px-3.5 py-1 rounded-full shadow-lg border border-amber-300 flex items-center gap-1.5 animate-bounce">
-            <Move className="w-3.5 h-3.5" />
-            <span>Click/Touch &amp; Drag any character anywhere on the floor. Click Save when done.</span>
-          </div>
-        </div>
-      )}
-
       {/* All 7 Seated Animated Characters */}
       {DEFAULT_AGENT_CONFIGS.map((agent) => {
         const isSelected = selectedAgentId === agent.id;
@@ -428,7 +418,7 @@ export function OfficePreview({
         );
       })}
 
-      {/* Dynamic Information Card (Moves with the agent, never leaks outside office) */}
+      {/* Dynamic Information Card (Only opens if toggled, never leaks outside office) */}
       {showInfoCards && activeAgentConfig && activeAgentCoords && (
         <div
           style={{
@@ -447,7 +437,7 @@ export function OfficePreview({
               <span className="font-bold text-xs text-white truncate">{activeAgentConfig.name}</span>
             </div>
             <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
-              <ShieldCheck className="w-3 h-3" /> Dedicated Sandbox
+              <ShieldCheck className="w-3 h-3" /> Dedicated Agent PC
             </span>
           </div>
 
@@ -479,38 +469,12 @@ export function OfficePreview({
               onClick={() => onSelectAgent?.(activeAgentConfig.id)}
               className="mt-3 w-full py-1.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-md shadow-blue-500/25"
             >
-              <span>Open Active Workspace &amp; Desktop</span>
+              <span>Open Active Workspace &amp; PC</span>
               <ChevronRight className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
       )}
-
-      {/* Bottom Status Legend & Hint */}
-      <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between z-20 pointer-events-none">
-        <div className="flex items-center gap-2 bg-slate-900/85 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-semibold text-white/90 border border-white/15 shadow-md">
-          <span className="flex items-center gap-1 text-red-400">
-            <span className="w-2 h-2 rounded-full bg-red-500 inline-block" /> Master
-          </span>
-          <span className="text-white/30">|</span>
-          <span className="flex items-center gap-1 text-amber-300">
-            <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> 3x Facebook
-          </span>
-          <span className="text-white/30">|</span>
-          <span className="flex items-center gap-1 text-emerald-300">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" /> 2x Instagram
-          </span>
-          <span className="text-white/30">|</span>
-          <span className="flex items-center gap-1 text-blue-300">
-            <span className="w-2 h-2 rounded-full bg-blue-400 inline-block" /> Analytics
-          </span>
-        </div>
-
-        <div className="hidden sm:flex items-center gap-1 bg-slate-900/85 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-medium text-slate-300 border border-white/15 shadow-md">
-          <Info className="w-3 h-3 text-blue-400" />
-          <span>Click &apos;Rearrange Seats&apos; to drag &amp; drop any agent</span>
-        </div>
-      </div>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { posts, agentMessages, agentDeliverables } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
+import { sanitizeImagePrompt } from "./images";
 
 export interface PastPostItem {
   id: string;
@@ -216,6 +217,7 @@ const ENVIRONMENTS = [
 ];
 
 export function enrichVisualPrompt(basePrompt: string, seedOffset = 0): { prompt: string; seed: number } {
+  const cleanBase = sanitizeImagePrompt(basePrompt);
   const angle = CAMERA_ANGLES[Math.floor(Math.random() * CAMERA_ANGLES.length)];
   const light = LIGHTING_STYLES[Math.floor(Math.random() * LIGHTING_STYLES.length)];
   const env = ENVIRONMENTS[Math.floor(Math.random() * ENVIRONMENTS.length)];
@@ -223,10 +225,10 @@ export function enrichVisualPrompt(basePrompt: string, seedOffset = 0): { prompt
   // Inject high-entropy randomness
   const seed = Date.now() + Math.floor(Math.random() * 10000000) + seedOffset;
 
-  const enriched = `${basePrompt.trim()}, ${angle}, set in ${env}, ${light}, 8k resolution, cinematic commercial photography, hyper-detailed, masterpiece`;
+  const enriched = `${cleanBase}, ${angle}, ${light}, 8k photography`;
 
   return {
-    prompt: enriched,
+    prompt: sanitizeImagePrompt(enriched),
     seed,
   };
 }

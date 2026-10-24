@@ -54,12 +54,21 @@ export function AnimatedCharacter({
   const totalFrames = SEAT_FRAME_COUNTS[seatNumber] || 6;
   const isRunning = agentStatus === "running";
 
+  // Preload all character typing sprite frames into browser memory so frames never drop or freeze
   useEffect(() => {
-    // Dynamic typing speed:
-    // Fast, urgent typing when actively running task (115ms)
-    // Relaxed, continuous typing rhythm when resting/completed/idle (200ms)
-    // Keeps all characters alive and typing like a real bustling office!
-    const speed = isRunning ? 115 : 200;
+    if (typeof window !== "undefined") {
+      for (let i = 0; i < totalFrames; i++) {
+        const img = new Image();
+        img.src = `/characters/seat-${seatNumber}/typing_${i}.png`;
+      }
+    }
+  }, [seatNumber, totalFrames]);
+
+  useEffect(() => {
+    // Dynamic typing cycle:
+    // Urgent rapid typing when actively running task (120ms)
+    // Relaxed, continuous typing rhythm when resting/completed/idle (175ms)
+    const speed = isRunning ? 120 : 175;
 
     const interval = setInterval(() => {
       setFrameIndex((prev) => (prev + 1) % totalFrames);
@@ -120,6 +129,34 @@ export function AnimatedCharacter({
         isSelected && !isDraggable ? "scale-105" : ""
       }`}
     >
+      {/* Dynamic Keyframes for Continuous Body Typing Bob and Keyboard Keystroke Activity */}
+      <style jsx>{`
+        @keyframes avatarTypingBounce {
+          0%, 100% {
+            transform: translateY(0px) scale(1);
+          }
+          25% {
+            transform: translateY(-2px) scale(1.01);
+          }
+          50% {
+            transform: translateY(0.5px) scale(1);
+          }
+          75% {
+            transform: translateY(-1.4px) scale(1.005);
+          }
+        }
+        @keyframes keyTapFlash {
+          0%, 100% {
+            opacity: 0.15;
+            transform: scale(0.7);
+          }
+          50% {
+            opacity: 0.95;
+            transform: scale(1.35);
+          }
+        }
+      `}</style>
+
       {/* Ground Floor Shadow & Seat Base (Anchors the chair wheels firmly to the ground) */}
       <div
         className={`absolute bottom-[10%] left-1/2 -translate-x-1/2 w-4/5 h-3.5 rounded-full blur-xs pointer-events-none transition-all duration-300 ${
@@ -183,18 +220,41 @@ export function AnimatedCharacter({
         <div className="absolute inset-0 -m-2 rounded-2xl border-2 border-blue-400 bg-blue-500/10 shadow-[0_0_20px_rgba(59,130,246,0.4)] pointer-events-none animate-pulse" />
       )}
 
-      {/* Seated Animated Character Sprite Frame */}
-      <div className="relative w-full aspect-[332/501]">
+      {/* Seated Animated Character Sprite Frame with Rhythmic Typing Bounce */}
+      <div
+        className="relative w-full aspect-[332/501]"
+        style={{
+          animation: isRunning
+            ? "avatarTypingBounce 0.38s ease-in-out infinite"
+            : "avatarTypingBounce 0.72s ease-in-out infinite",
+        }}
+      >
         <img
           src={`/characters/seat-${seatNumber}/typing_${frameIndex}.png`}
           alt={agentName}
           draggable={false}
-          className="w-full h-full object-contain pointer-events-none filter drop-shadow-md select-none"
+          className="w-full h-full object-contain pointer-events-none filter drop-shadow-md select-none transition-all duration-75"
         />
+
+        {/* Luminous Keystroke Tapping Glow at Keyboard Level */}
+        <div className="absolute bottom-[27%] left-[25%] right-[25%] h-3 flex items-center justify-around pointer-events-none z-20">
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${isRunning ? "bg-cyan-300" : "bg-sky-300"} blur-[0.8px]`}
+            style={{ animation: `keyTapFlash ${isRunning ? "0.24s" : "0.55s"} ease-in-out infinite` }}
+          />
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${isRunning ? "bg-amber-300" : "bg-cyan-200"} blur-[0.8px]`}
+            style={{ animation: `keyTapFlash ${isRunning ? "0.28s" : "0.62s"} ease-in-out 0.12s infinite` }}
+          />
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${isRunning ? "bg-emerald-300" : "bg-white"} blur-[0.8px]`}
+            style={{ animation: `keyTapFlash ${isRunning ? "0.22s" : "0.48s"} ease-in-out 0.24s infinite` }}
+          />
+        </div>
 
         {/* Screen light glow on character face/hands when actively typing */}
         {isRunning && (
-          <div className="absolute bottom-1/3 left-1/4 right-1/4 h-6 bg-blue-400/25 rounded-full blur-xs pointer-events-none animate-pulse" />
+          <div className="absolute bottom-1/3 left-1/4 right-1/4 h-6 bg-blue-400/30 rounded-full blur-xs pointer-events-none animate-pulse" />
         )}
       </div>
     </div>

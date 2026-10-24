@@ -319,10 +319,10 @@ export function AgentTabs({
             <div className="flex items-center gap-2">
               <h2 className="font-bold text-slate-800 text-sm truncate">{agentName}</h2>
 
-              {/* Direct Sandbox On/Off Button near Agent Name as requested */}
+              {/* Direct Agent PC On/Off Button near Agent Name */}
               <button
                 onClick={handlePauseToggle}
-                title={isPaused ? "Click to wake E2B MicroVM" : "Click to pause and stop billing"}
+                title={isPaused ? "Click to wake Agent PC" : "Click to pause Agent PC"}
                 className={`flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold transition-all shadow-2xs cursor-pointer ${
                   isPaused
                     ? "bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200"
@@ -330,7 +330,7 @@ export function AgentTabs({
                 }`}
               >
                 <Power className={`w-3 h-3 ${isPaused ? "text-slate-400" : "text-emerald-600 animate-pulse"}`} />
-                <span>{isPaused ? "Sandbox Off (Click to On)" : "Sandbox Running (Click to Pause)"}</span>
+                <span>{isPaused ? "PC Off (Click to On)" : "PC Active (Click to Pause)"}</span>
               </button>
             </div>
             <p className="text-xs text-slate-400 font-medium truncate max-w-[240px] sm:max-w-xs">{agentRole}</p>
@@ -390,7 +390,7 @@ export function AgentTabs({
       {cookieSavedNotification && (
         <div className="bg-emerald-50 border-b border-emerald-200 px-4 py-2 flex items-center gap-2 text-xs text-emerald-800 font-semibold animate-in fade-in">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-          <span>E2B VM paused &amp; state preserved! CPU billing stopped. All cookies and tabs remain intact for the next run.</span>
+          <span>Agent PC paused &amp; state preserved! Compute billing stopped. All cookies and tabs remain intact for the next run.</span>
         </div>
       )}
 
@@ -425,6 +425,12 @@ export function AgentTabs({
                           alt={media.title || "Social media visual"}
                           className="w-full h-auto max-h-72 object-cover rounded-lg cursor-pointer hover:opacity-95 transition-all"
                           onClick={() => setZoomedImage(media.url!)}
+                          onError={(e) => {
+                            const target = e.currentTarget;
+                            if (target.src.includes("model=flux")) {
+                              target.src = target.src.replace("model=flux", "model=turbo");
+                            }
+                          }}
                         />
                         <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/70 backdrop-blur-xs p-1 rounded-lg">
                           <button
@@ -666,7 +672,7 @@ export function AgentTabs({
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-xs text-slate-800">
-                    {isPaused ? "E2B Sandbox Paused ($0 Compute)" : "E2B Sandbox Active (Running)"}
+                    {isPaused ? "AGENT PC Paused ($0 Compute)" : "AGENT PC Active (Running)"}
                   </span>
                   <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
                     <Lock className="w-2.5 h-2.5" /> State Preserved
@@ -674,8 +680,8 @@ export function AgentTabs({
                 </div>
                 <p className="text-[11px] text-slate-500 font-medium truncate">
                   {isPaused
-                    ? "MicroVM paused. Turns on automatically for tasks or when you click Turn On."
-                    : sandboxInfo?.sandboxId ? `Active MicroVM: ${sandboxInfo.sandboxId} (US Cloud)` : "Running"}
+                    ? "Agent PC paused. Turns on automatically for tasks or when you click Turn On."
+                    : sandboxInfo?.sandboxId ? `Active Workstation: ${sandboxInfo.sandboxId} (US Cloud)` : "Running"}
                 </p>
               </div>
             </div>
@@ -691,7 +697,7 @@ export function AgentTabs({
                 }`}
               >
                 {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-                <span>{isPaused ? "Turn On Sandbox" : "Pause & Save"}</span>
+                <span>{isPaused ? "Turn On Pc" : "Pause Pc"}</span>
               </button>
 
               <button
@@ -715,7 +721,7 @@ export function AgentTabs({
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center text-white/60 text-xs">
                 <Monitor className="w-8 h-8 mb-2" />
-                <span>Sandbox paused to protect your $100 credit. Click &quot;Turn On&quot; to wake it.</span>
+                <span>Agent pc paused, Click &quot;Turn On&quot; to wake it</span>
               </div>
             )}
 
@@ -724,7 +730,7 @@ export function AgentTabs({
               <div className="flex items-center gap-2 text-xs">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0" />
                 <span className="text-[11px] truncate">
-                  E2B Persistence: Sandboxes stay paused until tasks run or you turn them on.
+                  Agent PC Persistence: Keeps accounts logged in. Stays paused until tasks run or you turn on.
                 </span>
               </div>
               <button
@@ -738,7 +744,7 @@ export function AgentTabs({
           </div>
 
           <p className="mt-3 text-[11px] text-slate-500 leading-relaxed font-medium">
-            This agent has its own dedicated <strong>E2B cloud desktop</strong> with independent cookies. It remains paused until scheduled publishing runs, ensuring zero wasted credits.
+            This agent has its own dedicated <strong>AGENT PC</strong> with independent accounts and browser sessions. It remains paused until scheduled publishing runs, ensuring zero wasted compute.
           </p>
         </div>
       )}
@@ -792,10 +798,10 @@ export function AgentTabs({
               <div className="flex items-center gap-2.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
                 <span className="font-bold text-xs tracking-wide">
-                  Real E2B Cloud Desktop: {agentName}
+                  Real AGENT PC Desktop: {agentName}
                 </span>
                 <span className="text-[10px] bg-blue-900/60 border border-blue-700 text-blue-200 px-2 py-0.5 rounded-full">
-                  US Cloud IP (E2B VM)
+                  US Cloud IP (Agent PC)
                 </span>
               </div>
 
@@ -898,14 +904,14 @@ export function AgentTabs({
                 <iframe
                   src={sandboxInfo.streamUrl}
                   className="w-full h-full border-none"
-                  title="Interactive E2B Cloud Desktop"
+                  title="Interactive AGENT PC Desktop"
                   allow="clipboard-read; clipboard-write"
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center text-white/70 text-xs p-6 text-center">
                   <Monitor className="w-10 h-10 mb-3 animate-spin text-blue-400" />
                   <p className="font-bold text-sm text-white">Launching Interactive Cloud Stream...</p>
-                  <p className="text-slate-400 text-xs mt-1">Starting noVNC display server on E2B cloud microVM.</p>
+                  <p className="text-slate-400 text-xs mt-1">Starting display server on Agent PC.</p>
                   <button
                     onClick={fetchSandbox}
                     className="mt-4 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-xl text-xs font-bold text-white cursor-pointer shadow-md"
@@ -958,6 +964,12 @@ export function AgentTabs({
                 src={zoomedImage}
                 alt="Enlarged visual"
                 className="max-h-[82vh] max-w-full object-contain"
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (target.src.includes("model=flux")) {
+                    target.src = target.src.replace("model=flux", "model=turbo");
+                  }
+                }}
               />
             </div>
           </div>
