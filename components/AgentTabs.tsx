@@ -101,7 +101,9 @@ export function AgentTabs({
   avatar,
   campaignId = "default_campaign",
 }: AgentTabsProps) {
-  const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "computer" | "settings">("computer");
+  const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "computer" | "settings">(
+    agentId === "master" ? "chat" : "computer"
+  );
   interface ChatMsg {
     id: string;
     sender: string;
@@ -144,8 +146,11 @@ export function AgentTabs({
   const [isSendingKey, setIsSendingKey] = useState(false);
   const mobileInputRef = useRef<HTMLInputElement>(null);
 
-  // Sync shortcuts when agentId changes
+  // Sync shortcuts & default tab when agentId changes
   useEffect(() => {
+    if (agentId === "master") {
+      setActiveTab("chat");
+    }
     if (typeof window !== "undefined") {
       try {
         const stored = localStorage.getItem(`shortcuts_${agentId}`);

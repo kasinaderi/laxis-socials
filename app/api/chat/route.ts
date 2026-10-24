@@ -72,7 +72,9 @@ export async function POST(req: Request) {
         text,
         history,
         userMediaUrl,
-        memoryDirective
+        memoryDirective,
+        undefined,
+        `web_${campaignId}`
       );
 
       // Save Master response

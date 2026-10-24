@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { generateSocialImage } from "./images";
 import { enrichVisualPrompt } from "./memory";
+import { handleAgencyExecutiveCommand } from "./agency-actions";
 import { db } from "@/db";
 import { agents, posts } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -14,22 +15,29 @@ const API_KEYS = [primaryApiKey, fallbackApiKey].filter(Boolean);
 // Validated fast Gemini models (tested for low latency, high intelligence, and availability)
 const VALID_FAST_MODELS = [
   "gemini-3-flash-preview",
-  "gemini-3.5-flash",
   "gemini-flash-lite-latest",
-  "gemini-flash-latest",
 ];
 
 async function parseImageToInlineData(imageSource: string): Promise<{ mimeType: string; data: string } | null> {
   try {
     if (imageSource.startsWith("data:")) {
-      const match = imageSource.match(/^data:(image\/[a-zA-Z0-9.-]+);base64,(.+)$/);
+      const match = imageSource.match(/^data:([^;]+);base64,(.+)$/);
       if (match) {
-        return { mimeType: match[1], data: match[2] };
+        let mimeType = match[1];
+        if (!mimeType.startsWith("image/") || mimeType === "application/octet-stream") {
+          mimeType = "image/jpeg";
+        }
+        return { mimeType, data: match[2] };
       }
     } else if (imageSource.startsWith("http://") || imageSource.startsWith("https://")) {
       const res = await fetch(imageSource);
       if (res.ok) {
-        const mimeType = res.headers.get("content-type") || "image/jpeg";
+        let mimeType = res.headers.get("content-type") || "image/jpeg";
+        if (!mimeType.startsWith("image/") || mimeType === "application/octet-stream") {
+          if (imageSource.toLowerCase().includes(".png")) mimeType = "image/png";
+          else if (imageSource.toLowerCase().includes(".webp")) mimeType = "image/webp";
+          else mimeType = "image/jpeg";
+        }
         const buffer = await res.arrayBuffer();
         const base64 = Buffer.from(buffer).toString("base64");
         return { mimeType, data: base64 };
@@ -137,9 +145,16 @@ export async function askMasterAgent(
   history: Array<{ sender: string; text: string }> = [],
   userImage?: string,
   memoryDirective?: string,
-  liveContextOverride?: string
+  liveContextOverride?: string,
+  contextId: string = "default_context"
 ): Promise<{ text: string; plan?: AgentPlanResult; mediaUrl?: string }> {
   try {
+    // 1. Executive Action Dispatcher (real DB post clearing, VM boot, Chrome search, double-authorization)
+    const execAction = await handleAgencyExecutiveCommand(userPrompt, contextId);
+    if (execAction.handled && execAction.replyText) {
+      return { text: execAction.replyText };
+    }
+
     const now = new Date();
     const liveClockString = `${now.toLocaleDateString("en-US", {
       weekday: "long",
@@ -164,11 +179,20 @@ You have direct real-time calendar and clock awareness.
 
 ${liveGroundTruth}
 
+AGENCY MODES & INFRASTRUCTURE AUTHORITY:
+1. AUTONOMOUS MODE (Default):
+   - You autonomously plan, schedule, and orchestrate campaigns across the 6 niches.
+   - Worker agents remain in sleep/standby mode to protect compute credits ($0 compute). Their dedicated microVMs only spin up automatically when their scheduled posting slot arrives, post via Locoagent Chrome automation, and return to standby.
+2. MANUAL OVERRIDE & DOUBLE-AUTHORIZATION PROTOCOL:
+   - When Kelvin gives a direct command to wake an agent's PC or take over Chrome (e.g. search something on Chrome), you have full authority to command the infrastructure.
+   - If Kelvin has not confirmed, ask for confirmation to protect credits. Once confirmed (or if Kelvin says 'double authorize'), you boot the VM and execute the task immediately.
+   - NEVER make up excuses like "I have no infrastructure power", "the breaker is off", or "he is trapped in a room". You have direct executive control.
+
 HUMAN ENGAGEMENT & CONVERSATIONAL RULES (CRUCIAL):
 1. NATURAL, DIRECT CONVERSATION:
    - If the user says a short greeting like "hello" or "hey":
      -> Reply naturally and conversationally like a human partner (e.g. "Hey Kelvin! What are we focusing on right now?" or "Hello! Ready when you are.").
-     -> NEVER repeat the exact same canned phrase over and over (do NOT say "want to look over today's numbers or sketch out fresh hooks").
+     -> NEVER repeat the exact same canned phrase over and over.
      -> Be concise, direct, and human.
 2. ANSWER THE USER'S ACTUAL QUESTION DIRECTLY:
    - When the user asks a question (e.g. "how many post did you assign today per each bot?" or "which bot is active now"):

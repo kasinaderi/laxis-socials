@@ -150,16 +150,51 @@ export async function POST(req: Request) {
 
         let userImageUrl: string | undefined;
 
-        // Handle photo sent by user on Telegram
+        // Handle photo sent by user on Telegram - fetch buffer directly & convert to base64 Data URL
         if (message.photo && Array.isArray(message.photo) && message.photo.length > 0) {
           const fileId = message.photo[message.photo.length - 1].file_id;
           if (TELEGRAM_BOT_TOKEN) {
-            const fileRes = await fetch(
-              `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`
-            );
-            const fileData = await fileRes.json();
-            if (fileData.result && fileData.result.file_path) {
-              userImageUrl = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`;
+            try {
+              const fileRes = await fetch(
+                `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`
+              );
+              const fileData = await fileRes.json();
+              if (fileData.result && fileData.result.file_path) {
+                const imgRes = await fetch(
+                  `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`
+                );
+                if (imgRes.ok) {
+                  const buffer = await imgRes.arrayBuffer();
+                  const base64 = Buffer.from(buffer).toString("base64");
+                  userImageUrl = `data:image/jpeg;base64,${base64}`;
+                }
+              }
+            } catch (pErr) {
+              console.error("[Telegram Webhook] Photo download error:", pErr);
+            }
+          }
+        } else if (message.document && message.document.mime_type?.startsWith("image/")) {
+          // Handle uncompressed image files sent as documents
+          const fileId = message.document.file_id;
+          if (TELEGRAM_BOT_TOKEN) {
+            try {
+              const fileRes = await fetch(
+                `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`
+              );
+              const fileData = await fileRes.json();
+              if (fileData.result && fileData.result.file_path) {
+                const imgRes = await fetch(
+                  `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`
+                );
+                if (imgRes.ok) {
+                  const buffer = await imgRes.arrayBuffer();
+                  const base64 = Buffer.from(buffer).toString("base64");
+                  const mime = message.document.mime_type || "image/jpeg";
+                  userImageUrl = `data:${mime};base64,${base64}`;
+                }
+              }
+            } catch (dErr) {
+              console.error("[Telegram Webhook] Document image download error:", dErr);
             }
           }
         }
@@ -186,19 +221,22 @@ export async function POST(req: Request) {
           agentId: "master",
           sender: "user",
           text: text || (userImageUrl ? "[Attached Photo]" : "Hello"),
-          metadata: userImageUrl ? JSON.stringify({ mediaUrl: userImageUrl, platform: "telegram" }) : JSON.stringify({ platform: "telegram" }),
+          metadata: userImageUrl ? JSON.stringify({ hasMedia: true, platform: "telegram" }) : JSON.stringify({ platform: "telegram" }),
           createdAt: nowIso,
         }).run();
 
         // Refresh typing indicator before model generation
         await sendTelegramChatAction(chatId, userImageUrl ? "upload_photo" : "typing");
 
-        // Ask Master Agent with live system ground truth & conversation history
+        // Ask Master Agent with live system ground truth, conversation history, and real action execution
         const userPrompt = text || (userImageUrl ? "Explain what is in this image" : "Hello");
         const masterRes = await askMasterAgent(
           userPrompt,
           history,
-          userImageUrl
+          userImageUrl,
+          undefined,
+          undefined,
+          `tg_${chatId}`
         );
 
         // Send Telegram response

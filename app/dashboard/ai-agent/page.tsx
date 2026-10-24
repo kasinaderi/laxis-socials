@@ -20,7 +20,7 @@ import {
 export default function AIAgentPage() {
   const [agents, setAgents] = useState<any[]>([]);
   const [campaign, setCampaign] = useState<any>(null);
-  const [selectedAgentId, setSelectedAgentId] = useState<string>("fb_laxdollar");
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("master");
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   const fetchAgents = async () => {
@@ -41,12 +41,13 @@ export default function AIAgentPage() {
   }, []);
 
   const selectedAgent = agents.find((a) => a.id === selectedAgentId) ||
+    agents.find((a) => a.id === "master") ||
     agents[0] || {
-      id: "fb_laxdollar",
-      name: "LAXDOLLAR FB",
-      role: "Deriv Trading & laxdollar.site",
+      id: "master",
+      name: "Master Agent (AGENTLAX)",
+      role: "Campaign Commander & Strategy",
       status: "running",
-      avatar: "https://api.dicebear.com/7.x/bottts/svg?seed=laxdollar_deriv",
+      avatar: "https://api.dicebear.com/7.x/bottts/svg?seed=agentlax_master",
     };
 
   const agentIcons: Record<string, any> = {
