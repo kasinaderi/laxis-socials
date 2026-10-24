@@ -65,14 +65,16 @@ export function AnimatedCharacter({
   }, [seatNumber, totalFrames]);
 
   useEffect(() => {
-    // Dynamic typing cycle:
-    // Urgent rapid typing when actively running task (120ms)
-    // Relaxed, continuous typing rhythm when resting/completed/idle (175ms)
-    const speed = isRunning ? 120 : 175;
+    // Only animate typing when the agent is actively running tasks
+    // When idle/resting/completed, character stays completely still/fixed as requested
+    if (!isRunning) {
+      setFrameIndex(0);
+      return;
+    }
 
     const interval = setInterval(() => {
       setFrameIndex((prev) => (prev + 1) % totalFrames);
-    }, speed);
+    }, 120);
 
     return () => clearInterval(interval);
   }, [isRunning, totalFrames]);
@@ -220,13 +222,11 @@ export function AnimatedCharacter({
         <div className="absolute inset-0 -m-2 rounded-2xl border-2 border-blue-400 bg-blue-500/10 shadow-[0_0_20px_rgba(59,130,246,0.4)] pointer-events-none animate-pulse" />
       )}
 
-      {/* Seated Animated Character Sprite Frame with Rhythmic Typing Bounce */}
+      {/* Seated Character Sprite: Typing Bounce ONLY when actively running */}
       <div
         className="relative w-full aspect-[332/501]"
         style={{
-          animation: isRunning
-            ? "avatarTypingBounce 0.38s ease-in-out infinite"
-            : "avatarTypingBounce 0.72s ease-in-out infinite",
+          animation: isRunning ? "avatarTypingBounce 0.38s ease-in-out infinite" : "none",
         }}
       >
         <img
@@ -236,21 +236,23 @@ export function AnimatedCharacter({
           className="w-full h-full object-contain pointer-events-none filter drop-shadow-md select-none transition-all duration-75"
         />
 
-        {/* Luminous Keystroke Tapping Glow at Keyboard Level */}
-        <div className="absolute bottom-[27%] left-[25%] right-[25%] h-3 flex items-center justify-around pointer-events-none z-20">
-          <span
-            className={`w-1.5 h-1.5 rounded-full ${isRunning ? "bg-cyan-300" : "bg-sky-300"} blur-[0.8px]`}
-            style={{ animation: `keyTapFlash ${isRunning ? "0.24s" : "0.55s"} ease-in-out infinite` }}
-          />
-          <span
-            className={`w-1.5 h-1.5 rounded-full ${isRunning ? "bg-amber-300" : "bg-cyan-200"} blur-[0.8px]`}
-            style={{ animation: `keyTapFlash ${isRunning ? "0.28s" : "0.62s"} ease-in-out 0.12s infinite` }}
-          />
-          <span
-            className={`w-1.5 h-1.5 rounded-full ${isRunning ? "bg-emerald-300" : "bg-white"} blur-[0.8px]`}
-            style={{ animation: `keyTapFlash ${isRunning ? "0.22s" : "0.48s"} ease-in-out 0.24s infinite` }}
-          />
-        </div>
+        {/* Luminous Keystroke Tapping Glow at Keyboard Level ONLY when actively running */}
+        {isRunning && (
+          <div className="absolute bottom-[27%] left-[25%] right-[25%] h-3 flex items-center justify-around pointer-events-none z-20">
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-cyan-300 blur-[0.8px]"
+              style={{ animation: "keyTapFlash 0.24s ease-in-out infinite" }}
+            />
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-amber-300 blur-[0.8px]"
+              style={{ animation: "keyTapFlash 0.28s ease-in-out 0.12s infinite" }}
+            />
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-emerald-300 blur-[0.8px]"
+              style={{ animation: "keyTapFlash 0.22s ease-in-out 0.24s infinite" }}
+            />
+          </div>
+        )}
 
         {/* Screen light glow on character face/hands when actively typing */}
         {isRunning && (

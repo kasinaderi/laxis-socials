@@ -60,7 +60,7 @@ export default function AIAgentPage() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-100/60 overflow-hidden font-sans">
+    <div className="flex h-screen bg-slate-100/60 dark:bg-slate-950 overflow-hidden font-sans transition-colors">
       <Sidebar campaignName={campaign?.name || "laxis socials"} campaignIcon={campaign?.icon || "☕"} />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -70,25 +70,24 @@ export default function AIAgentPage() {
           onCreatePostClick={() => setIsCreateModalOpen(true)}
         />
 
-        <main className="flex-1 p-4 sm:p-6 overflow-hidden flex flex-col">
+        <main className="flex-1 p-3 sm:p-6 overflow-y-auto pb-24 lg:pb-6 flex flex-col">
           {/* Main 2-Column Split: Active Agent Control Center / Office Preview */}
-          <div className="flex-1 flex flex-col xl:flex-row gap-4 sm:gap-5 min-h-0 overflow-hidden">
-            {/* Left Column: Vertical Agent Dock + Active Agent Workspace */}
-            <div className="flex-1 flex gap-2.5 sm:gap-3.5 h-full min-h-0 min-w-0">
-              {/* Vertical Agent Switcher Dock */}
-              <div className="flex flex-col gap-1.5 p-1.5 bg-white rounded-2xl border border-slate-200/80 shadow-xs flex-shrink-0 overflow-y-auto">
+          <div className="flex-1 flex flex-col xl:flex-row gap-4 sm:gap-5 min-h-0">
+            {/* Left Column: Agent Switcher Dock + Active Agent Workspace */}
+            <div className="flex-1 flex flex-col sm:flex-row gap-2.5 sm:gap-3.5 min-h-[480px] sm:min-h-0 min-w-0">
+              {/* Agent Switcher Dock (Horizontal on mobile, vertical on sm+) */}
+              <div className="flex sm:flex-col gap-1.5 p-1.5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs flex-shrink-0 overflow-x-auto sm:overflow-x-hidden sm:overflow-y-auto">
                 {agents.map((agent) => {
                   const isSelected = selectedAgentId === agent.id;
-                  const Icon = agentIcons[agent.id] || Bot;
                   return (
                     <button
                       key={agent.id}
                       onClick={() => setSelectedAgentId(agent.id)}
                       title={`${agent.name} — ${agent.role}`}
-                      className={`relative w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center transition-all cursor-pointer group ${
+                      className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center transition-all cursor-pointer group flex-shrink-0 ${
                         isSelected
                           ? "bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/25 ring-2 ring-blue-500/30"
-                          : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
+                          : "text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800"
                       }`}
                     >
                       <img
@@ -100,12 +99,12 @@ export default function AIAgentPage() {
                       />
                       {/* Status indicator dot */}
                       <span
-                        className={`absolute top-1 right-1 w-2.5 h-2.5 rounded-full border border-white ${
+                        className={`absolute top-1 right-1 w-2.5 h-2.5 rounded-full border border-white dark:border-slate-900 ${
                           agent.status === "running"
                             ? "bg-blue-400 animate-pulse"
                             : agent.status === "done"
                             ? "bg-emerald-400"
-                            : "bg-slate-300"
+                            : "bg-slate-300 dark:bg-slate-600"
                         }`}
                       />
                     </button>
@@ -127,8 +126,8 @@ export default function AIAgentPage() {
             </div>
 
             {/* Right Column: Live Isometric Virtual Office with Seated Animated Characters */}
-            <div className="w-full xl:w-[460px] 2xl:w-[540px] flex flex-col h-full min-h-[460px] flex-shrink-0">
-              <div className="flex-1 h-full min-h-[460px]">
+            <div className="w-full xl:w-[460px] 2xl:w-[540px] flex flex-col min-h-[380px] sm:min-h-[460px] flex-shrink-0">
+              <div className="flex-1 h-full min-h-[380px] sm:min-h-[460px]">
                 <OfficePreview
                   selectedAgentId={selectedAgentId}
                   onSelectAgent={(id) => setSelectedAgentId(id)}

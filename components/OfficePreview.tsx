@@ -299,18 +299,18 @@ export function OfficePreview({
       </div>
 
       {/* Top Banner Toolbar */}
-      <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between z-30 pointer-events-auto">
-        <div className="flex items-center gap-2 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/20 text-white shadow-lg">
+      <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between z-30 pointer-events-auto gap-2">
+        <div className={`items-center gap-2 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/20 text-white shadow-lg ${isEditMode ? "hidden md:flex" : "flex"}`}>
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           <span className="text-xs font-bold tracking-wide">laxis socials HQ · Virtual Office</span>
         </div>
 
         {/* Toolbar Controls */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap ml-auto">
           {isEditMode ? (
-            <div className="flex flex-wrap items-center gap-1.5 bg-slate-900/95 backdrop-blur-md p-1 rounded-full border border-amber-400/60 shadow-xl animate-in zoom-in-95 duration-150">
-              <span className="text-[11px] font-bold text-amber-300 px-2 flex items-center gap-1">
-                <Move className="w-3.5 h-3.5 animate-pulse" /> Drag seats
+            <div className="flex flex-wrap items-center gap-1.5 bg-slate-900/95 backdrop-blur-md p-1 rounded-2xl sm:rounded-full border border-blue-500/50 shadow-xl animate-in zoom-in-95 duration-150">
+              <span className="text-[11px] font-bold text-blue-300 px-2 flex items-center gap-1">
+                <Move className="w-3.5 h-3.5 animate-pulse text-blue-400" /> Drag seats
               </span>
 
               {/* Avatar Size Slider */}
@@ -323,16 +323,16 @@ export function OfficePreview({
                   step="0.05"
                   value={avatarScale}
                   onChange={(e) => setAvatarScale(parseFloat(e.target.value))}
-                  className="w-16 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                  className="w-14 sm:w-16 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-400"
                   title={`Avatar size: ${Math.round(avatarScale * 100)}%`}
                 />
-                <span className="font-mono text-[9px] text-amber-300">{Math.round(avatarScale * 100)}%</span>
+                <span className="font-mono text-[9px] text-blue-300">{Math.round(avatarScale * 100)}%</span>
               </div>
 
               <button
                 onClick={handleSaveLayout}
                 disabled={isSaving}
-                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold rounded-full flex items-center gap-1 shadow-md transition-all cursor-pointer"
+                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold rounded-full flex items-center gap-1 shadow-md transition-all cursor-pointer flex-shrink-0"
               >
                 {saveSuccess ? (
                   <>

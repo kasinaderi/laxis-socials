@@ -78,7 +78,7 @@ export default function AccountsPage() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-100/60 overflow-hidden font-sans">
+    <div className="flex h-screen bg-slate-100/60 dark:bg-slate-950 overflow-hidden font-sans transition-colors">
       <Sidebar />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -88,14 +88,14 @@ export default function AccountsPage() {
           onCreatePostClick={() => setIsAddModalOpen(true)}
         />
 
-        <main className="flex-1 p-6 overflow-y-auto">
+        <main className="flex-1 p-4 sm:p-6 overflow-y-auto pb-24 lg:pb-6">
           {/* Header Banner */}
-          <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-800 p-6 rounded-2xl text-white shadow-lg shadow-blue-500/10 mb-6 flex items-center justify-between">
+          <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-800 p-5 sm:p-6 rounded-2xl text-white shadow-lg shadow-blue-500/10 mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="max-w-xl">
               <span className="text-[10px] font-bold uppercase tracking-wider bg-white/20 px-2 py-0.5 rounded-full mb-2 inline-block">
                 Autonomous Browser Automation (Locoagent)
               </span>
-              <h2 className="text-lg font-bold">100% Free Group & Profile Posting</h2>
+              <h2 className="text-base sm:text-lg font-bold">100% Free Group & Profile Posting</h2>
               <p className="text-xs text-blue-100 mt-1 leading-relaxed">
                 Unlike traditional APIs that block group automation or charge high monthly fees, Locoagent uses authentic Chrome CDP sessions inside isolated E2B sandboxes. Log in once via the virtual desktop, and your agents post autonomously.
               </p>
@@ -103,7 +103,7 @@ export default function AccountsPage() {
 
             <button
               onClick={() => setIsAddModalOpen(true)}
-              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-white text-blue-700 hover:bg-blue-50 font-bold text-xs shadow-md transition-all cursor-pointer whitespace-nowrap"
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-white text-blue-700 hover:bg-blue-50 font-bold text-xs shadow-md transition-all cursor-pointer whitespace-nowrap flex-shrink-0"
             >
               <Plus className="w-4 h-4" />
               <span>Connect Group / Account</span>
@@ -115,11 +115,11 @@ export default function AccountsPage() {
             {accounts.map((acc) => (
               <div
                 key={acc.id}
-                className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs flex flex-col justify-between space-y-4 hover:shadow-md transition-all"
+                className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-2xs flex flex-col justify-between space-y-4 hover:shadow-md transition-all"
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-lg">
+                    <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-lg">
                       {acc.platform === "facebook"
                         ? "👥"
                         : acc.platform === "instagram"
@@ -131,11 +131,11 @@ export default function AccountsPage() {
                         : "💼"}
                     </div>
                     <div>
-                      <h4 className="font-bold text-sm text-slate-800 leading-snug line-clamp-1">{acc.accountName}</h4>
+                      <h4 className="font-bold text-sm text-slate-800 dark:text-white leading-snug line-clamp-1">{acc.accountName}</h4>
                       <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className="text-[10px] font-semibold text-slate-400 capitalize">{acc.platform}</span>
+                        <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 capitalize">{acc.platform}</span>
                         {acc.isGroup === 1 && (
-                          <span className="text-[9px] font-bold bg-blue-50 text-blue-600 px-1.5 py-0.2 rounded border border-blue-100">
+                          <span className="text-[9px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 px-1.5 py-0.2 rounded border border-blue-100 dark:border-blue-900/60">
                             Group / Community
                           </span>
                         )}
@@ -143,29 +143,29 @@ export default function AccountsPage() {
                     </div>
                   </div>
 
-                  <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
+                  <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-100 dark:border-emerald-800">
                     <Radio className="w-2.5 h-2.5 animate-pulse" />
                     Active
                   </span>
                 </div>
 
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-[11px] text-slate-500 space-y-1">
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-100 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
                   <div className="flex justify-between">
                     <span>CDP Fingerprint:</span>
-                    <span className="font-semibold text-slate-700">Protected</span>
+                    <span className="font-semibold text-slate-700 dark:text-slate-200">Protected</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Session Status:</span>
-                    <span className="font-semibold text-emerald-600">Cookie Cached</span>
+                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">Cookie Cached</span>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
                   <a
                     href={acc.profileUrl || "#"}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-xs text-blue-600 hover:underline flex items-center gap-1 font-semibold"
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 font-semibold"
                   >
                     <span>Inspect Target</span>
                     <ExternalLink className="w-3 h-3" />
@@ -173,7 +173,7 @@ export default function AccountsPage() {
 
                   <button
                     onClick={() => handleDeleteAccount(acc.id)}
-                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors cursor-pointer"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -187,16 +187,16 @@ export default function AccountsPage() {
       {/* Add Account Modal */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-2xs flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-2xl p-6 shadow-2xl border border-slate-200 space-y-4">
-            <h3 className="font-bold text-sm text-slate-800">Connect Social Account or Group</h3>
+          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
+            <h3 className="font-bold text-sm text-slate-800 dark:text-white">Connect Social Account or Group</h3>
 
             <form onSubmit={handleAddAccount} className="space-y-3.5">
               <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">Platform</label>
+                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">Platform</label>
                 <select
                   value={platform}
                   onChange={(e) => setPlatform(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-800"
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-200"
                 >
                   <option value="facebook">Facebook (Group or Page)</option>
                   <option value="reddit">Reddit (Subreddit / Community)</option>
@@ -207,29 +207,29 @@ export default function AccountsPage() {
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">Name / Handle</label>
+                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">Name / Handle</label>
                 <input
                   type="text"
                   required
                   value={accountName}
                   onChange={(e) => setAccountName(e.target.value)}
                   placeholder="e.g. Coffee Lovers Club (Facebook Group)"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-800"
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-200"
                 />
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">Direct Target URL</label>
+                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">Direct Target URL</label>
                 <input
                   type="text"
                   value={groupUrl}
                   onChange={(e) => setGroupUrl(e.target.value)}
                   placeholder="e.g. https://facebook.com/groups/coffee-lovers"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-800"
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-200"
                 />
               </div>
 
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700 dark:text-slate-300">
                 <input
                   type="checkbox"
                   checked={isGroup}
@@ -239,17 +239,17 @@ export default function AccountsPage() {
                 <span>This target is a Community or Group (uses Locoagent Group flow)</span>
               </label>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs cursor-pointer"
                 >
                   Save Target
                 </button>

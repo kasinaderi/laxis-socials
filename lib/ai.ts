@@ -7,24 +7,45 @@ const preferredModel = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 
 const ai = new GoogleGenAI({ apiKey });
 
-// Resilient multi-model fallback chain (prioritizing fastest, lowest-latency free endpoints)
+// Resilient multi-model fallback chain (prioritizing fastest, lowest-latency free endpoints with native vision)
 const FALLBACK_MODELS = [
+  "gemini-3.8-flash",
   "gemini-3.1-flash-lite",
   "gemini-3.5-flash-lite",
-  preferredModel,
-  "gemini-3.5-flash",
   "gemini-3.7-flash",
   "gemini-flash-lite-latest",
-  "gemini-3.8-flash",
+  preferredModel,
 ];
 
-async function generateWithFallback(prompt: string) {
+async function parseImageToInlineData(imageSource: string): Promise<{ mimeType: string; data: string } | null> {
+  try {
+    if (imageSource.startsWith("data:")) {
+      const match = imageSource.match(/^data:(image\/[a-zA-Z0-9.-]+);base64,(.+)$/);
+      if (match) {
+        return { mimeType: match[1], data: match[2] };
+      }
+    } else if (imageSource.startsWith("http://") || imageSource.startsWith("https://")) {
+      const res = await fetch(imageSource);
+      if (res.ok) {
+        const mimeType = res.headers.get("content-type") || "image/jpeg";
+        const buffer = await res.arrayBuffer();
+        const base64 = Buffer.from(buffer).toString("base64");
+        return { mimeType, data: base64 };
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to parse image for vision:", err);
+  }
+  return null;
+}
+
+async function generateWithFallback(contents: any) {
   let lastError: any = null;
   for (const model of FALLBACK_MODELS) {
     try {
       const response = await ai.models.generateContent({
         model,
-        contents: prompt,
+        contents,
       });
       if (response && response.text) {
         return response.text;
@@ -133,12 +154,26 @@ If the user is asking a general question, chat warmly, creatively, and intellige
       .map((h) => `${h.sender === "user" ? "User" : "Master Agent"}: ${h.text}`)
       .join("\n");
 
-    const imageContext = userImage ? `\n[User attached an image to this message: ${userImage}]` : "";
+    const inlineImage = userImage ? await parseImageToInlineData(userImage) : null;
     const antiDupBlock = memoryDirective ? `\n\n${memoryDirective}` : "";
 
-    const prompt = `${systemPrompt}${antiDupBlock}\n\nChat History:\n${formattedHistory}${imageContext}\n\nUser: ${userPrompt}\nMaster Agent:`;
+    let contentsPayload: any;
+    if (inlineImage) {
+      const visionPrompt = `${systemPrompt}${antiDupBlock}\n\nChat History:\n${formattedHistory}\n\n[USER ATTACHED IMAGE ABOVE]: You have direct computer vision access to this attached image. Inspect its visual pixels, subjects, composition, and colors carefully. If the user asks you to explain, critique, review, or repurpose the image, talk about what is ACTUALLY in the image directly and conversationally like a human creative director.\n\nUser: ${userPrompt}\nMaster Agent:`;
+      contentsPayload = [
+        {
+          inlineData: {
+            mimeType: inlineImage.mimeType,
+            data: inlineImage.data,
+          },
+        },
+        { text: visionPrompt },
+      ];
+    } else {
+      contentsPayload = `${systemPrompt}${antiDupBlock}\n\nChat History:\n${formattedHistory}\n\nUser: ${userPrompt}\nMaster Agent:`;
+    }
 
-    const fullText = await generateWithFallback(prompt);
+    const fullText = await generateWithFallback(contentsPayload);
 
     // Parse JSON block if present
     const jsonMatch = fullText.match(/```json\s*([\s\S]*?)\s*```/);
@@ -191,7 +226,7 @@ export async function askWorkerAgent(
 ): Promise<{ output: string; mediaPrompt?: string; mediaUrl?: string }> {
   try {
     const antiDupBlock = memoryDirective ? `\n\n${memoryDirective}\n` : "";
-    const prompt = `You are an expert AI social media specialist acting as: ${agentRole}.${antiDupBlock}
+    const promptText = `You are an expert AI social media specialist acting as: ${agentRole}.${antiDupBlock}
 Task Instructions:
 ${taskInstructions}
 
@@ -202,7 +237,23 @@ Provide high-impact, humanized copy formatted for maximum engagement.
 If this task requires an image or visual, end with:
 MEDIA_PROMPT: [hyper-detailed descriptive text prompt for Flux.1 image generator]`;
 
-    const response = await generateWithFallback(prompt);
+    const userMedia = contextData?.userMediaUrl;
+    const inlineImage = userMedia ? await parseImageToInlineData(userMedia) : null;
+
+    let payload: any = promptText;
+    if (inlineImage) {
+      payload = [
+        {
+          inlineData: {
+            mimeType: inlineImage.mimeType,
+            data: inlineImage.data,
+          },
+        },
+        { text: promptText },
+      ];
+    }
+
+    const response = await generateWithFallback(payload);
 
     let mediaPrompt: string | undefined;
     let mediaUrl: string | undefined;

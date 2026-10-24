@@ -301,23 +301,23 @@ export function AgentTabs({
   };
 
   return (
-    <div className="flex flex-col h-full bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
+    <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs overflow-hidden transition-colors">
       {/* Agent Header with Power Toggle */}
-      <div className="p-3.5 sm:p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+      <div className="p-3.5 sm:p-4 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-slate-100 border border-slate-200 overflow-hidden flex items-center justify-center p-1 relative shadow-xs flex-shrink-0">
+          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 overflow-hidden flex items-center justify-center p-1 relative shadow-xs flex-shrink-0">
             <img src={avatar} alt={agentName} className="w-full h-full object-cover" />
             <span
-              className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${
+              className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white dark:border-slate-900 ${
                 !isPaused
                   ? "bg-emerald-500 animate-pulse"
-                  : "bg-slate-300"
+                  : "bg-slate-300 dark:bg-slate-600"
               }`}
             />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h2 className="font-bold text-slate-800 text-sm truncate">{agentName}</h2>
+              <h2 className="font-bold text-slate-800 dark:text-white text-sm truncate">{agentName}</h2>
 
               {/* Direct Agent PC On/Off Button near Agent Name */}
               <button
@@ -325,24 +325,24 @@ export function AgentTabs({
                 title={isPaused ? "Click to wake Agent PC" : "Click to pause Agent PC"}
                 className={`flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold transition-all shadow-2xs cursor-pointer ${
                   isPaused
-                    ? "bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200"
-                    : "bg-emerald-50 text-emerald-700 border border-emerald-300 shadow-emerald-500/10"
+                    ? "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 hover:text-emerald-700 dark:hover:text-emerald-400 border border-slate-200 dark:border-slate-700"
+                    : "bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 shadow-emerald-500/10"
                 }`}
               >
-                <Power className={`w-3 h-3 ${isPaused ? "text-slate-400" : "text-emerald-600 animate-pulse"}`} />
+                <Power className={`w-3 h-3 ${isPaused ? "text-slate-400 dark:text-slate-500" : "text-emerald-600 dark:text-emerald-400 animate-pulse"}`} />
                 <span>{isPaused ? "PC Off (Click to On)" : "PC Active (Click to Pause)"}</span>
               </button>
             </div>
-            <p className="text-xs text-slate-400 font-medium truncate max-w-[240px] sm:max-w-xs">{agentRole}</p>
+            <p className="text-xs text-slate-400 dark:text-slate-500 font-medium truncate max-w-[240px] sm:max-w-xs">{agentRole}</p>
           </div>
         </div>
 
         {/* Tab Switcher */}
-        <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl border border-slate-200/80">
+        <div className="flex items-center gap-1 bg-slate-50 dark:bg-slate-800/80 p-1 rounded-xl border border-slate-200/80 dark:border-slate-700">
           <button
             onClick={() => setActiveTab("chat")}
             className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              activeTab === "chat" ? "bg-white text-slate-800 shadow-xs" : "text-slate-500 hover:text-slate-800"
+              activeTab === "chat" ? "bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-xs" : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
             }`}
           >
             <MessageSquare className="w-3.5 h-3.5" />
@@ -351,13 +351,13 @@ export function AgentTabs({
           <button
             onClick={() => setActiveTab("tasks")}
             className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              activeTab === "tasks" ? "bg-white text-slate-800 shadow-xs" : "text-slate-500 hover:text-slate-800"
+              activeTab === "tasks" ? "bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-xs" : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
             }`}
           >
             <ListTodo className="w-3.5 h-3.5" />
             <span>Tasks</span>
             {tasks.length > 0 && (
-              <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] flex items-center justify-center font-bold">
+              <span className="w-4 h-4 rounded-full bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200 text-[10px] flex items-center justify-center font-bold">
                 {tasks.length}
               </span>
             )}
@@ -366,18 +366,18 @@ export function AgentTabs({
             onClick={() => setActiveTab("computer")}
             className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeTab === "computer"
-                ? "bg-white text-blue-600 shadow-xs ring-1 ring-blue-100"
-                : "text-slate-500 hover:text-slate-800"
+                ? "bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-xs ring-1 ring-blue-100 dark:ring-blue-900"
+                : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
             }`}
           >
             <Monitor className="w-3.5 h-3.5" />
             <span>Computer</span>
-            <span className={`w-2 h-2 rounded-full ${isPaused ? "bg-slate-300" : "bg-emerald-500 animate-pulse"}`} />
+            <span className={`w-2 h-2 rounded-full ${isPaused ? "bg-slate-300 dark:bg-slate-600" : "bg-emerald-500 animate-pulse"}`} />
           </button>
           <button
             onClick={() => setActiveTab("settings")}
             className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              activeTab === "settings" ? "bg-white text-slate-800 shadow-xs" : "text-slate-500 hover:text-slate-800"
+              activeTab === "settings" ? "bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-xs" : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
             }`}
           >
             <Settings className="w-3.5 h-3.5" />
@@ -388,15 +388,15 @@ export function AgentTabs({
 
       {/* State Preserved Banner */}
       {cookieSavedNotification && (
-        <div className="bg-emerald-50 border-b border-emerald-200 px-4 py-2 flex items-center gap-2 text-xs text-emerald-800 font-semibold animate-in fade-in">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+        <div className="bg-emerald-50 dark:bg-emerald-950/60 border-b border-emerald-200 dark:border-emerald-800 px-4 py-2 flex items-center gap-2 text-xs text-emerald-800 dark:text-emerald-300 font-semibold animate-in fade-in">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
           <span>Agent PC paused &amp; state preserved! Compute billing stopped. All cookies and tabs remain intact for the next run.</span>
         </div>
       )}
 
       {/* Tab 1: Chat View */}
       {activeTab === "chat" && (
-        <div className="flex-1 flex flex-col min-h-0 bg-slate-50/50">
+        <div className="flex-1 flex flex-col min-h-0 bg-slate-50/50 dark:bg-slate-950/50">
           <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
             {messages.map((m) => {
               const isUser = m.sender === "user";
@@ -404,7 +404,7 @@ export function AgentTabs({
               return (
                 <div key={m.id} className={`flex gap-2.5 ${isUser ? "justify-end" : "justify-start"}`}>
                   {!isUser && (
-                    <div className="w-7 h-7 rounded-xl bg-white border border-slate-200 flex-shrink-0 flex items-center justify-center p-0.5 shadow-2xs">
+                    <div className="w-7 h-7 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex-shrink-0 flex items-center justify-center p-0.5 shadow-2xs">
                       <img src={avatar} alt={agentName} className="w-full h-full object-cover rounded-lg" />
                     </div>
                   )}
@@ -412,14 +412,14 @@ export function AgentTabs({
                     className={`max-w-[85%] sm:max-w-[78%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed ${
                       isUser
                         ? "bg-blue-600 text-white rounded-br-xs shadow-sm font-medium"
-                        : "bg-white text-slate-700 border border-slate-200/80 rounded-bl-xs shadow-2xs"
+                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700/80 rounded-bl-xs shadow-2xs"
                     }`}
                   >
                     <p className="whitespace-pre-wrap">{m.text}</p>
 
                     {/* High-Resolution Media Card (Generated or Attached Image) */}
                     {media.url && (
-                      <div className="mt-2.5 rounded-xl overflow-hidden border border-slate-200/90 bg-slate-900/5 relative group max-w-sm">
+                      <div className="mt-2.5 rounded-xl overflow-hidden border border-slate-200/90 dark:border-slate-700 bg-slate-900/5 dark:bg-slate-900/40 relative group max-w-sm">
                         <img
                           src={media.url}
                           alt={media.title || "Social media visual"}
@@ -470,7 +470,7 @@ export function AgentTabs({
                       </div>
                     )}
 
-                    <span className={`block text-[9px] mt-1.5 ${isUser ? "text-blue-200 text-right" : "text-slate-400"}`}>
+                    <span className={`block text-[9px] mt-1.5 ${isUser ? "text-blue-200 text-right" : "text-slate-400 dark:text-slate-500"}`}>
                       {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </span>
                   </div>
@@ -478,7 +478,7 @@ export function AgentTabs({
               );
             })}
             {isLoading && (
-              <div className="flex gap-2.5 items-center text-slate-400 text-xs italic pl-9">
+              <div className="flex gap-2.5 items-center text-slate-400 dark:text-slate-500 text-xs italic pl-9">
                 <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
                 <span>{agentName} is generating copy &amp; visuals...</span>
               </div>
@@ -488,14 +488,14 @@ export function AgentTabs({
 
           {/* Attached Image Preview Bar */}
           {attachedImage && (
-            <div className="px-3.5 py-2 bg-blue-50/70 border-t border-blue-200/80 flex items-center justify-between gap-3 animate-in fade-in">
+            <div className="px-3.5 py-2 bg-blue-50/70 dark:bg-blue-950/40 border-t border-blue-200/80 dark:border-blue-900/50 flex items-center justify-between gap-3 animate-in fade-in">
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-blue-300 shadow-2xs flex-shrink-0">
+                <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-blue-300 dark:border-blue-800 shadow-2xs flex-shrink-0">
                   <img src={attachedImage} alt="Attachment" className="w-full h-full object-cover" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-xs font-semibold text-blue-950 truncate">Visual Attached</p>
-                  <p className="text-[10px] text-blue-700 truncate">
+                  <p className="text-xs font-semibold text-blue-950 dark:text-blue-200 truncate">Visual Attached</p>
+                  <p className="text-[10px] text-blue-700 dark:text-blue-300 truncate">
                     {agentName} will incorporate this visual or generate campaigns from it
                   </p>
                 </div>
@@ -503,7 +503,7 @@ export function AgentTabs({
               <button
                 type="button"
                 onClick={() => setAttachedImage(null)}
-                className="p-1 rounded-full text-blue-600 hover:bg-blue-100 cursor-pointer"
+                className="p-1 rounded-full text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900 cursor-pointer"
                 title="Remove attachment"
               >
                 <X className="w-4 h-4" />
@@ -513,13 +513,13 @@ export function AgentTabs({
 
           {/* Direct URL Attachment Input Popover */}
           {showUrlPrompt && (
-            <div className="px-3.5 py-2 bg-slate-100 border-t border-slate-200 flex items-center gap-2 animate-in fade-in">
+            <div className="px-3.5 py-2 bg-slate-100 dark:bg-slate-850 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2 animate-in fade-in">
               <input
                 type="url"
                 value={urlInput}
                 onChange={(e) => setUrlInput(e.target.value)}
                 placeholder="Paste direct image URL (https://...)..."
-                className="flex-1 bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="flex-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
               <button
                 type="button"
@@ -538,7 +538,7 @@ export function AgentTabs({
               <button
                 type="button"
                 onClick={() => setShowUrlPrompt(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -555,8 +555,8 @@ export function AgentTabs({
           />
 
           {/* Quick Prompt Pill: Instant Visual Generation */}
-          <div className="px-3 py-1.5 bg-white border-t border-slate-100 flex items-center gap-2 overflow-x-auto text-[11px]">
-            <span className="text-slate-400 font-medium flex items-center gap-1 flex-shrink-0">
+          <div className="px-3 py-1.5 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 overflow-x-auto text-[11px]">
+            <span className="text-slate-400 dark:text-slate-500 font-medium flex items-center gap-1 flex-shrink-0">
               <Sparkles className="w-3 h-3 text-amber-500" /> Quick action:
             </span>
             <button
@@ -576,19 +576,19 @@ export function AgentTabs({
                     : "Generate a high-converting promotional visual for our social media campaign";
                 setInputText(prompt);
               }}
-              className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 rounded-lg text-[11px] font-medium transition-all flex-shrink-0 cursor-pointer"
+              className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-blue-950/60 hover:text-blue-700 dark:hover:text-blue-400 text-slate-600 dark:text-slate-300 rounded-lg text-[11px] font-medium transition-all flex-shrink-0 cursor-pointer"
             >
               🎨 Suggest Creative Visual Prompt
             </button>
           </div>
 
           {/* Chat Form */}
-          <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-slate-100 flex items-center gap-2">
+          <form onSubmit={handleSendMessage} className="p-3 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               title="Upload / Send Image to Agent"
-              className="w-9 h-9 rounded-xl border border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-slate-600 hover:text-blue-600 flex items-center justify-center transition-all cursor-pointer flex-shrink-0"
+              className="w-9 h-9 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 flex items-center justify-center transition-all cursor-pointer flex-shrink-0"
             >
               <ImageIcon className="w-4 h-4" />
             </button>
@@ -597,7 +597,7 @@ export function AgentTabs({
               type="button"
               onClick={() => setShowUrlPrompt(!showUrlPrompt)}
               title="Attach Image from Web URL"
-              className="w-9 h-9 rounded-xl border border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-slate-600 hover:text-blue-600 flex items-center justify-center transition-all cursor-pointer flex-shrink-0"
+              className="w-9 h-9 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 flex items-center justify-center transition-all cursor-pointer flex-shrink-0"
             >
               <Paperclip className="w-4 h-4" />
             </button>
@@ -611,7 +611,7 @@ export function AgentTabs({
                   ? "Direct Master Agent, ask for campaign plans, or send images..."
                   : `Send instructions or generate images with ${agentName}...`
               }
-              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+              className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-xs text-slate-700 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
             />
             <button
               type="submit"
@@ -626,34 +626,34 @@ export function AgentTabs({
 
       {/* Tab 2: Tasks View */}
       {activeTab === "tasks" && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/50">
-          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-            <span className="text-xs font-bold text-slate-700">Assigned Tasks ({tasks.length})</span>
-            <span className="text-[11px] text-slate-400">Master Agent Directed</span>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/50 dark:bg-slate-950/50">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
+            <span className="text-xs font-bold text-slate-700 dark:text-slate-200">Assigned Tasks ({tasks.length})</span>
+            <span className="text-[11px] text-slate-400 dark:text-slate-500">Master Agent Directed</span>
           </div>
           {tasks.length === 0 ? (
-            <div className="py-12 text-center text-slate-400 text-xs">
-              <Clock className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+            <div className="py-12 text-center text-slate-400 dark:text-slate-500 text-xs">
+              <Clock className="w-8 h-8 mx-auto text-slate-300 dark:text-slate-600 mb-2" />
               No pending tasks. Master Agent assigns tasks during autonomous runs.
             </div>
           ) : (
             tasks.map((task) => (
-              <div key={task.id} className="p-3.5 bg-white rounded-xl border border-slate-200/90 shadow-2xs space-y-2">
+              <div key={task.id} className="p-3.5 bg-white dark:bg-slate-800/90 rounded-xl border border-slate-200/90 dark:border-slate-700 shadow-2xs space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-xs text-slate-800">{task.title}</span>
+                  <span className="font-semibold text-xs text-slate-800 dark:text-white">{task.title}</span>
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded-full capitalize ${
                       task.status === "completed"
-                        ? "bg-emerald-50 text-emerald-600 border border-emerald-200"
+                        ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800"
                         : task.status === "in_progress"
-                        ? "bg-blue-50 text-blue-600 border border-blue-200"
-                        : "bg-slate-100 text-slate-600"
+                        ? "bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800"
+                        : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
                     }`}
                   >
                     {task.status}
                   </span>
                 </div>
-                <p className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed bg-slate-50 dark:bg-slate-900 p-2.5 rounded-lg border border-slate-100 dark:border-slate-800">
                   {task.instructions}
                 </p>
               </div>
@@ -664,21 +664,21 @@ export function AgentTabs({
 
       {/* Tab 3: Computer View with E2B Controls */}
       {activeTab === "computer" && (
-        <div className="flex-1 flex flex-col p-4 bg-slate-50/50 overflow-y-auto">
+        <div className="flex-1 flex flex-col p-4 bg-slate-50/50 dark:bg-slate-950/50 overflow-y-auto">
           {/* Controls Bar */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3 pb-3 border-b border-slate-200/80">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3 pb-3 border-b border-slate-200/80 dark:border-slate-800">
             <div className="flex items-center gap-2 min-w-0">
               <span className={`w-2.5 h-2.5 rounded-full ${isPaused ? "bg-amber-500" : "bg-emerald-500 animate-pulse"} flex-shrink-0`} />
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-bold text-xs text-slate-800">
+                  <span className="font-bold text-xs text-slate-800 dark:text-white">
                     {isPaused ? "AGENT PC Paused ($0 Compute)" : "AGENT PC Active (Running)"}
                   </span>
-                  <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                  <span className="text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
                     <Lock className="w-2.5 h-2.5" /> State Preserved
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-500 font-medium truncate">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium truncate">
                   {isPaused
                     ? "Agent PC paused. Turns on automatically for tasks or when you click Turn On."
                     : sandboxInfo?.sandboxId ? `Active Workstation: ${sandboxInfo.sandboxId} (US Cloud)` : "Running"}
@@ -711,7 +711,7 @@ export function AgentTabs({
           </div>
 
           {/* Desktop Viewport */}
-          <div className="flex-1 min-h-[300px] max-h-[460px] bg-slate-950 rounded-2xl border-2 border-slate-200 overflow-hidden relative shadow-md group">
+          <div className="flex-1 min-h-[300px] max-h-[460px] bg-slate-950 rounded-2xl border-2 border-slate-200 dark:border-slate-800 overflow-hidden relative shadow-md group">
             {sandboxInfo?.previewImage ? (
               <img
                 src={sandboxInfo.previewImage}
@@ -743,7 +743,7 @@ export function AgentTabs({
             </div>
           </div>
 
-          <p className="mt-3 text-[11px] text-slate-500 leading-relaxed font-medium">
+          <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
             This agent has its own dedicated <strong>AGENT PC</strong> with independent accounts and browser sessions. It remains paused until scheduled publishing runs, ensuring zero wasted compute.
           </p>
         </div>
@@ -751,14 +751,14 @@ export function AgentTabs({
 
       {/* Tab 4: Settings View */}
       {activeTab === "settings" && (
-        <div className="flex-1 p-5 space-y-4 bg-slate-50/50 overflow-y-auto">
+        <div className="flex-1 p-5 space-y-4 bg-slate-50/50 dark:bg-slate-950/50 overflow-y-auto">
           <div className="space-y-1">
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Agent Intelligence &amp; Niche</h3>
-            <p className="text-xs text-slate-500">Autonomous configuration for {agentName}.</p>
+            <h3 className="text-xs font-bold text-slate-800 dark:text-white uppercase tracking-wider">Agent Intelligence &amp; Niche</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Autonomous configuration for {agentName}.</p>
           </div>
-          <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
+          <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
             <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">Target Niche</label>
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">Target Niche</label>
               <input
                 type="text"
                 readOnly
@@ -775,12 +775,12 @@ export function AgentTabs({
                     ? "Urban Pop Culture Gossip, Celebrity Scoops & AI Drama"
                     : "Autonomous Multi-Agent Orchestration"
                 }
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs text-slate-700"
+                className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-700 dark:text-slate-200"
               />
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">Daily Post Quota</label>
-              <div className="p-2.5 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-800 font-semibold flex items-center justify-between">
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">Daily Post Quota</label>
+              <div className="p-2.5 bg-blue-50 dark:bg-blue-950/60 border border-blue-100 dark:border-blue-900/60 rounded-lg text-xs text-blue-800 dark:text-blue-300 font-semibold flex items-center justify-between">
                 <span>Dynamic Human Schedule (Master Agent Decided)</span>
                 <span className="bg-blue-600 text-white px-2 py-0.5 rounded-full text-[10px]">3 - 8 Posts/Day</span>
               </div>
