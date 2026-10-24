@@ -152,7 +152,7 @@ export async function askMasterAgent(
     // 1. Executive Action Dispatcher (real DB post clearing, VM boot, Chrome search, double-authorization)
     const execAction = await handleAgencyExecutiveCommand(userPrompt, contextId);
     if (execAction.handled && execAction.replyText) {
-      return { text: execAction.replyText };
+      return { text: execAction.replyText, mediaUrl: execAction.mediaUrl };
     }
 
     const now = new Date();
