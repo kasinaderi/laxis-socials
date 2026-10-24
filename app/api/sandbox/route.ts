@@ -72,24 +72,37 @@ export async function POST(req: Request) {
       const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
       if (activeSb && text) {
         try {
-          // 1. Direct type/write into active window
+          // 1. Direct type/write into active focused window
           if (typeof activeSb.write === "function") {
             await activeSb.write(text);
           } else if (typeof activeSb.commands?.run === "function") {
             await activeSb.commands.run(`xdotool type --delay 10 "${text.replace(/"/g, '\\"')}"`);
           }
 
-          // 2. Also populate X11 clipboard so Ctrl+V or right-click paste works inside desktop
+          // 2. Set Linux X11 clipboard using base64 pipeline so Ctrl+V and right-click paste work inside desktop
           if (activeSb.commands?.run) {
-            await activeSb.commands.run(
-              `python3 -c "import subprocess; p = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE); p.communicate(input=${JSON.stringify(text)}.encode('utf-8'))" 2>/dev/null || true`
-            );
+            const base64Text = Buffer.from(text).toString("base64");
+            await activeSb.commands.run(`
+              if ! command -v xclip &> /dev/null; then
+                sudo apt-get update -qq && sudo apt-get install -y -qq xclip
+              fi
+              echo "${base64Text}" | base64 -d | xclip -selection clipboard -i 2>/dev/null || true
+              echo "${base64Text}" | base64 -d | xclip -selection primary -i 2>/dev/null || true
+            `);
           }
         } catch (err: any) {
           console.warn("[Sandbox] paste error:", err);
         }
       }
       return NextResponse.json({ success: true, pasted: text.slice(0, 50) });
+    } else if (action === "heartbeat") {
+      const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
+      if (activeSb && typeof activeSb.setTimeout === "function") {
+        try {
+          await activeSb.setTimeout(3600000); // 1 hour keepalive while user is active
+        } catch {}
+      }
+      return NextResponse.json({ success: true, alive: Boolean(activeSb) });
     } else if (action === "command" || action === "exec") {
       const sandbox = await getOrCreateAgentSandbox(campaignId, agentId, true);
       const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);

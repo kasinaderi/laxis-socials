@@ -222,23 +222,19 @@ export function AgentTabs({
     }
   };
 
-  // Sandbox Clipboard & Terminal Helpers
-  const [showPasteHelper, setShowPasteHelper] = useState(false);
-  const [pasteInputText, setPasteInputText] = useState("");
+  // 2-Minute Idle Detection & Auto-Pause state
+  const [isIdlePaused, setIsIdlePaused] = useState(false);
+  const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastActiveTimeRef = useRef<number>(Date.now());
+  const heartbeatTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Host PC Clipboard Paste state
+  const [pasteSuccessToast, setPasteSuccessToast] = useState<string | null>(null);
   const [isPasting, setIsPasting] = useState(false);
-  const [pasteSuccess, setPasteSuccess] = useState(false);
 
-  const [showTerminalHelper, setShowTerminalHelper] = useState(false);
-  const [terminalCommand, setTerminalCommand] = useState("");
-  const [terminalOutput, setTerminalOutput] = useState("");
-  const [isExecutingCommand, setIsExecutingCommand] = useState(false);
-
-  const [isInstallingChrome, setIsInstallingChrome] = useState(false);
-  const [chromeInstallMessage, setChromeInstallMessage] = useState<string | null>(null);
-
-  const handlePasteToSandbox = async (directText?: string) => {
-    const textToSend = directText !== undefined ? directText : pasteInputText;
-    if (!textToSend) return;
+  // Send text directly into Agent PC & Linux X11 clipboard
+  const handlePasteDirect = async (text: string) => {
+    if (!text) return;
     setIsPasting(true);
     try {
       const res = await fetch("/api/sandbox", {
@@ -248,13 +244,13 @@ export function AgentTabs({
           action: "paste",
           agentId,
           campaignId,
-          text: textToSend,
+          text,
         }),
       });
       const data = await res.json();
       if (data.success) {
-        setPasteSuccess(true);
-        setTimeout(() => setPasteSuccess(false), 2500);
+        setPasteSuccessToast(`✓ Pasted from PC: "${text.slice(0, 20)}${text.length > 20 ? "..." : ""}"`);
+        setTimeout(() => setPasteSuccessToast(null), 3000);
       }
     } catch (err) {
       console.error("Paste error:", err);
@@ -263,90 +259,136 @@ export function AgentTabs({
     }
   };
 
-  const handleReadDeviceClipboard = async () => {
+  // Button to paste from PC clipboard
+  const handlePasteFromDeviceClipboard = async () => {
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.readText) {
         const text = await navigator.clipboard.readText();
         if (text) {
-          setPasteInputText(text);
-          await handlePasteToSandbox(text);
+          await handlePasteDirect(text);
+          return;
         }
       }
-    } catch (clipErr) {
-      console.warn("Clipboard access denied or unsupported:", clipErr);
-    }
-  };
-
-  const handleRunTerminalCommand = async (cmdToRun?: string) => {
-    const cmd = cmdToRun !== undefined ? cmdToRun : terminalCommand;
-    if (!cmd.trim()) return;
-    setIsExecutingCommand(true);
-    setTerminalOutput((prev) => `${prev ? prev + "\n" : ""}$ ${cmd}\nRunning on Agent PC microVM...`);
-    try {
-      const res = await fetch("/api/sandbox", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "command",
-          agentId,
-          campaignId,
-          command: cmd,
-        }),
-      });
-      const data = await res.json();
-      const outputText = data.stdout || data.stderr || (data.success ? "Command finished with 0 output." : "Execution failed.");
-      setTerminalOutput((prev) => `${prev}\n${outputText.trim()}\n---`);
-    } catch (err: any) {
-      setTerminalOutput((prev) => `${prev}\nError: ${err.message}\n---`);
-    } finally {
-      setIsExecutingCommand(false);
-    }
-  };
-
-  const handleInstallChrome = async () => {
-    setIsInstallingChrome(true);
-    setChromeInstallMessage("Downloading & installing official Google Chrome deb on Agent PC microVM (takes ~20-30s)...");
-    try {
-      const res = await fetch("/api/sandbox", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "install_chrome",
-          agentId,
-          campaignId,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setChromeInstallMessage("✓ Google Chrome installed successfully! Click Launch to open.");
-        setTerminalOutput((prev) => `${prev ? prev + "\n" : ""}${data.output || "Google Chrome installed successfully!"}`);
-      } else {
-        setChromeInstallMessage(`Installation note: ${data.error || "Check terminal logs"}`);
-      }
-    } catch (err: any) {
-      setChromeInstallMessage(`Failed: ${err.message}`);
-    } finally {
-      setIsInstallingChrome(false);
-      setTimeout(() => setChromeInstallMessage(null), 10000);
-    }
-  };
-
-  const handleOpenChrome = async (targetUrl?: string) => {
-    try {
-      await fetch("/api/sandbox", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "open_chrome",
-          agentId,
-          campaignId,
-          url: targetUrl || customUrl,
-        }),
-      });
     } catch (err) {
-      console.error("Failed to open Chrome:", err);
+      console.warn("Clipboard permission issue:", err);
+    }
+    const manual = window.prompt("Paste text from your PC to send directly into Agent PC:");
+    if (manual) {
+      await handlePasteDirect(manual);
     }
   };
+
+  // Reconnect / Wake Sandbox handler
+  const handleWakeAndReconnect = async () => {
+    setIsIdlePaused(false);
+    setIsPaused(false);
+    lastActiveTimeRef.current = Date.now();
+    try {
+      const res = await fetch("/api/sandbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "turn_on",
+          agentId,
+          campaignId,
+        }),
+      });
+      const data = await res.json();
+      if (data.streamUrl) {
+        setSandboxInfo(data);
+      }
+    } catch (err) {
+      console.error("Wake and reconnect error:", err);
+    }
+  };
+
+  // Listen for host Ctrl+V paste event when modal is open
+  useEffect(() => {
+    if (!isFullscreenModal) return;
+
+    const onGlobalPaste = async (e: ClipboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+      const text = e.clipboardData?.getData("text");
+      if (text) {
+        e.preventDefault();
+        await handlePasteDirect(text);
+      }
+    };
+
+    window.addEventListener("paste", onGlobalPaste);
+    return () => window.removeEventListener("paste", onGlobalPaste);
+  }, [isFullscreenModal, agentId]);
+
+  // Track user activity, heartbeat keepalive, and 2-minute idle pause
+  useEffect(() => {
+    if (!isFullscreenModal || isPaused || isIdlePaused) {
+      if (idleTimerRef.current) clearInterval(idleTimerRef.current);
+      if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+      return;
+    }
+
+    lastActiveTimeRef.current = Date.now();
+
+    // Heartbeat every 30s to keep microVM alive while user is active
+    heartbeatTimerRef.current = setInterval(() => {
+      fetch("/api/sandbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "heartbeat",
+          agentId,
+          campaignId,
+        }),
+      }).catch(() => {});
+    }, 30000);
+
+    const onUserActivity = () => {
+      lastActiveTimeRef.current = Date.now();
+    };
+
+    // Idle checker running every 5 seconds
+    idleTimerRef.current = setInterval(async () => {
+      const idleDuration = Date.now() - lastActiveTimeRef.current;
+      if (idleDuration >= 120000) {
+        // 2 minutes of idle detected!
+        console.log(`[Agent PC] 2 minutes idle detected. Pausing microVM for ${agentId}...`);
+        setIsIdlePaused(true);
+        setIsPaused(true);
+        try {
+          await fetch("/api/sandbox", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "pause",
+              agentId,
+              campaignId,
+            }),
+          });
+        } catch (err) {
+          console.error("Auto pause error:", err);
+        }
+      }
+    }, 5000);
+
+    window.addEventListener("mousemove", onUserActivity, { passive: true });
+    window.addEventListener("keydown", onUserActivity, { passive: true });
+    window.addEventListener("click", onUserActivity, { passive: true });
+    window.addEventListener("touchstart", onUserActivity, { passive: true });
+
+    return () => {
+      if (idleTimerRef.current) clearInterval(idleTimerRef.current);
+      if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+      window.removeEventListener("mousemove", onUserActivity);
+      window.removeEventListener("keydown", onUserActivity);
+      window.removeEventListener("click", onUserActivity);
+      window.removeEventListener("touchstart", onUserActivity);
+    };
+  }, [isFullscreenModal, isPaused, isIdlePaused, agentId]);
 
   const handleSendSpecialKey = async (key: string) => {
     setIsSendingKey(true);
@@ -1176,16 +1218,6 @@ export function AgentTabs({
             {/* Action Buttons */}
             <div className="flex items-center gap-2 flex-shrink-0">
               <button
-                onClick={handleInstallChrome}
-                disabled={isInstallingChrome}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white shadow-2xs transition-all cursor-pointer"
-                title="1-Click Download & Install Official Google Chrome on this Agent PC"
-              >
-                <DownloadCloud className={`w-3.5 h-3.5 ${isInstallingChrome ? "animate-bounce" : ""}`} />
-                <span>{isInstallingChrome ? "Installing..." : "Install Chrome"}</span>
-              </button>
-
-              <button
                 onClick={handlePauseToggle}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer ${
                   isPaused
@@ -1206,24 +1238,6 @@ export function AgentTabs({
               </button>
             </div>
           </div>
-
-          {/* Chrome Install Status Banner */}
-          {chromeInstallMessage && (
-            <div className="mb-3 p-2.5 bg-amber-950/80 border border-amber-600/40 rounded-xl text-xs text-amber-200 flex items-center justify-between">
-              <span className="flex items-center gap-2 font-medium">
-                <DownloadCloud className="w-4 h-4 text-amber-400 shrink-0" />
-                {chromeInstallMessage}
-              </span>
-              {chromeInstallMessage.includes("successfully") && (
-                <button
-                  onClick={() => handleOpenChrome("https://facebook.com")}
-                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs cursor-pointer shadow-sm ml-2 shrink-0"
-                >
-                  Launch Chrome ➔
-                </button>
-              )}
-            </div>
-          )}
 
           {/* Desktop Viewport */}
           <div className="flex-1 min-h-[300px] max-h-[460px] bg-slate-950 rounded-2xl border-2 border-slate-200 dark:border-slate-800 overflow-hidden relative shadow-md group">
@@ -1342,44 +1356,25 @@ export function AgentTabs({
 
               {/* Actions */}
               <div className="flex items-center gap-1.5 sm:gap-2">
-                {/* 1-Click Install Google Chrome */}
+                {/* Paste from PC Clipboard Button */}
                 <button
-                  onClick={handleInstallChrome}
-                  disabled={isInstallingChrome}
-                  title="1-Click Download &amp; Install Google Chrome inside this Agent PC"
-                  className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white shadow-sm transition-all cursor-pointer"
+                  onClick={handlePasteFromDeviceClipboard}
+                  disabled={isPasting}
+                  title="Paste text from your PC into Agent PC (or press Ctrl+V anywhere)"
+                  className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white shadow-sm transition-all cursor-pointer"
                 >
-                  <DownloadCloud className={`w-3.5 h-3.5 ${isInstallingChrome ? "animate-bounce" : ""}`} />
-                  <span className="text-[11px] hidden sm:inline">{isInstallingChrome ? "Installing..." : "Install Chrome"}</span>
-                  <span className="text-[11px] sm:hidden">Chrome</span>
+                  <Clipboard className="w-3.5 h-3.5 text-purple-200" />
+                  <span className="text-[11px]">{isPasting ? "Pasting..." : "Paste from PC"}</span>
                 </button>
 
-                {/* Clipboard Paste Tool */}
+                {/* Instant Reconnect Button */}
                 <button
-                  onClick={() => setShowPasteHelper(!showPasteHelper)}
-                  title="Paste Clipboard Text / Commands into Agent PC"
-                  className={`flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                    showPasteHelper
-                      ? "bg-purple-600 text-white shadow-sm ring-1 ring-purple-400"
-                      : "bg-slate-700 hover:bg-slate-600 text-slate-200"
-                  }`}
+                  onClick={handleWakeAndReconnect}
+                  title="Reconnect or wake Agent PC"
+                  className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold transition-all cursor-pointer"
                 >
-                  <Clipboard className="w-3.5 h-3.5 text-purple-300" />
-                  <span className="text-[11px]">Paste</span>
-                </button>
-
-                {/* Bash Terminal Command Runner */}
-                <button
-                  onClick={() => setShowTerminalHelper(!showTerminalHelper)}
-                  title="Run Shell Command directly in Sandbox MicroVM"
-                  className={`flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                    showTerminalHelper
-                      ? "bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-400"
-                      : "bg-slate-700 hover:bg-slate-600 text-slate-200"
-                  }`}
-                >
-                  <Terminal className="w-3.5 h-3.5 text-emerald-300" />
-                  <span className="text-[11px]">Terminal</span>
+                  <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+                  <span className="text-[11px]">Reconnect</span>
                 </button>
 
                 {/* Virtual Mobile Keyboard Trigger Button */}
@@ -1431,142 +1426,6 @@ export function AgentTabs({
                 </button>
               </div>
             </div>
-
-            {/* Chrome Install Notification Banner */}
-            {chromeInstallMessage && (
-              <div className="bg-amber-950/90 border-b border-amber-600/40 px-3 py-2 text-xs text-amber-200 flex items-center justify-between animate-in fade-in">
-                <span className="flex items-center gap-2 font-medium">
-                  <DownloadCloud className="w-4 h-4 text-amber-400 shrink-0" />
-                  {chromeInstallMessage}
-                </span>
-                {chromeInstallMessage.includes("successfully") && (
-                  <button
-                    onClick={() => handleOpenChrome("https://facebook.com")}
-                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs cursor-pointer shadow-sm ml-2 shrink-0"
-                  >
-                    Launch Chrome Now ➔
-                  </button>
-                )}
-              </div>
-            )}
-
-            {/* Clipboard Paste Tool Bar */}
-            {showPasteHelper && (
-              <div className="bg-slate-900 border-b border-purple-500/40 p-2 sm:p-2.5 flex flex-wrap items-center gap-2 animate-in fade-in slide-in-from-top-1 text-xs">
-                <div className="flex-1 flex items-center gap-2 min-w-[220px]">
-                  <input
-                    type="text"
-                    value={pasteInputText}
-                    onChange={(e) => setPasteInputText(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handlePasteToSandbox()}
-                    placeholder="Paste command, script, or text here to send into Agent PC..."
-                    className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500"
-                  />
-                  <button
-                    onClick={() => handlePasteToSandbox()}
-                    disabled={isPasting || !pasteInputText}
-                    className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                  >
-                    <Clipboard className="w-3.5 h-3.5" />
-                    <span>Paste to PC</span>
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={handleReadDeviceClipboard}
-                    className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-purple-300 rounded-lg text-xs font-medium flex items-center gap-1 cursor-pointer shrink-0"
-                    title="Automatically read your PC/phone clipboard and paste into Agent PC"
-                  >
-                    <span>📋 Read Clipboard</span>
-                  </button>
-                  {pasteSuccess && (
-                    <span className="text-emerald-400 text-xs font-bold flex items-center gap-1 bg-emerald-950/80 px-2 py-1 rounded border border-emerald-800">
-                      <Check className="w-3.5 h-3.5" /> Pasted!
-                    </span>
-                  )}
-                  <button
-                    onClick={() => setShowPasteHelper(false)}
-                    className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded cursor-pointer"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Quick Terminal Command Runner Bar */}
-            {showTerminalHelper && (
-              <div className="bg-slate-900 border-b border-emerald-500/40 p-2 sm:p-2.5 flex flex-col gap-2 animate-in fade-in slide-in-from-top-1 text-xs">
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="flex-1 flex items-center gap-2 min-w-[240px]">
-                    <span className="font-mono text-emerald-400 font-bold">$</span>
-                    <input
-                      type="text"
-                      value={terminalCommand}
-                      onChange={(e) => setTerminalCommand(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleRunTerminalCommand()}
-                      placeholder="e.g. sudo apt update && sudo apt install -y google-chrome-stable"
-                      className="flex-1 bg-slate-950 font-mono text-emerald-300 border border-slate-700 rounded-lg px-3 py-1.5 text-xs placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
-                    />
-                    <button
-                      onClick={() => handleRunTerminalCommand()}
-                      disabled={isExecutingCommand || !terminalCommand.trim()}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                    >
-                      <Terminal className="w-3.5 h-3.5" />
-                      <span>{isExecutingCommand ? "Running..." : "Run"}</span>
-                    </button>
-                  </div>
-
-                  {/* Preset Quick Commands */}
-                  <div className="flex items-center gap-1 overflow-x-auto">
-                    <button
-                      onClick={() => handleRunTerminalCommand("sudo apt-get update && sudo apt-get install -y xclip xdotool wget curl")}
-                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono cursor-pointer"
-                      title="Install Essential Utilities"
-                    >
-                      + Tools
-                    </button>
-                    <button
-                      onClick={() => handleRunTerminalCommand("curl -s ifconfig.me ; echo ; whoami")}
-                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono cursor-pointer"
-                      title="Check Cloud Public IP"
-                    >
-                      Check IP
-                    </button>
-                    <button
-                      onClick={() => handleRunTerminalCommand("google-chrome --version || echo 'Chrome not installed yet'")}
-                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-mono cursor-pointer"
-                    >
-                      Check Chrome
-                    </button>
-                    <button
-                      onClick={() => setShowTerminalHelper(false)}
-                      className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Terminal Monospace Output Log */}
-                {terminalOutput && (
-                  <div className="mt-1 bg-black/90 border border-emerald-900/60 rounded-lg p-2.5 max-h-36 overflow-y-auto font-mono text-[11px] text-emerald-300 whitespace-pre-wrap select-text">
-                    <div className="flex items-center justify-between pb-1 mb-1 border-b border-emerald-950 text-[10px] text-slate-400">
-                      <span>Sandbox Bash Output</span>
-                      <button
-                        onClick={() => setTerminalOutput("")}
-                        className="text-slate-500 hover:text-slate-300 cursor-pointer"
-                      >
-                        Clear
-                      </button>
-                    </div>
-                    {terminalOutput}
-                  </div>
-                )}
-              </div>
-            )}
 
             {/* Mobile Keyboard Typing Bar */}
             {showKeyboardHelper && (
@@ -1768,7 +1627,33 @@ export function AgentTabs({
 
             {/* Real Interactive noVNC Cloud Stream */}
             <div className="flex-1 bg-slate-950 relative overflow-hidden flex items-center justify-center">
-              {sandboxInfo?.streamUrl ? (
+              {/* Host PC Paste Toast Notification */}
+              {pasteSuccessToast && (
+                <div className="absolute top-4 right-4 z-50 bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-xl shadow-xl flex items-center gap-1.5 animate-in fade-in slide-in-from-top-1">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{pasteSuccessToast}</span>
+                </div>
+              )}
+
+              {/* 2-Minute Inactivity Idle Overlay */}
+              {isIdlePaused ? (
+                <div className="absolute inset-0 z-30 bg-slate-950/92 backdrop-blur-sm flex flex-col items-center justify-center text-white text-center p-6 animate-in fade-in">
+                  <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-3">
+                    <Power className="w-7 h-7 text-amber-400" />
+                  </div>
+                  <h3 className="text-sm font-bold text-white mb-1">Agent PC Paused (2 Min Inactivity)</h3>
+                  <p className="text-xs text-slate-400 max-w-sm mb-4">
+                    Desktop automatically paused to protect compute credits ($0 compute). Your opened tabs, Chrome logins, and state are preserved.
+                  </p>
+                  <button
+                    onClick={handleWakeAndReconnect}
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/30 flex items-center gap-2 cursor-pointer transition-all hover:scale-105"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-white" />
+                    <span>Wake &amp; Connect Agent PC</span>
+                  </button>
+                </div>
+              ) : sandboxInfo?.streamUrl ? (
                 <iframe
                   src={sandboxInfo.streamUrl}
                   className="w-full h-full border-none"
@@ -1781,7 +1666,7 @@ export function AgentTabs({
                   <p className="font-bold text-sm text-white">Launching Interactive Cloud Stream...</p>
                   <p className="text-slate-400 text-xs mt-1">Starting display server on Agent PC.</p>
                   <button
-                    onClick={fetchSandbox}
+                    onClick={handleWakeAndReconnect}
                     className="mt-4 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-xl text-xs font-bold text-white cursor-pointer shadow-md"
                   >
                     Connect Stream Now

@@ -65,12 +65,31 @@ export async function getOrCreateAgentSandbox(
 
   if (apiKey && apiKey.startsWith("e2b_")) {
     try {
+      if (sb) {
+        try {
+          const alive = await sb.isRunning();
+          if (!alive) {
+            console.log(`[E2B] Cached microVM for ${agentId} is stopped. Clearing from cache...`);
+            activeSandboxes.delete(cacheKey);
+            sb = null;
+          }
+        } catch {
+          activeSandboxes.delete(cacheKey);
+          sb = null;
+        }
+      }
+
       if (!sb && sandboxId) {
         try {
           console.log(`[E2B] Reconnecting to existing persistent microVM ${sandboxId} for ${agentId}...`);
           sb = await Sandbox.connect(sandboxId, { apiKey });
-          activeSandboxes.set(cacheKey, sb);
-          console.log(`[E2B] Reconnected successfully to ${sandboxId}`);
+          const alive = await sb.isRunning();
+          if (alive) {
+            activeSandboxes.set(cacheKey, sb);
+            console.log(`[E2B] Reconnected successfully to ${sandboxId}`);
+          } else {
+            sb = null;
+          }
         } catch (connErr: any) {
           console.log(`[E2B] Reconnect notice: ${connErr.message}, creating fresh persistent microVM...`);
           sb = null;
@@ -81,7 +100,7 @@ export async function getOrCreateAgentSandbox(
         console.log(`[E2B] User triggered launch: Spawning cloud desktop sandbox for ${agentId}...`);
         sb = await Sandbox.create({
           apiKey,
-          timeoutMs: 120000, // Strict 2-minute safety auto-pause
+          timeoutMs: 3600000, // 1 hour session while user is active
         });
         activeSandboxes.set(cacheKey, sb);
         console.log(`[E2B] Created Sandbox ID: ${sb.sandboxId}`);
