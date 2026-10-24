@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { agentSandboxes } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 
-const apiKey = process.env.E2B_API_KEY || "e2b_d9ab9360f02e072295ab2e312afb4137574dbf24";
+const apiKey = process.env.E2B_API_KEY || "";
 
 // In-memory active sandbox instances cache
 const activeSandboxes: Map<string, any> = new Map();

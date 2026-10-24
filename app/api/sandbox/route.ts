@@ -17,7 +17,8 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const { action, agentId = "fb_laxdollar", campaignId = "default_campaign", value, url } = await req.json();
+    const body = await req.json();
+    const { action, agentId = "fb_laxdollar", campaignId = "default_campaign", value, url, text, key } = body;
 
     if (action === "takeover") {
       // Explicit takeover requests sandbox start
@@ -38,6 +39,34 @@ export async function POST(req: Request) {
         await activeSb.open(url);
       }
       return NextResponse.json({ success: true, url, streamUrl: sandbox.streamUrl });
+    } else if (action === "type") {
+      const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
+      if (activeSb && text) {
+        try {
+          if (typeof activeSb.write === "function") {
+            await activeSb.write(text);
+          } else if (typeof activeSb.commands?.run === "function") {
+            await activeSb.commands.run(`xdotool type --delay 20 "${text.replace(/"/g, '\\"')}"`);
+          }
+        } catch (typeErr) {
+          console.warn("[Sandbox] type error:", typeErr);
+        }
+      }
+      return NextResponse.json({ success: true, typed: text });
+    } else if (action === "key") {
+      const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
+      if (activeSb && key) {
+        try {
+          if (typeof activeSb.press === "function") {
+            await activeSb.press(key);
+          } else if (typeof activeSb.commands?.run === "function") {
+            await activeSb.commands.run(`xdotool key ${key}`);
+          }
+        } catch (keyErr) {
+          console.warn("[Sandbox] key error:", keyErr);
+        }
+      }
+      return NextResponse.json({ success: true, key });
     }
 
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });

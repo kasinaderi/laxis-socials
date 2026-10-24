@@ -33,6 +33,11 @@ import {
   MoreVertical,
   CheckSquare,
   Square,
+  Keyboard,
+  Plus,
+  ChevronDown,
+  ChevronUp,
+  CornerDownLeft,
 } from "lucide-react";
 
 interface AgentTabsProps {
@@ -43,6 +48,46 @@ interface AgentTabsProps {
   avatar: string;
   campaignId?: string;
 }
+
+const AGENT_NICHE_SHORTCUTS: Record<string, { label: string; url: string; color?: string }[]> = {
+  fb_laxdollar: [
+    { label: "laxdollar.site", url: "https://laxdollar.site", color: "emerald" },
+    { label: "Deriv Portal", url: "https://track.deriv.com", color: "blue" },
+    { label: "Facebook Groups", url: "https://facebook.com/groups", color: "sky" },
+    { label: "Facebook Login", url: "https://facebook.com", color: "slate" },
+  ],
+  fb_jotrainer: [
+    { label: "Remotasks", url: "https://remotasks.com", color: "indigo" },
+    { label: "Outlier AI", url: "https://outlier.ai", color: "purple" },
+    { label: "Facebook Jobs", url: "https://facebook.com/jobs", color: "blue" },
+    { label: "Facebook Login", url: "https://facebook.com", color: "slate" },
+  ],
+  fb_contentor: [
+    { label: "Facebook Reels", url: "https://facebook.com/reels", color: "pink" },
+    { label: "Trending Memes", url: "https://knowyourmeme.com", color: "amber" },
+    { label: "Facebook Feed", url: "https://facebook.com", color: "slate" },
+  ],
+  ig_real: [
+    { label: "Instagram Login", url: "https://instagram.com", color: "pink" },
+    { label: "Confessions Explore", url: "https://instagram.com/explore", color: "rose" },
+    { label: "Meta Business", url: "https://business.facebook.com", color: "blue" },
+  ],
+  ig_shader: [
+    { label: "Instagram Login", url: "https://instagram.com", color: "pink" },
+    { label: "The Shade Room", url: "https://theshaderoom.com", color: "amber" },
+    { label: "Pop News Scoops", url: "https://x.com/explore", color: "sky" },
+  ],
+  analytics_agent: [
+    { label: "Meta Insights", url: "https://business.facebook.com/insights", color: "blue" },
+    { label: "Google Trends", url: "https://trends.google.com", color: "emerald" },
+    { label: "Verify Cloud IP", url: "https://whoer.net", color: "amber" },
+  ],
+  master: [
+    { label: "Verify Cloud IP", url: "https://whoer.net", color: "amber" },
+    { label: "Google Trends", url: "https://trends.google.com", color: "emerald" },
+    { label: "Meta Suite", url: "https://business.facebook.com", color: "blue" },
+  ],
+};
 
 export function AgentTabs({
   agentId,
@@ -80,6 +125,119 @@ export function AgentTabs({
   const [isNavigating, setIsNavigating] = useState(false);
   const [customUrl, setCustomUrl] = useState("https://facebook.com");
   const [cookieSavedNotification, setCookieSavedNotification] = useState(false);
+
+  // Agent Niche Shortcuts & Virtual Keyboard Helper
+  const [shortcuts, setShortcuts] = useState<{ label: string; url: string; color?: string }[]>([]);
+  const [isShortcutsCollapsed, setIsShortcutsCollapsed] = useState(false);
+  const [isEditingShortcuts, setIsEditingShortcuts] = useState(false);
+  const [showAddShortcutModal, setShowAddShortcutModal] = useState(false);
+  const [newShortcutLabel, setNewShortcutLabel] = useState("");
+  const [newShortcutUrl, setNewShortcutUrl] = useState("");
+
+  // Virtual / Mobile Keyboard Helper
+  const [showKeyboardHelper, setShowKeyboardHelper] = useState(false);
+  const [keyboardInputText, setKeyboardInputText] = useState("");
+  const [isSendingKey, setIsSendingKey] = useState(false);
+  const mobileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync shortcuts when agentId changes
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem(`shortcuts_${agentId}`);
+        if (stored) {
+          setShortcuts(JSON.parse(stored));
+          return;
+        }
+      } catch (err) {
+        // fallback
+      }
+    }
+    setShortcuts(AGENT_NICHE_SHORTCUTS[agentId] || AGENT_NICHE_SHORTCUTS.master);
+  }, [agentId]);
+
+  const saveShortcuts = (updated: { label: string; url: string; color?: string }[]) => {
+    setShortcuts(updated);
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem(`shortcuts_${agentId}`, JSON.stringify(updated));
+      } catch {}
+    }
+  };
+
+  const handleAddShortcut = () => {
+    if (!newShortcutLabel.trim() || !newShortcutUrl.trim()) return;
+    let url = newShortcutUrl.trim();
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      url = "https://" + url;
+    }
+    const updated = [...shortcuts, { label: newShortcutLabel.trim(), url, color: "slate" }];
+    saveShortcuts(updated);
+    setNewShortcutLabel("");
+    setNewShortcutUrl("");
+    setShowAddShortcutModal(false);
+  };
+
+  const handleDeleteShortcut = (index: number) => {
+    const updated = shortcuts.filter((_, i) => i !== index);
+    saveShortcuts(updated);
+  };
+
+  const handleClearAllShortcuts = () => {
+    if (window.confirm("Clear all shortcuts for this agent?")) {
+      saveShortcuts([]);
+    }
+  };
+
+  const handleResetDefaultShortcuts = () => {
+    const defaults = AGENT_NICHE_SHORTCUTS[agentId] || AGENT_NICHE_SHORTCUTS.master;
+    saveShortcuts(defaults);
+  };
+
+  const handleSendKeyboardText = async () => {
+    if (!keyboardInputText) return;
+    const textToSend = keyboardInputText;
+    setKeyboardInputText("");
+    setIsSendingKey(true);
+    try {
+      await fetch("/api/sandbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "type",
+          agentId,
+          campaignId,
+          text: textToSend,
+        }),
+      });
+    } catch (err) {
+      console.error("Failed to send text to sandbox:", err);
+    } finally {
+      setIsSendingKey(false);
+      mobileInputRef.current?.focus();
+    }
+  };
+
+  const handleSendSpecialKey = async (key: string) => {
+    setIsSendingKey(true);
+    try {
+      await fetch("/api/sandbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "key",
+          agentId,
+          campaignId,
+          key,
+        }),
+      });
+    } catch (err) {
+      console.error("Failed to send key to sandbox:", err);
+    } finally {
+      setIsSendingKey(false);
+      mobileInputRef.current?.focus();
+    }
+  };
 
   // Tasks Tab state
   const [tasks, setTasks] = useState<any[]>([]);
@@ -993,56 +1151,78 @@ export function AgentTabs({
         <div className="fixed inset-0 z-[99999] bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-in fade-in">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-6xl h-[90vh] flex flex-col shadow-2xl overflow-hidden">
             {/* Top Navigation */}
-            <div className="p-3 bg-slate-800 border-b border-slate-700 flex flex-wrap items-center justify-between gap-3 text-white">
-              <div className="flex items-center gap-2.5">
+            <div className="p-2.5 sm:p-3 bg-slate-800 border-b border-slate-700 flex flex-wrap items-center justify-between gap-2 sm:gap-3 text-white">
+              <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
                 <span className="font-bold text-xs tracking-wide">
                   Real AGENT PC Desktop: {agentName}
                 </span>
-                <span className="text-[10px] bg-blue-900/60 border border-blue-700 text-blue-200 px-2 py-0.5 rounded-full">
+                <span className="hidden sm:inline text-[10px] bg-blue-900/60 border border-blue-700 text-blue-200 px-2 py-0.5 rounded-full">
                   US Cloud IP (Agent PC)
                 </span>
               </div>
 
               {/* URL Navigator */}
-              <div className="flex items-center gap-1.5 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-700 text-xs flex-1 max-w-md">
-                <Globe className="w-3.5 h-3.5 text-slate-400" />
+              <div className="flex items-center gap-1.5 bg-slate-900 px-2.5 py-1.5 rounded-xl border border-slate-700 text-xs flex-1 max-w-sm sm:max-w-md">
+                <Globe className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 <input
                   type="text"
                   value={customUrl}
                   onChange={(e) => setCustomUrl(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleNavigate(customUrl)}
                   placeholder="https://facebook.com"
-                  className="bg-transparent border-none text-white focus:outline-none text-xs flex-1"
+                  className="bg-transparent border-none text-white focus:outline-none text-xs flex-1 min-w-[100px]"
                 />
                 <button
                   onClick={() => handleNavigate(customUrl)}
                   disabled={isNavigating}
-                  className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 rounded text-[10px] font-bold text-white transition-all cursor-pointer"
+                  className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 rounded text-[10px] font-bold text-white transition-all cursor-pointer shrink-0"
                 >
                   {isNavigating ? "Opening..." : "Go"}
                 </button>
               </div>
 
               {/* Actions */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                {/* Virtual Mobile Keyboard Trigger Button */}
+                <button
+                  onClick={() => {
+                    const next = !showKeyboardHelper;
+                    setShowKeyboardHelper(next);
+                    if (next) {
+                      setTimeout(() => mobileInputRef.current?.focus(), 150);
+                    }
+                  }}
+                  title="Call Mobile Keyboard (Type directly into Agent PC)"
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    showKeyboardHelper
+                      ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-400"
+                      : "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                  }`}
+                >
+                  <Keyboard className="w-3.5 h-3.5 text-blue-300" />
+                  <span className="text-[11px]">Keyboard</span>
+                </button>
+
                 {sandboxInfo?.streamUrl && (
                   <button
                     onClick={() => window.open(sandboxInfo.streamUrl, "_blank")}
-                    title="Open in dedicated clean window (bypasses MetaMask extension popups)"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold transition-all cursor-pointer"
+                    title="Open in dedicated clean window (bypasses extension popups)"
+                    className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold transition-all cursor-pointer"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
-                    <span>Pop-out Window</span>
+                    <span>Pop-out</span>
                   </button>
                 )}
 
                 <button
                   onClick={handleSaveAndHibernate}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition-all cursor-pointer"
+                  title="Pause &amp; Save State"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition-all cursor-pointer"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  <span>Pause &amp; Save State</span>
+                  <span className="hidden sm:inline">Pause &amp; Save State</span>
+                  <span className="sm:hidden">Save</span>
                 </button>
 
                 <button
@@ -1054,47 +1234,202 @@ export function AgentTabs({
               </div>
             </div>
 
-            {/* Quick Launch Shortcuts into Cloud Browser */}
-            <div className="bg-slate-950 px-4 py-2 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-slate-400 text-[11px] font-semibold">Open in Cloud Browser:</span>
-                <button
-                  onClick={() => handleNavigate("https://facebook.com")}
-                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] font-medium"
-                >
-                  Facebook Login
-                </button>
-                <button
-                  onClick={() => handleNavigate("https://facebook.com/groups")}
-                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] font-medium"
-                >
-                  Facebook Groups
-                </button>
-                <button
-                  onClick={() => handleNavigate("https://instagram.com")}
-                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] font-medium"
-                >
-                  Instagram Login
-                </button>
-                <button
-                  onClick={() => handleNavigate("https://laxdollar.site")}
-                  className="px-2.5 py-1 bg-emerald-950 text-emerald-300 border border-emerald-800 hover:bg-emerald-900 rounded-lg text-[11px] font-medium"
-                >
-                  laxdollar.site
-                </button>
-                <button
-                  onClick={() => handleNavigate("https://whoer.net")}
-                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg text-[11px] font-medium"
-                >
-                  Verify Cloud IP (whoer.net)
-                </button>
+            {/* Mobile Keyboard Typing Bar */}
+            {showKeyboardHelper && (
+              <div className="bg-slate-900 border-b border-blue-500/40 p-2 sm:p-2.5 flex flex-wrap items-center gap-2 animate-in fade-in slide-in-from-top-1">
+                <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                  <input
+                    ref={mobileInputRef}
+                    type="text"
+                    value={keyboardInputText}
+                    onChange={(e) => setKeyboardInputText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleSendKeyboardText();
+                      }
+                    }}
+                    placeholder="Type here to send directly to Agent PC..."
+                    className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleSendKeyboardText}
+                    disabled={isSendingKey || !keyboardInputText}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                  >
+                    <CornerDownLeft className="w-3.5 h-3.5" />
+                    <span>Type</span>
+                  </button>
+                </div>
+
+                {/* Quick Hardware Keys */}
+                <div className="flex items-center gap-1 overflow-x-auto py-0.5">
+                  <button
+                    onClick={() => handleSendSpecialKey("Return")}
+                    disabled={isSendingKey}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] rounded font-medium cursor-pointer"
+                    title="Enter / Return"
+                  >
+                    Enter ↵
+                  </button>
+                  <button
+                    onClick={() => handleSendSpecialKey("BackSpace")}
+                    disabled={isSendingKey}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] rounded font-medium cursor-pointer"
+                    title="Backspace"
+                  >
+                    ⌫ Back
+                  </button>
+                  <button
+                    onClick={() => handleSendSpecialKey("Tab")}
+                    disabled={isSendingKey}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] rounded font-medium cursor-pointer"
+                    title="Tab"
+                  >
+                    Tab ⇥
+                  </button>
+                  <button
+                    onClick={() => handleSendSpecialKey("space")}
+                    disabled={isSendingKey}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] rounded font-medium cursor-pointer"
+                    title="Space"
+                  >
+                    Space
+                  </button>
+                  <button
+                    onClick={() => handleSendSpecialKey("Escape")}
+                    disabled={isSendingKey}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] rounded font-medium cursor-pointer"
+                    title="Escape"
+                  >
+                    Esc
+                  </button>
+                  <button
+                    onClick={() => setShowKeyboardHelper(false)}
+                    className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded cursor-pointer"
+                    title="Close Keyboard"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Quick Launch Niche Shortcuts (Agent Tailored & Editable) */}
+            <div className="bg-slate-950 px-3 sm:px-4 py-1.5 border-b border-slate-800 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-slate-400 text-[11px]">
+                  <button
+                    onClick={() => setIsShortcutsCollapsed(!isShortcutsCollapsed)}
+                    className="flex items-center gap-1 hover:text-slate-200 cursor-pointer font-semibold"
+                  >
+                    {isShortcutsCollapsed ? (
+                      <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                    ) : (
+                      <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                    <span>{agentName} Niche Shortcuts ({shortcuts.length})</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setShowAddShortcutModal(true)}
+                    className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Add</span>
+                  </button>
+                  <button
+                    onClick={() => setIsEditingShortcuts(!isEditingShortcuts)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-medium cursor-pointer ${
+                      isEditingShortcuts
+                        ? "bg-amber-600 text-white"
+                        : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                    }`}
+                  >
+                    {isEditingShortcuts ? "Done" : "Edit"}
+                  </button>
+                  {shortcuts.length > 0 && (
+                    <button
+                      onClick={handleClearAllShortcuts}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-rose-900/60 text-slate-400 hover:text-rose-300 rounded text-[10px] font-medium cursor-pointer"
+                      title="Clear All Shortcuts"
+                    >
+                      Clear All
+                    </button>
+                  )}
+                  {shortcuts.length === 0 && (
+                    <button
+                      onClick={handleResetDefaultShortcuts}
+                      className="px-2 py-0.5 bg-blue-950 border border-blue-800 hover:bg-blue-900 text-blue-300 rounded text-[10px] font-medium cursor-pointer"
+                    >
+                      Restore Niche
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {/* Notice regarding browser extensions */}
-              <div className="flex items-center gap-1.5 text-[10px] text-slate-400 bg-slate-900 px-2.5 py-1 rounded-md border border-slate-800">
-                <AlertTriangle className="w-3 h-3 text-amber-400" />
-                <span>Tip: If your browser extension shows an alert, click inside desktop or click &quot;Pop-out Window&quot;.</span>
-              </div>
+              {/* Add Shortcut Form */}
+              {showAddShortcutModal && (
+                <div className="mt-2 p-2 bg-slate-900 rounded-xl border border-slate-700 flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Label (e.g. TradingView)"
+                    value={newShortcutLabel}
+                    onChange={(e) => setNewShortcutLabel(e.target.value)}
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-white text-xs flex-1 min-w-[120px]"
+                  />
+                  <input
+                    type="text"
+                    placeholder="URL (e.g. tradingview.com)"
+                    value={newShortcutUrl}
+                    onChange={(e) => setNewShortcutUrl(e.target.value)}
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-white text-xs flex-1 min-w-[150px]"
+                  />
+                  <button
+                    onClick={handleAddShortcut}
+                    className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold cursor-pointer"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setShowAddShortcutModal(false)}
+                    className="px-2 py-1 bg-slate-800 text-slate-300 rounded-lg text-xs cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+
+              {/* Shortcuts List */}
+              {!isShortcutsCollapsed && shortcuts.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 mt-1.5 pb-0.5">
+                  {shortcuts.map((sc, idx) => (
+                    <div
+                      key={idx}
+                      className="inline-flex items-center gap-1 bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700/80 rounded-lg px-2.5 py-1 text-[11px] transition-all"
+                    >
+                      <button
+                        onClick={() => handleNavigate(sc.url)}
+                        className="hover:text-blue-400 font-medium cursor-pointer"
+                      >
+                        {sc.label}
+                      </button>
+                      {isEditingShortcuts && (
+                        <button
+                          onClick={() => handleDeleteShortcut(idx)}
+                          className="text-slate-400 hover:text-rose-400 cursor-pointer ml-1"
+                          title="Delete shortcut"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Real Interactive noVNC Cloud Stream */}

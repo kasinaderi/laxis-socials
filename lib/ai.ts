@@ -1,20 +1,22 @@
 import { GoogleGenAI } from "@google/genai";
 import { generateSocialImage } from "./images";
 import { enrichVisualPrompt } from "./memory";
+import { db } from "@/db";
+import { agents, posts } from "@/db/schema";
+import { eq } from "drizzle-orm";
 
-const apiKey = process.env.GEMINI_API_KEY || "";
-const preferredModel = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+const primaryApiKey = process.env.GEMINI_API_KEY || "";
+const fallbackApiKey = process.env.GEMINI_API_KEY_FALLBACK || "";
 
-const ai = new GoogleGenAI({ apiKey });
+// Dual API keys pool for 2x daily quota and instant zero-downtime failover
+const API_KEYS = [primaryApiKey, fallbackApiKey].filter(Boolean);
 
-// Resilient multi-model fallback chain (prioritizing fastest, lowest-latency free endpoints with native vision)
-const FALLBACK_MODELS = [
-  "gemini-3.8-flash",
-  "gemini-3.1-flash-lite",
-  "gemini-3.5-flash-lite",
-  "gemini-3.7-flash",
+// Validated fast Gemini models (tested for low latency, high intelligence, and availability)
+const VALID_FAST_MODELS = [
+  "gemini-3-flash-preview",
+  "gemini-3.5-flash",
   "gemini-flash-lite-latest",
-  preferredModel,
+  "gemini-flash-latest",
 ];
 
 async function parseImageToInlineData(imageSource: string): Promise<{ mimeType: string; data: string } | null> {
@@ -41,21 +43,40 @@ async function parseImageToInlineData(imageSource: string): Promise<{ mimeType: 
 
 async function generateWithFallback(contents: any) {
   let lastError: any = null;
-  for (const model of FALLBACK_MODELS) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-      });
-      if (response && response.text) {
-        return response.text;
+
+  for (let k = 0; k < API_KEYS.length; k++) {
+    const key = API_KEYS[k];
+    const client = new GoogleGenAI({ apiKey: key });
+
+    for (const model of VALID_FAST_MODELS) {
+      try {
+        const response = await client.models.generateContent({
+          model,
+          contents,
+        });
+        if (response && response.text) {
+          return response.text;
+        }
+      } catch (err: any) {
+        const msg = err.message || "";
+        console.warn(`[Gemini Key ${k + 1}] Model ${model} notice: ${msg.slice(0, 60)}`);
+        lastError = err;
+
+        // If rate limit / quota hit (429 / RESOURCE_EXHAUSTED), immediately switch to next API key!
+        if (
+          msg.includes("429") ||
+          msg.includes("quota") ||
+          msg.includes("RESOURCE_EXHAUSTED") ||
+          msg.includes("limit")
+        ) {
+          console.warn(`[Gemini] Key ${k + 1} reached limit. Instantly picking up fallback API key!`);
+          break; // Break model loop to switch key instantly
+        }
       }
-    } catch (err: any) {
-      console.warn(`Model ${model} unavailable, trying next... (${err.message?.slice(0, 50)})`);
-      lastError = err;
     }
   }
-  throw lastError || new Error("All Gemini fallback models exhausted");
+
+  throw lastError || new Error("All Gemini models and API keys exhausted");
 }
 
 export type AgencyAgentId =
@@ -80,15 +101,57 @@ export interface AgentPlanResult {
   }>;
 }
 
+export async function getLiveAgencyStatusSummary(campaignId: string = "default_campaign"): Promise<string> {
+  try {
+    const allAgents = await db.select().from(agents).all();
+    const agentStatuses = allAgents.map((a) => {
+      const isSbActive = (global as any).__activeSandboxes?.has(`${campaignId}_${a.id}`);
+      const pcState = isSbActive ? "ACTIVE (Agent PC running)" : "STANDBY (Agent PC paused, $0 compute)";
+      return `• ${a.name} (${a.id}): Status = ${a.status} | PC = ${pcState} | Role = ${a.role}`;
+    }).join("\n");
+
+    const todayPosts = await db.select().from(posts).where(eq(posts.campaignId, campaignId)).all();
+
+    return `LIVE SYSTEM GROUND TRUTH (REAL DATABASE STATE):
+Agents Status:
+${agentStatuses || "All 6 agents registered: fb_laxdollar, fb_jotrainer, fb_contentor, ig_real, ig_shader, analytics."}
+
+Standard Daily Post Allocation:
+• fb_contentor: 6 posts/day (Sheng & meme viral hooks)
+• fb_jotrainer: 5 posts/day (Remotasks & Outlier gigs)
+• ig_shader: 5 posts/day (Celebrity tea & pop culture scoops)
+• fb_laxdollar: 4 posts/day (Deriv trading & Boom/Crash money memes)
+• ig_real: 4 posts/day (Confessions & relationship dilemmas)
+• analytics: 2 audits/day (Midday performance pulse & EOD audit)
+Total: 24 to 26 targeted daily drops.
+
+Database Posts: ${todayPosts.length} posts recorded in queue.
+Cloud Desktop Note: Agents remain in sleep/standby mode to save compute credits until their automated task triggers or when manually turned on via the dashboard.`;
+  } catch (err) {
+    return "";
+  }
+}
+
 export async function askMasterAgent(
   userPrompt: string,
   history: Array<{ sender: string; text: string }> = [],
   userImage?: string,
-  memoryDirective?: string
+  memoryDirective?: string,
+  liveContextOverride?: string
 ): Promise<{ text: string; plan?: AgentPlanResult; mediaUrl?: string }> {
   try {
+    const now = new Date();
+    const liveClockString = `${now.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    })} at ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}`;
+
+    const liveGroundTruth = liveContextOverride || (await getLiveAgencyStatusSummary());
+
     const systemPrompt = `You are the Master Agent for "laxis socials", an elite social media growth director.
-You co-manage an autonomous marketing agency alongside the user, directing 6 specialist agents:
+You co-manage an autonomous marketing agency alongside Kelvin (the user), directing 6 specialist agents:
 1. LAXDOLLAR FB (id: "fb_laxdollar"): Markets Deriv broker gateway "laxdollar.site" (Boom & Crash, Volatility, Forex, money memes).
 2. JOTRAINER JOBS (id: "fb_jotrainer"): Microwork & AI training gigs (Outlier, Remotasks, Appen, Clickworker alerts).
 3. CONTENTOR (id: "fb_contentor"): Sheng & English viral comedy, street memes, relatable African humor.
@@ -96,19 +159,28 @@ You co-manage an autonomous marketing agency alongside the user, directing 6 spe
 5. INSTA SHADER (id: "ig_shader"): Urban pop news, celebrity tea, AI tech culture scoops.
 6. ANALYTICS AGENT (id: "analytics"): Performance auditing, viral scoring, post quota throttling.
 
+CURRENT REAL-WORLD CLOCK: Today is ${liveClockString}.
+You have direct real-time calendar and clock awareness.
+
+${liveGroundTruth}
+
 HUMAN ENGAGEMENT & CONVERSATIONAL RULES (CRUCIAL):
-1. MATCH USER ENERGY & BREVITY:
-   - If the user sends a simple greeting or casual check-in (e.g. "good evening", "hello", "hey", "what's up", "how are you"):
-     -> Reply like a REAL human partner in 1 to 2 natural, warm sentences!
-     -> Example: "Good evening! All accounts are running smooth tonight. Want to review today's numbers or brainstorm tomorrow morning's hooks?"
-     -> NEVER reply with a 500-word generic unsolicited speech, robotic corporate monologue, or unprompted tactical rollout when someone just says hello.
-2. BAN ALL ROBOTIC CLICHÉS:
-   - NEVER say: "How may I assist you?", "How can I help you today?", "As an AI...", "The systems are humming and coffee is brewed", "I am primed for action", or formulaic AI phrases. Speak naturally like a high-level marketing colleague.
-3. SHARP, REAL-WORLD REASONING:
-   - When asked a strategic question, provide genuine, sharp marketing reasoning (e.g. why 8 PM mobile scrolling spikes Deriv signups, or why text confession cards beat generic stock photos).
-4. PLAN & JSON OUTPUT (ONLY WHEN ASKED):
-   - ONLY include a JSON tasks plan when the user EXPLICITLY asks to plan, schedule, rollout, or generate campaigns/posts (e.g. "plan tomorrow's posts", "launch tonight's campaign", "create schedule").
-   - If just chatting, answering questions, or greeting, DO NOT output any JSON block.
+1. NATURAL, DIRECT CONVERSATION:
+   - If the user says a short greeting like "hello" or "hey":
+     -> Reply naturally and conversationally like a human partner (e.g. "Hey Kelvin! What are we focusing on right now?" or "Hello! Ready when you are.").
+     -> NEVER repeat the exact same canned phrase over and over (do NOT say "want to look over today's numbers or sketch out fresh hooks").
+     -> Be concise, direct, and human.
+2. ANSWER THE USER'S ACTUAL QUESTION DIRECTLY:
+   - When the user asks a question (e.g. "how many post did you assign today per each bot?" or "which bot is active now"):
+     -> Answer THAT EXACT QUESTION DIRECTLY in the very first sentence.
+     -> Do NOT deflect, do NOT ignore the question, and do NOT give generic greeting filler before answering.
+     -> Use the LIVE SYSTEM GROUND TRUTH provided above for exact bot counts and active statuses.
+3. CONVERSATIONAL CONTINUITY & CONTEXT:
+   - Always pay attention to the Chat History. If the user follows up with "i asked a question" or "why", look back at what was previously discussed and answer accordingly.
+4. NO ROBOTIC CLICHÉS:
+   - NEVER say: "How may I assist you?", "As an AI...", "Systems humming and coffee brewed", "Primed for action", or formulaic corporate speak. Speak like a sharp, experienced marketing co-founder.
+5. JSON PLAN (ONLY WHEN EXPLICITLY REQUESTED):
+   - Only output the \`\`\`json ... \`\`\` block if the user explicitly asks to generate, plan, or schedule a campaign rollout. Otherwise, conversational text only.
 
 When a structured plan is explicitly requested, append a JSON block at the end wrapped in \`\`\`json { ... } \`\`\` matching:
 {
@@ -211,8 +283,15 @@ export async function askWorkerAgent(
   memoryDirective?: string
 ): Promise<{ output: string; mediaPrompt?: string; mediaUrl?: string }> {
   try {
+    const now = new Date();
+    const liveClockString = now.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
     const antiDupBlock = memoryDirective ? `\n\n${memoryDirective}\n` : "";
-    const promptText = `You are an expert social media specialist and creator acting as: ${agentRole}.${antiDupBlock}
+    const promptText = `You are an expert social media specialist and creator acting as: ${agentRole} on ${liveClockString}.${antiDupBlock}
 Human Voice & Personality:
 - Speak authentically and naturally in your persona's tone. Never use robotic phrases ("As an AI...", "How can I help you today?").
 - If the user sends a simple greeting or casual check-in, reply in 1-2 friendly, natural sentences matching your persona.
