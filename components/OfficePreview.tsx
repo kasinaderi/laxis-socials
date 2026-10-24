@@ -159,6 +159,7 @@ export function OfficePreview({
   const [showInfoCards, setShowInfoCards] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [avatarScale, setAvatarScale] = useState<number>(1.0);
 
   // Load saved layout on mount (from localStorage first, then sync with Turso cloud)
   useEffect(() => {
@@ -173,6 +174,11 @@ export function OfficePreview({
         const parsed = JSON.parse(cached);
         setPositions((prev) => ({ ...prev, ...parsed }));
       }
+      const savedScale = localStorage.getItem(`office_scale_${campaignId}`);
+      if (savedScale) {
+        const num = parseFloat(savedScale);
+        if (!isNaN(num) && num >= 0.7 && num <= 1.6) setAvatarScale(num);
+      }
     } catch (e) {}
 
     // 2. Fetch from Turso Cloud
@@ -181,8 +187,10 @@ export function OfficePreview({
       .then((data) => {
         if (data.layout) {
           setPositions((prev) => ({ ...prev, ...data.layout }));
+          if (data.scale) setAvatarScale(data.scale);
           try {
             localStorage.setItem(`office_layout_${campaignId}`, JSON.stringify(data.layout));
+            if (data.scale) localStorage.setItem(`office_scale_${campaignId}`, data.scale.toString());
           } catch (e) {}
         }
       })
@@ -233,10 +241,11 @@ export function OfficePreview({
     setIsSaving(true);
     try {
       localStorage.setItem(`office_layout_${campaignId}`, JSON.stringify(positions));
+      localStorage.setItem(`office_scale_${campaignId}`, avatarScale.toString());
       await fetch("/api/campaign/layout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaignId, layout: positions }),
+        body: JSON.stringify({ campaignId, layout: positions, scale: avatarScale }),
       });
       setSaveSuccess(true);
       setTimeout(() => {
@@ -299,10 +308,26 @@ export function OfficePreview({
         {/* Toolbar Controls */}
         <div className="flex items-center gap-1.5">
           {isEditMode ? (
-            <div className="flex items-center gap-1.5 bg-slate-900/95 backdrop-blur-md p-1 rounded-full border border-amber-400/60 shadow-xl animate-in zoom-in-95 duration-150">
+            <div className="flex flex-wrap items-center gap-1.5 bg-slate-900/95 backdrop-blur-md p-1 rounded-full border border-amber-400/60 shadow-xl animate-in zoom-in-95 duration-150">
               <span className="text-[11px] font-bold text-amber-300 px-2 flex items-center gap-1">
-                <Move className="w-3.5 h-3.5 animate-pulse" /> Drag seats to arrange
+                <Move className="w-3.5 h-3.5 animate-pulse" /> Drag seats
               </span>
+
+              {/* Avatar Size Slider */}
+              <div className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-800 rounded-full border border-white/15 text-[10px] text-slate-300">
+                <span className="font-semibold text-slate-400">Size:</span>
+                <input
+                  type="range"
+                  min="0.7"
+                  max="1.5"
+                  step="0.05"
+                  value={avatarScale}
+                  onChange={(e) => setAvatarScale(parseFloat(e.target.value))}
+                  className="w-16 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                  title={`Avatar size: ${Math.round(avatarScale * 100)}%`}
+                />
+                <span className="font-mono text-[9px] text-amber-300">{Math.round(avatarScale * 100)}%</span>
+              </div>
 
               <button
                 onClick={handleSaveLayout}
@@ -397,6 +422,7 @@ export function OfficePreview({
               isDraggable={isEditMode}
               isDragging={isDragging}
               onPointerDown={(e) => handlePointerDown(agent.id, e)}
+              scale={avatarScale}
             />
           </div>
         );

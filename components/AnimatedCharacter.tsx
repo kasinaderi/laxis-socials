@@ -21,6 +21,7 @@ interface AnimatedCharacterProps {
   isDraggable?: boolean;
   isDragging?: boolean;
   onPointerDown?: (e: React.PointerEvent) => void;
+  scale?: number;
 }
 
 const SEAT_FRAME_COUNTS: Record<number, number> = {
@@ -45,6 +46,7 @@ export function AnimatedCharacter({
   isDraggable = false,
   isDragging = false,
   onPointerDown,
+  scale = 1.0,
 }: AnimatedCharacterProps) {
   const [frameIndex, setFrameIndex] = useState(0);
   const [isHovered, setIsHovered] = useState(false);
@@ -53,14 +55,15 @@ export function AnimatedCharacter({
   const isRunning = agentStatus === "running";
 
   useEffect(() => {
-    if (!isRunning) {
-      setFrameIndex(0);
-      return;
-    }
+    // Dynamic typing speed:
+    // Fast, urgent typing when actively running task (115ms)
+    // Relaxed, continuous typing rhythm when resting/completed/idle (200ms)
+    // Keeps all characters alive and typing like a real bustling office!
+    const speed = isRunning ? 115 : 200;
 
     const interval = setInterval(() => {
       setFrameIndex((prev) => (prev + 1) % totalFrames);
-    }, 130);
+    }, speed);
 
     return () => clearInterval(interval);
   }, [isRunning, totalFrames]);
@@ -106,7 +109,7 @@ export function AnimatedCharacter({
       style={{
         left: `${coords.leftPercent}%`,
         top: `${coords.topPercent}%`,
-        width: `${coords.widthPercent}%`,
+        width: `${coords.widthPercent * scale}%`,
         zIndex: computedZIndex,
       }}
       className={`absolute -translate-x-1/2 -translate-y-[88%] select-none transition-transform duration-100 ${

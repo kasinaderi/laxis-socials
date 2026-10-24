@@ -13,7 +13,8 @@ export interface GenerateImageOptions {
 }
 
 export function buildImageUrl(options: GenerateImageOptions): string {
-  const { prompt, aspectRatio = "1:1", seed = Math.floor(Math.random() * 1000000), model = "flux" } = options;
+  const seed = options.seed ?? Math.floor(Math.random() * 100000000);
+  const { prompt, aspectRatio = "1:1", model = "flux" } = options;
 
   let width = options.width;
   let height = options.height;
@@ -46,8 +47,10 @@ export function buildImageUrl(options: GenerateImageOptions): string {
 
 export async function generateSocialImage(
   prompt: string,
-  aspectRatio: "1:1" | "9:16" | "16:9" | "4:5" = "1:1"
-): Promise<{ url: string; prompt: string }> {
-  const url = buildImageUrl({ prompt, aspectRatio });
-  return { url, prompt };
+  aspectRatio: "1:1" | "9:16" | "16:9" | "4:5" = "1:1",
+  seed?: number
+): Promise<{ url: string; prompt: string; seed: number }> {
+  const chosenSeed = seed ?? Math.floor(Math.random() * 100000000);
+  const url = buildImageUrl({ prompt, aspectRatio, seed: chosenSeed });
+  return { url, prompt, seed: chosenSeed };
 }

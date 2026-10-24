@@ -1,4 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
+import { generateSocialImage } from "./images";
+import { enrichVisualPrompt } from "./memory";
 
 const apiKey = process.env.GEMINI_API_KEY || "";
 const preferredModel = process.env.GEMINI_MODEL || "gemini-3.5-flash";
@@ -59,8 +61,10 @@ export interface AgentPlanResult {
 
 export async function askMasterAgent(
   userPrompt: string,
-  history: Array<{ sender: string; text: string }> = []
-): Promise<{ text: string; plan?: AgentPlanResult }> {
+  history: Array<{ sender: string; text: string }> = [],
+  userImage?: string,
+  memoryDirective?: string
+): Promise<{ text: string; plan?: AgentPlanResult; mediaUrl?: string }> {
   try {
     const systemPrompt = `You are the Master Orchestrator Agent for "laxis socials", an elite autonomous AI social media marketing agency.
 You direct an autonomous team of dedicated account and persona agents:
@@ -97,6 +101,10 @@ AUTONOMOUS HUMAN RANDOMIZATION RULES:
 - Decide a dynamic daily post count between 3 and 8 posts per agent per day.
 - Stagger publication times randomly across morning (07:30 - 09:30), lunch (12:00 - 13:45), afternoon (15:00 - 16:30), and evening (19:00 - 21:30) peak windows. Never use rigid robotic intervals!
 
+IMAGE GENERATION CAPABILITY:
+- If the user asks you to generate, design, or show an image/visual/meme/poster, or if visual creation is relevant, output:
+MEDIA_PROMPT: [a detailed descriptive prompt for Flux.1 describing the desired visual in high quality commercial photography or graphic style]
+
 When providing a plan, output a JSON block at the end wrapped in \`\`\`json { ... } \`\`\` matching this schema:
 {
   "title": "Short title of the plan",
@@ -125,7 +133,10 @@ If the user is asking a general question, chat warmly, creatively, and intellige
       .map((h) => `${h.sender === "user" ? "User" : "Master Agent"}: ${h.text}`)
       .join("\n");
 
-    const prompt = `${systemPrompt}\n\nChat History:\n${formattedHistory}\n\nUser: ${userPrompt}\nMaster Agent:`;
+    const imageContext = userImage ? `\n[User attached an image to this message: ${userImage}]` : "";
+    const antiDupBlock = memoryDirective ? `\n\n${memoryDirective}` : "";
+
+    const prompt = `${systemPrompt}${antiDupBlock}\n\nChat History:\n${formattedHistory}${imageContext}\n\nUser: ${userPrompt}\nMaster Agent:`;
 
     const fullText = await generateWithFallback(prompt);
 
@@ -143,7 +154,27 @@ If the user is asking a general question, chat warmly, creatively, and intellige
       }
     }
 
-    return { text: cleanText, plan };
+    // Check if image generation was requested or triggered
+    let mediaUrl: string | undefined;
+    const mediaPromptMatch = fullText.match(/MEDIA_PROMPT:\s*(.*)/i);
+    const wantsImage =
+      /(generate|create|make|design|show me|draw)\s+(an?\s+)?(image|photo|picture|visual|poster|meme|graphic|flyer)/i.test(
+        userPrompt
+      );
+
+    if (mediaPromptMatch && mediaPromptMatch[1]) {
+      const rawPrompt = mediaPromptMatch[1].trim();
+      const enriched = enrichVisualPrompt(rawPrompt);
+      const imgRes = await generateSocialImage(enriched.prompt, "1:1", enriched.seed);
+      mediaUrl = imgRes.url;
+      cleanText = cleanText.replace(/MEDIA_PROMPT:[\s\S]*/i, "").trim();
+    } else if (wantsImage) {
+      const enriched = enrichVisualPrompt(userPrompt);
+      const imgRes = await generateSocialImage(enriched.prompt, "1:1", enriched.seed);
+      mediaUrl = imgRes.url;
+    }
+
+    return { text: cleanText, plan, mediaUrl };
   } catch (error: any) {
     console.error("Master Agent error:", error);
     return {
@@ -155,10 +186,12 @@ If the user is asking a general question, chat warmly, creatively, and intellige
 export async function askWorkerAgent(
   agentRole: string,
   taskInstructions: string,
-  contextData: any = {}
-): Promise<{ output: string; mediaPrompt?: string }> {
+  contextData: any = {},
+  memoryDirective?: string
+): Promise<{ output: string; mediaPrompt?: string; mediaUrl?: string }> {
   try {
-    const prompt = `You are an expert AI social media specialist acting as: ${agentRole}.
+    const antiDupBlock = memoryDirective ? `\n\n${memoryDirective}\n` : "";
+    const prompt = `You are an expert AI social media specialist acting as: ${agentRole}.${antiDupBlock}
 Task Instructions:
 ${taskInstructions}
 
@@ -166,20 +199,25 @@ Context / Parameters:
 ${JSON.stringify(contextData, null, 2)}
 
 Provide high-impact, humanized copy formatted for maximum engagement.
-If this task requires an image or video, end with:
-MEDIA_PROMPT: [hyper-detailed descriptive text prompt for Flux.1 or video generator]`;
+If this task requires an image or visual, end with:
+MEDIA_PROMPT: [hyper-detailed descriptive text prompt for Flux.1 image generator]`;
 
     const response = await generateWithFallback(prompt);
 
     let mediaPrompt: string | undefined;
+    let mediaUrl: string | undefined;
     const mediaMatch = response.match(/MEDIA_PROMPT:\s*(.*)/i);
     if (mediaMatch && mediaMatch[1]) {
       mediaPrompt = mediaMatch[1].trim();
+      const enriched = enrichVisualPrompt(mediaPrompt);
+      const imgRes = await generateSocialImage(enriched.prompt, "1:1", enriched.seed);
+      mediaUrl = imgRes.url;
     }
 
     return {
       output: response.replace(/MEDIA_PROMPT:[\s\S]*/i, "").trim(),
       mediaPrompt,
+      mediaUrl,
     };
   } catch (err: any) {
     return {

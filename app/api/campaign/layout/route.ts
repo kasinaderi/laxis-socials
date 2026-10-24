@@ -15,11 +15,14 @@ export async function GET(req: Request) {
       .get();
 
     if (!record) {
-      return NextResponse.json({ layout: null });
+      return NextResponse.json({ layout: null, scale: 1.0 });
     }
 
-    const layout = JSON.parse(record.layoutData);
-    return NextResponse.json({ layout });
+    const data = JSON.parse(record.layoutData);
+    if (data && data.layout) {
+      return NextResponse.json({ layout: data.layout, scale: data.scale || 1.0 });
+    }
+    return NextResponse.json({ layout: data, scale: 1.0 });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
@@ -27,7 +30,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const { campaignId = "default_campaign", layout } = await req.json();
+    const { campaignId = "default_campaign", layout, scale = 1.0 } = await req.json();
 
     if (!layout || typeof layout !== "object") {
       return NextResponse.json({ error: "Invalid layout data" }, { status: 400 });
@@ -35,6 +38,7 @@ export async function POST(req: Request) {
 
     const now = new Date().toISOString();
     const id = `layout_${campaignId}`;
+    const payload = JSON.stringify({ layout, scale });
 
     const existing = await db
       .select()
@@ -46,7 +50,7 @@ export async function POST(req: Request) {
       await db
         .update(officeLayouts)
         .set({
-          layoutData: JSON.stringify(layout),
+          layoutData: payload,
           updatedAt: now,
         })
         .where(eq(officeLayouts.campaignId, campaignId))
@@ -57,13 +61,13 @@ export async function POST(req: Request) {
         .values({
           id,
           campaignId,
-          layoutData: JSON.stringify(layout),
+          layoutData: payload,
           updatedAt: now,
         })
         .run();
     }
 
-    return NextResponse.json({ success: true, layout });
+    return NextResponse.json({ success: true, layout, scale });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

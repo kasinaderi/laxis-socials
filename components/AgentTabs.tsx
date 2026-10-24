@@ -25,6 +25,10 @@ import {
   RefreshCw,
   Power,
   AlertTriangle,
+  Image as ImageIcon,
+  Download,
+  ZoomIn,
+  Paperclip,
 } from "lucide-react";
 
 interface AgentTabsProps {
@@ -45,9 +49,24 @@ export function AgentTabs({
   campaignId = "default_campaign",
 }: AgentTabsProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "computer" | "settings">("computer");
-  const [messages, setMessages] = useState<Array<{ id: string; sender: string; text: string; createdAt: string }>>([]);
+  interface ChatMsg {
+    id: string;
+    sender: string;
+    text: string;
+    metadata?: string | null;
+    createdAt: string;
+  }
+
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+
+  // Chat Image Attachments & HD Preview Modal
+  const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
+  const [showUrlPrompt, setShowUrlPrompt] = useState(false);
+  const [urlInput, setUrlInput] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Computer Tab & E2B Cloud Desktop state
   const [isTakeOver, setIsTakeOver] = useState(false);
@@ -62,6 +81,39 @@ export function AgentTabs({
   const [tasks, setTasks] = useState<any[]>([]);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const getMessageMedia = (m: ChatMsg): { url?: string; type?: string; title?: string } => {
+    if (m.metadata) {
+      try {
+        const parsed = typeof m.metadata === "string" ? JSON.parse(m.metadata) : m.metadata;
+        if (parsed?.mediaUrl) {
+          return { url: parsed.mediaUrl, type: parsed.type || "image", title: parsed.title };
+        }
+      } catch {
+        // ignore
+      }
+    }
+    // Fallback: match image URLs inside text
+    const match = m.text.match(
+      /(https?:\/\/[^\s]+(?:\.png|\.jpg|\.jpeg|\.webp|\.gif)(?:\?[^\s]*)?|https:\/\/image\.pollinations\.ai\/prompt\/[^\s]+)/i
+    );
+    if (match) {
+      return { url: match[1], type: "image" };
+    }
+    return {};
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setAttachedImage(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Fetch messages
   const fetchMessages = async () => {
@@ -114,15 +166,24 @@ export function AgentTabs({
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputText.trim() || isLoading) return;
+    if ((!inputText.trim() && !attachedImage) || isLoading) return;
 
     const userText = inputText.trim();
+    const userImage = attachedImage;
     setInputText("");
+    setAttachedImage(null);
+    setShowUrlPrompt(false);
     setIsLoading(true);
 
     setMessages((prev) => [
       ...prev,
-      { id: `temp_${Date.now()}`, sender: "user", text: userText, createdAt: new Date().toISOString() },
+      {
+        id: `temp_${Date.now()}`,
+        sender: "user",
+        text: userText || (userImage ? "Attached visual asset for review / campaign generation" : ""),
+        metadata: userImage ? JSON.stringify({ mediaUrl: userImage }) : null,
+        createdAt: new Date().toISOString(),
+      },
     ]);
 
     try {
@@ -133,13 +194,20 @@ export function AgentTabs({
           agentId,
           campaignId,
           text: userText,
+          mediaUrl: userImage,
         }),
       });
       const data = await res.json();
       if (data.reply) {
         setMessages((prev) => [
           ...prev,
-          { id: `reply_${Date.now()}`, sender: agentId, text: data.reply, createdAt: new Date().toISOString() },
+          {
+            id: `reply_${Date.now()}`,
+            sender: agentId,
+            text: data.reply,
+            metadata: data.mediaUrl ? JSON.stringify({ mediaUrl: data.mediaUrl }) : null,
+            createdAt: new Date().toISOString(),
+          },
         ]);
       }
       fetchTasks();
@@ -332,6 +400,7 @@ export function AgentTabs({
           <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
             {messages.map((m) => {
               const isUser = m.sender === "user";
+              const media = getMessageMedia(m);
               return (
                 <div key={m.id} className={`flex gap-2.5 ${isUser ? "justify-end" : "justify-start"}`}>
                   {!isUser && (
@@ -340,14 +409,62 @@ export function AgentTabs({
                     </div>
                   )}
                   <div
-                    className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed ${
+                    className={`max-w-[85%] sm:max-w-[78%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed ${
                       isUser
                         ? "bg-blue-600 text-white rounded-br-xs shadow-sm font-medium"
                         : "bg-white text-slate-700 border border-slate-200/80 rounded-bl-xs shadow-2xs"
                     }`}
                   >
                     <p className="whitespace-pre-wrap">{m.text}</p>
-                    <span className={`block text-[9px] mt-1 ${isUser ? "text-blue-200 text-right" : "text-slate-400"}`}>
+
+                    {/* High-Resolution Media Card (Generated or Attached Image) */}
+                    {media.url && (
+                      <div className="mt-2.5 rounded-xl overflow-hidden border border-slate-200/90 bg-slate-900/5 relative group max-w-sm">
+                        <img
+                          src={media.url}
+                          alt={media.title || "Social media visual"}
+                          className="w-full h-auto max-h-72 object-cover rounded-lg cursor-pointer hover:opacity-95 transition-all"
+                          onClick={() => setZoomedImage(media.url!)}
+                        />
+                        <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/70 backdrop-blur-xs p-1 rounded-lg">
+                          <button
+                            type="button"
+                            onClick={() => setZoomedImage(media.url!)}
+                            title="View Full HD"
+                            className="p-1 rounded text-white hover:bg-white/20 cursor-pointer"
+                          >
+                            <ZoomIn className="w-3.5 h-3.5" />
+                          </button>
+                          <a
+                            href={media.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            download="laxis-asset.png"
+                            title="Download Asset"
+                            className="p-1 rounded text-white hover:bg-white/20 cursor-pointer"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
+                        <div className="px-2.5 py-1.5 bg-slate-950/80 backdrop-blur-xs text-[10px] text-white flex items-center justify-between">
+                          <span className="flex items-center gap-1.5 truncate font-medium">
+                            <Sparkles className="w-3 h-3 text-amber-300 flex-shrink-0" />
+                            <span className="truncate">
+                              {isUser ? "Attached Image" : media.title || "AI Generated Asset (Flux.1)"}
+                            </span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setZoomedImage(media.url!)}
+                            className="text-blue-300 hover:text-white text-[9px] underline ml-2 flex-shrink-0 cursor-pointer"
+                          >
+                            Expand
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <span className={`block text-[9px] mt-1.5 ${isUser ? "text-blue-200 text-right" : "text-slate-400"}`}>
                       {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </span>
                   </div>
@@ -357,24 +474,143 @@ export function AgentTabs({
             {isLoading && (
               <div className="flex gap-2.5 items-center text-slate-400 text-xs italic pl-9">
                 <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
-                <span>{agentName} is thinking &amp; executing...</span>
+                <span>{agentName} is generating copy &amp; visuals...</span>
               </div>
             )}
             <div ref={chatEndRef} />
           </div>
 
+          {/* Attached Image Preview Bar */}
+          {attachedImage && (
+            <div className="px-3.5 py-2 bg-blue-50/70 border-t border-blue-200/80 flex items-center justify-between gap-3 animate-in fade-in">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-blue-300 shadow-2xs flex-shrink-0">
+                  <img src={attachedImage} alt="Attachment" className="w-full h-full object-cover" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-blue-950 truncate">Visual Attached</p>
+                  <p className="text-[10px] text-blue-700 truncate">
+                    {agentName} will incorporate this visual or generate campaigns from it
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAttachedImage(null)}
+                className="p-1 rounded-full text-blue-600 hover:bg-blue-100 cursor-pointer"
+                title="Remove attachment"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Direct URL Attachment Input Popover */}
+          {showUrlPrompt && (
+            <div className="px-3.5 py-2 bg-slate-100 border-t border-slate-200 flex items-center gap-2 animate-in fade-in">
+              <input
+                type="url"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                placeholder="Paste direct image URL (https://...)..."
+                className="flex-1 bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (urlInput.trim()) {
+                    setAttachedImage(urlInput.trim());
+                    setUrlInput("");
+                    setShowUrlPrompt(false);
+                  }
+                }}
+                disabled={!urlInput.trim()}
+                className="px-3 py-1.5 bg-blue-600 disabled:opacity-40 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 cursor-pointer"
+              >
+                Attach
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowUrlPrompt(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Hidden File Picker */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            accept="image/*"
+            className="hidden"
+          />
+
+          {/* Quick Prompt Pill: Instant Visual Generation */}
+          <div className="px-3 py-1.5 bg-white border-t border-slate-100 flex items-center gap-2 overflow-x-auto text-[11px]">
+            <span className="text-slate-400 font-medium flex items-center gap-1 flex-shrink-0">
+              <Sparkles className="w-3 h-3 text-amber-500" /> Quick action:
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                const prompt =
+                  agentId === "fb_laxdollar"
+                    ? "Generate an ultra-realistic 3D trading candlestick chart visual with Deriv boom and crash setup for laxdollar.site"
+                    : agentId === "fb_jotrainer"
+                    ? "Generate a clean high-tech photo of a remote AI data annotator laptop workspace"
+                    : agentId === "fb_contentor"
+                    ? "Generate a hilarious relatable comedy meme scene with African street humor"
+                    : agentId === "ig_real"
+                    ? "Generate a dramatic moody true story confession visual with cinematic lighting"
+                    : agentId === "ig_shader"
+                    ? "Generate a glossy paparazzi red carpet celebrity scoop visual"
+                    : "Generate a high-converting promotional visual for our social media campaign";
+                setInputText(prompt);
+              }}
+              className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 rounded-lg text-[11px] font-medium transition-all flex-shrink-0 cursor-pointer"
+            >
+              🎨 Suggest Creative Visual Prompt
+            </button>
+          </div>
+
+          {/* Chat Form */}
           <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-slate-100 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              title="Upload / Send Image to Agent"
+              className="w-9 h-9 rounded-xl border border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-slate-600 hover:text-blue-600 flex items-center justify-center transition-all cursor-pointer flex-shrink-0"
+            >
+              <ImageIcon className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowUrlPrompt(!showUrlPrompt)}
+              title="Attach Image from Web URL"
+              className="w-9 h-9 rounded-xl border border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-slate-600 hover:text-blue-600 flex items-center justify-center transition-all cursor-pointer flex-shrink-0"
+            >
+              <Paperclip className="w-4 h-4" />
+            </button>
+
             <input
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder={`Send instructions to ${agentName}...`}
+              placeholder={
+                agentId === "master"
+                  ? "Direct Master Agent, ask for campaign plans, or send images..."
+                  : `Send instructions or generate images with ${agentName}...`
+              }
               className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
             />
             <button
               type="submit"
-              disabled={isLoading || !inputText.trim()}
-              className="w-9 h-9 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white flex items-center justify-center shadow-sm transition-all cursor-pointer"
+              disabled={isLoading || (!inputText.trim() && !attachedImage)}
+              className="w-9 h-9 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white flex items-center justify-center shadow-sm transition-all cursor-pointer flex-shrink-0"
             >
               <Send className="w-4 h-4" />
             </button>
@@ -678,6 +914,51 @@ export function AgentTabs({
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full-Screen HD Asset Zoom Modal */}
+      {zoomedImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setZoomedImage(null)}
+        >
+          <div
+            className="relative max-w-4xl w-full flex flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-full flex items-center justify-between pb-3 text-white">
+              <span className="text-xs font-semibold flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                High-Definition Visual Preview (Pollinations Flux.1)
+              </span>
+              <div className="flex items-center gap-2">
+                <a
+                  href={zoomedImage}
+                  target="_blank"
+                  rel="noreferrer"
+                  download="laxis-asset.png"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-xs font-medium cursor-pointer transition-all"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download HD</span>
+                </a>
+                <button
+                  onClick={() => setZoomedImage(null)}
+                  className="p-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-white cursor-pointer transition-all"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="rounded-2xl overflow-hidden border border-white/20 bg-black/40 shadow-2xl max-h-[82vh] flex items-center justify-center">
+              <img
+                src={zoomedImage}
+                alt="Enlarged visual"
+                className="max-h-[82vh] max-w-full object-contain"
+              />
             </div>
           </div>
         </div>

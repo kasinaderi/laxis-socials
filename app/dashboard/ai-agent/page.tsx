@@ -72,9 +72,9 @@ export default function AIAgentPage() {
 
         <main className="flex-1 p-4 sm:p-6 overflow-hidden flex flex-col">
           {/* Main 2-Column Split: Active Agent Control Center / Office Preview */}
-          <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-5 min-h-0">
-            {/* Left Column (7 cols): Vertical Agent Dock + Active Agent Workspace */}
-            <div className="xl:col-span-7 flex gap-2.5 sm:gap-3.5 h-full min-h-0">
+          <div className="flex-1 flex flex-col xl:flex-row gap-4 sm:gap-5 min-h-0 overflow-hidden">
+            {/* Left Column: Vertical Agent Dock + Active Agent Workspace */}
+            <div className="flex-1 flex gap-2.5 sm:gap-3.5 h-full min-h-0 min-w-0">
               {/* Vertical Agent Switcher Dock */}
               <div className="flex flex-col gap-1.5 p-1.5 bg-white rounded-2xl border border-slate-200/80 shadow-xs flex-shrink-0 overflow-y-auto">
                 {agents.map((agent) => {
@@ -114,7 +114,7 @@ export default function AIAgentPage() {
               </div>
 
               {/* Selected Agent Workspace (Chat, Tasks, Computer / VM Cloud Desktop) */}
-              <div className="flex-1 h-full min-h-0">
+              <div className="flex-1 h-full min-h-0 min-w-0">
                 <AgentTabs
                   agentId={selectedAgent.id}
                   agentName={selectedAgent.name}
@@ -126,8 +126,8 @@ export default function AIAgentPage() {
               </div>
             </div>
 
-            {/* Right Column (5 cols): Live Isometric Virtual Office with Seated Animated Characters */}
-            <div className="xl:col-span-5 flex flex-col h-full min-h-0">
+            {/* Right Column: Live Isometric Virtual Office with Seated Animated Characters */}
+            <div className="w-full xl:w-[460px] 2xl:w-[540px] flex flex-col h-full min-h-[460px] flex-shrink-0">
               <div className="flex-1 h-full min-h-[460px]">
                 <OfficePreview
                   selectedAgentId={selectedAgentId}

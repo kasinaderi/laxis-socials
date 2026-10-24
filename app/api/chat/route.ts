@@ -4,6 +4,7 @@ import { agentMessages, agentTasks, agentPlans, agents } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { askMasterAgent, askWorkerAgent } from "@/lib/ai";
 import { runAgentTask } from "@/lib/scheduler";
+import { getAgentContentMemory, buildAntiDuplicationDirective } from "@/lib/memory";
 
 export async function GET(req: Request) {
   try {
@@ -26,15 +27,15 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const { agentId = "master", campaignId = "default_campaign", text } = await req.json();
+    const { agentId = "master", campaignId = "default_campaign", text, mediaUrl: userMediaUrl } = await req.json();
 
-    if (!text || !text.trim()) {
-      return NextResponse.json({ error: "Message text is required" }, { status: 400 });
+    if ((!text || !text.trim()) && !userMediaUrl) {
+      return NextResponse.json({ error: "Message text or image is required" }, { status: 400 });
     }
 
     const now = new Date().toISOString();
 
-    // 1. Record User Message
+    // 1. Record User Message (with optional attached image)
     const userMsgId = `msg_${Date.now()}`;
     await db.insert(agentMessages)
       .values({
@@ -42,12 +43,17 @@ export async function POST(req: Request) {
         campaignId,
         agentId,
         sender: "user",
-        text,
+        text: text || "Attached image",
+        metadata: userMediaUrl ? JSON.stringify({ mediaUrl: userMediaUrl }) : null,
         createdAt: now,
       })
       .run();
 
-    // 2. Route to Master Agent vs Specialized Worker Agent
+    // 2. Fetch Content Memory & Anti-Duplication Directives
+    const contentMemory = await getAgentContentMemory(campaignId);
+    const memoryDirective = buildAntiDuplicationDirective(contentMemory);
+
+    // 3. Route to Master Agent vs Specialized Worker Agent
     if (agentId === "master") {
       const history = (await db
         .select()
@@ -62,7 +68,12 @@ export async function POST(req: Request) {
       // Update master agent status
       await db.update(agents).set({ status: "running", activeAt: now }).where(eq(agents.id, "master")).run();
 
-      const { text: responseText, plan } = await askMasterAgent(text, history);
+      const { text: responseText, plan, mediaUrl: generatedMediaUrl } = await askMasterAgent(
+        text,
+        history,
+        userMediaUrl,
+        memoryDirective
+      );
 
       // Save Master response
       const masterMsgId = `msg_${Date.now() + 1}`;
@@ -73,6 +84,7 @@ export async function POST(req: Request) {
           agentId: "master",
           sender: "master",
           text: responseText,
+          metadata: generatedMediaUrl ? JSON.stringify({ mediaUrl: generatedMediaUrl }) : null,
           createdAt: new Date().toISOString(),
         })
         .run();
@@ -127,12 +139,15 @@ export async function POST(req: Request) {
       return NextResponse.json({
         reply: responseText,
         plan,
+        mediaUrl: generatedMediaUrl,
       });
     } else {
       // Direct message with worker agent
       const workerRes = await askWorkerAgent(
         agentId,
-        text
+        text,
+        { userMediaUrl },
+        memoryDirective
       );
 
       const workerMsgId = `msg_${Date.now() + 1}`;
@@ -143,11 +158,15 @@ export async function POST(req: Request) {
           agentId,
           sender: agentId,
           text: workerRes.output,
+          metadata: workerRes.mediaUrl ? JSON.stringify({ mediaUrl: workerRes.mediaUrl }) : null,
           createdAt: new Date().toISOString(),
         })
         .run();
 
-      return NextResponse.json({ reply: workerRes.output });
+      return NextResponse.json({
+        reply: workerRes.output,
+        mediaUrl: workerRes.mediaUrl,
+      });
     }
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
