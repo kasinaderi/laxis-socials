@@ -12,7 +12,12 @@ import {
   Save,
   Radio,
   Share2,
+  Sliders,
+  Move,
+  RotateCcw,
+  ArrowRight,
 } from "lucide-react";
+import Link from "next/link";
 
 export default function SettingsPage() {
   const [campaign, setCampaign] = useState<any>(null);
@@ -156,6 +161,39 @@ export default function SettingsPage() {
               </button>
             </div>
           </form>
+
+          {/* Virtual Office Seat Layout & Drag Arranger */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-2xs space-y-4">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <Move className="w-4 h-4 text-blue-600" />
+                  <span>Agent Office Positioning &amp; Seat Arranger</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Drag and reposition each agent anywhere on the office floor. Their information box moves with them.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="text-xs text-slate-600">
+                <span className="font-semibold text-slate-800 block">Interactive Drag-and-Drop Mode</span>
+                <span>Click the button below to enter visual arrangement mode. You can drag any character with your mouse or touchscreen.</span>
+              </div>
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <Link
+                  href="/dashboard/ai-agent?arrange=true"
+                  className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-all"
+                >
+                  <Sliders className="w-4 h-4" />
+                  <span>Open Seat Arranger</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+              </div>
+            </div>
+          </div>
 
           {/* System Health Diagnostics */}
           <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-2xs space-y-4">

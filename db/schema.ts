@@ -131,3 +131,10 @@ export const agentDeliverables = sqliteTable("agent_deliverables", {
   content: text("content"),
   createdAt: text("created_at").notNull(),
 });
+
+export const officeLayouts = sqliteTable("office_layouts", {
+  id: text("id").primaryKey(),
+  campaignId: text("campaign_id").notNull(),
+  layoutData: text("layout_data").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});

@@ -18,6 +18,9 @@ interface AnimatedCharacterProps {
   };
   zIndex?: number;
   zoneColor?: "red" | "yellow" | "green" | "blue" | "purple";
+  isDraggable?: boolean;
+  isDragging?: boolean;
+  onPointerDown?: (e: React.PointerEvent) => void;
 }
 
 const SEAT_FRAME_COUNTS: Record<number, number> = {
@@ -39,6 +42,9 @@ export function AnimatedCharacter({
   coords,
   zIndex,
   zoneColor = "blue",
+  isDraggable = false,
+  isDragging = false,
+  onPointerDown,
 }: AnimatedCharacterProps) {
   const [frameIndex, setFrameIndex] = useState(0);
   const [isHovered, setIsHovered] = useState(false);
@@ -74,33 +80,27 @@ export function AnimatedCharacter({
 
   const status = getStatusColor(agentStatus);
 
-  // Computed z-index: foreground has higher topPercent, so higher zIndex
-  const computedZIndex = isHovered
-    ? 60
-    : isSelected
+  // Computed z-index: foreground has higher topPercent, dragging has top zIndex
+  const computedZIndex = isDragging
     ? 50
+    : isHovered
+    ? 45
+    : isSelected
+    ? 40
     : zIndex || Math.round(coords.topPercent);
 
-  // Alignment adjustment for badges near right edge
+  // Dynamic badge alignment to avoid edge clipping
   const badgeTranslate =
-    coords.leftPercent > 88
+    coords.leftPercent > 85
       ? "-translate-x-3/4"
-      : coords.leftPercent < 20
+      : coords.leftPercent < 18
       ? "-translate-x-1/4"
       : "-translate-x-1/2";
 
-  // Zone aura colors matching user circles
-  const zoneStyles = {
-    red: "border-red-500/40 bg-red-500/10 shadow-red-500/20",
-    yellow: "border-amber-400/40 bg-amber-400/10 shadow-amber-400/20",
-    green: "border-emerald-400/40 bg-emerald-400/10 shadow-emerald-400/20",
-    blue: "border-blue-400/40 bg-blue-400/10 shadow-blue-400/20",
-    purple: "border-purple-400/40 bg-purple-400/10 shadow-purple-400/20",
-  }[zoneColor];
-
   return (
     <div
-      onClick={onClick}
+      onClick={isDraggable ? undefined : onClick}
+      onPointerDown={onPointerDown}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       style={{
@@ -109,28 +109,36 @@ export function AnimatedCharacter({
         width: `${coords.widthPercent}%`,
         zIndex: computedZIndex,
       }}
-      className={`absolute -translate-x-1/2 -translate-y-[88%] cursor-pointer transition-transform duration-200 select-none ${
-        isHovered ? "scale-110" : ""
-      } ${isSelected ? "scale-105" : ""}`}
+      className={`absolute -translate-x-1/2 -translate-y-[88%] select-none transition-transform duration-100 ${
+        isDraggable
+          ? "cursor-grab active:cursor-grabbing touch-none"
+          : "cursor-pointer"
+      } ${isDragging ? "scale-115 drop-shadow-2xl" : isHovered ? "scale-105" : ""} ${
+        isSelected && !isDraggable ? "scale-105" : ""
+      }`}
     >
-      {/* Ground Floor Shadow & Zone Ring (Anchors the chair wheels firmly to the ground) */}
+      {/* Ground Floor Shadow & Seat Base (Anchors the chair wheels firmly to the ground) */}
       <div
         className={`absolute bottom-[10%] left-1/2 -translate-x-1/2 w-4/5 h-3.5 rounded-full blur-xs pointer-events-none transition-all duration-300 ${
-          isSelected
+          isDragging
+            ? "bg-amber-400/50 scale-140"
+            : isSelected
             ? "bg-blue-500/40 scale-125"
             : isHovered
             ? "bg-white/30 scale-110"
-            : "bg-black/40"
+            : "bg-black/45"
         }`}
       />
 
-      {/* Floating Name Badge above character */}
+      {/* Floating Name Badge above character (moves directly with the agent) */}
       <div
         className={`absolute bottom-[92%] left-1/2 ${badgeTranslate} mb-1 pointer-events-none whitespace-nowrap z-30 transition-transform duration-150`}
       >
         <div
           className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-semibold tracking-tight backdrop-blur-md shadow-lg transition-all duration-200 border ${
-            isSelected
+            isDragging
+              ? "bg-amber-500 text-slate-950 border-amber-300 ring-2 ring-amber-300/60 shadow-amber-500/40 scale-110"
+              : isSelected
               ? "bg-blue-600 text-white border-blue-400 ring-2 ring-blue-400/50 shadow-blue-500/30 scale-105"
               : isHovered
               ? "bg-slate-900/95 text-white border-white/40 shadow-xl"
@@ -139,19 +147,36 @@ export function AnimatedCharacter({
         >
           <span>{avatarEmoji}</span>
           <span className="font-bold">{agentName}</span>
-          <span className="flex items-center gap-1 text-[9.5px] opacity-90 pl-1 border-l border-white/20">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${status.dot} ${
-                isRunning ? "animate-pulse" : ""
-              }`}
-            />
-            {status.label}
-          </span>
+          {isDragging ? (
+            <span className="text-[9px] font-mono text-slate-950 font-bold bg-amber-200 px-1.5 py-0.2 rounded-full">
+              {coords.leftPercent.toFixed(1)}%, {coords.topPercent.toFixed(1)}%
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-[9.5px] opacity-90 pl-1 border-l border-white/20">
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${status.dot} ${
+                  isRunning ? "animate-pulse" : ""
+                }`}
+              />
+              {status.label}
+            </span>
+          )}
         </div>
       </div>
 
+      {/* Dragging Target Ring */}
+      {isDraggable && (
+        <div
+          className={`absolute -inset-2 rounded-2xl border-2 pointer-events-none transition-all ${
+            isDragging
+              ? "border-amber-400 bg-amber-400/15 animate-pulse shadow-[0_0_15px_rgba(251,191,36,0.5)]"
+              : "border-dashed border-white/40 hover:border-white/80"
+          }`}
+        />
+      )}
+
       {/* Selected Active Glow Halo */}
-      {isSelected && (
+      {isSelected && !isDraggable && (
         <div className="absolute inset-0 -m-2 rounded-2xl border-2 border-blue-400 bg-blue-500/10 shadow-[0_0_20px_rgba(59,130,246,0.4)] pointer-events-none animate-pulse" />
       )}
 
@@ -160,7 +185,8 @@ export function AnimatedCharacter({
         <img
           src={`/characters/seat-${seatNumber}/typing_${frameIndex}.png`}
           alt={agentName}
-          className="w-full h-full object-contain pointer-events-none filter drop-shadow-md"
+          draggable={false}
+          className="w-full h-full object-contain pointer-events-none filter drop-shadow-md select-none"
         />
 
         {/* Screen light glow on character face/hands when actively typing */}

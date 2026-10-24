@@ -146,6 +146,13 @@ export async function initDb() {
       content TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS office_layouts (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      layout_data TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 }
 
