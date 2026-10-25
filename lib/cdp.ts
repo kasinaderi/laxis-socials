@@ -333,6 +333,14 @@ export async function initSandboxBrowserAndCdp(sb: any): Promise<void> {
       xdg-mime default google-chrome.desktop x-scheme-handler/http 2>/dev/null || true
       xdg-mime default google-chrome.desktop x-scheme-handler/https 2>/dev/null || true
       xdg-mime default google-chrome.desktop text/html 2>/dev/null || true
+
+      # Suppress Linux GNOME Keyring prompts completely across all sessions
+      killall -9 gnome-keyring-daemon 2>/dev/null || true
+      DISPLAY=:0 xdotool search --class "gcr-prompter" windowclose 2>/dev/null || true
+      DISPLAY=:0 xdotool search --name "keyring" windowclose 2>/dev/null || true
+      sudo sed -i 's|google-chrome-stable %U|google-chrome-stable --password-store=basic %U|g' /usr/share/applications/google-chrome.desktop 2>/dev/null || true
+      sudo sed -i 's|google-chrome %U|google-chrome --password-store=basic %U|g' /usr/share/applications/google-chrome.desktop 2>/dev/null || true
+
       mkdir -p /home/user/.config/chrome-cdp/Default
       touch /home/user/.config/chrome-cdp/"First Run"
     `).catch(() => {});
@@ -354,9 +362,12 @@ export async function launchChromeWithCdp(sb: any, initialUrl: string): Promise<
   if (!sb?.commands?.run) return;
 
   try {
-    // Kill any stale Chrome processes and clean up singleton lock files
+    // Kill any stale Chrome processes, dismiss keyring popups, and clean up singleton lock files
     await sb.commands.run(`
       killall -9 chrome google-chrome 2>/dev/null || true
+      killall -9 gnome-keyring-daemon 2>/dev/null || true
+      DISPLAY=:0 xdotool search --class "gcr-prompter" windowclose 2>/dev/null || true
+      DISPLAY=:0 xdotool search --name "keyring" windowclose 2>/dev/null || true
       rm -f /home/user/.config/chrome-cdp/SingletonLock /home/user/.config/chrome-cdp/SingletonCookie /home/user/.config/chrome-cdp/SingletonSocket 2>/dev/null || true
     `).catch(() => {});
 
