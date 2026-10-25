@@ -333,8 +333,8 @@ export async function initSandboxBrowserAndCdp(sb: any): Promise<void> {
       xdg-mime default google-chrome.desktop x-scheme-handler/http 2>/dev/null || true
       xdg-mime default google-chrome.desktop x-scheme-handler/https 2>/dev/null || true
       xdg-mime default google-chrome.desktop text/html 2>/dev/null || true
-      mkdir -p /home/user/.config/google-chrome/Default
-      touch /home/user/.config/google-chrome/"First Run"
+      mkdir -p /home/user/.config/chrome-cdp/Default
+      touch /home/user/.config/chrome-cdp/"First Run"
     `).catch(() => {});
 
     // 2. Ensure python websocket-client library is installed for CDP
@@ -354,6 +354,15 @@ export async function launchChromeWithCdp(sb: any, initialUrl: string): Promise<
   if (!sb?.commands?.run) return;
 
   try {
+    // Kill any stale Chrome processes and clean up singleton lock files
+    await sb.commands.run(`
+      killall -9 chrome google-chrome 2>/dev/null || true
+      rm -f /home/user/.config/chrome-cdp/SingletonLock /home/user/.config/chrome-cdp/SingletonCookie /home/user/.config/chrome-cdp/SingletonSocket 2>/dev/null || true
+    `).catch(() => {});
+
+    // Wait briefly for processes to die
+    await new Promise((r) => setTimeout(r, 800));
+
     // Check if Chrome is already running with port 9222 active
     const checkPort = await sb.commands.run("curl -s http://127.0.0.1:9222/json/version").catch(() => null);
     const isPortOpen = checkPort?.stdout && checkPort.stdout.includes("Chrome");
@@ -364,34 +373,31 @@ export async function launchChromeWithCdp(sb: any, initialUrl: string): Promise<
       return;
     }
 
-    // Launch Chrome with full CDP remote debugging and display output to DISPLAY=:0
+    // CRITICAL FIX: Use a clean, separate --user-data-dir (/home/user/.config/chrome-cdp)
+    // The default profile dir /home/user/.config/google-chrome was created by a regular Chrome
+    // session WITHOUT --remote-debugging-port, and Chrome refuses to open CDP on an existing
+    // profile unless it was started with debugging from the beginning.
     await sb.commands.run(`
-      pkill -9 -x chrome 2>/dev/null || true
-      pkill -9 -x google-chrome 2>/dev/null || true
-      sleep 0.5
-      DISPLAY=:0 nohup google-chrome \
+      mkdir -p /home/user/.config/chrome-cdp
+      DISPLAY=:0 nohup /usr/bin/google-chrome \
         --remote-debugging-port=9222 \
         --remote-debugging-address=127.0.0.1 \
         --remote-allow-origins=* \
-        --user-data-dir=/home/user/.config/google-chrome \
+        --user-data-dir=/home/user/.config/chrome-cdp \
         --disable-blink-features=AutomationControlled \
-        --test-type \
-        --disable-infobars \
-        --silent-debugger-extension-api \
         --no-sandbox \
         --disable-dev-shm-usage \
         --no-first-run \
         --no-default-browser-check \
         --disable-search-engine-choice-screen \
         --disable-first-run-ui \
-        --disable-fre \
         --password-store=basic \
         --start-maximized \
         "${initialUrl}" > /tmp/chrome_cdp.log 2>&1 &
     `).catch(() => {});
 
-    // Allow Chrome 3 seconds to spin up and bind port 9222
-    await new Promise((r) => setTimeout(r, 3000));
+    // Allow Chrome 4 seconds to spin up and bind port 9222
+    await new Promise((r) => setTimeout(r, 4000));
   } catch (err: any) {
     console.warn("[CDP] Chrome launch notice:", err.message);
   }
