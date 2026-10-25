@@ -290,11 +290,15 @@ export async function initSandboxBrowserAndCdp(sb: any): Promise<void> {
   if (!sb?.commands?.run) return;
 
   try {
-    // 1. Terminate any running Firefox instances and permanently replace firefox symlinks
+    // 1. Terminate any running Firefox instances, close windows, and permanently replace firefox symlinks
     await sb.commands.run(`
+      pkill -9 -f firefox 2>/dev/null || true
+      pkill -9 -f firefox-esr 2>/dev/null || true
       pkill -9 -x firefox 2>/dev/null || true
       pkill -9 -x firefox-bin 2>/dev/null || true
       killall -9 firefox firefox-bin 2>/dev/null || true
+      DISPLAY=:0 xdotool search --class Firefox windowclose 2>/dev/null || true
+      DISPLAY=:0 xdotool search --class firefox windowclose 2>/dev/null || true
       sudo rm -f /usr/bin/firefox /usr/local/bin/firefox 2>/dev/null || true
       sudo ln -sf /usr/bin/google-chrome /usr/bin/firefox 2>/dev/null || true
       sudo update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/google-chrome 100 2>/dev/null || true

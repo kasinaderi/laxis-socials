@@ -151,9 +151,8 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
 
   function cleanQueryText(raw: string): string {
     let q = raw;
-    q = q.replace(/(?:and\s+)?(?:the\s+)?(?:show|give|bring|send|take)\s+(?:me\s+)?(?:a\s+)?(?:the\s+)?screenshot(?:\s+now)?(?:\s+here)?/gi, "");
-    q = q.replace(/(?:of\s+)?(?:the\s+)?search\s+results?/gi, "");
-    q = q.replace(/(?:of\s+)?(?:the\s+)?results?/gi, "");
+    q = q.replace(/(?:and\s+)?(?:then\s+)?(?:the\s+)?(?:show|give|bring|send|take)\s+(?:me\s+)?(?:a\s+)?(?:the\s+)?screenshot(?:\s+now)?(?:\s+here)?/gi, "");
+    q = q.replace(/(?:of\s+)?(?:the\s+)?(?:search\s+)?results?/gi, "");
     q = q.replace(/^the\s+chatgpt\s+chat\s+/i, "");
     q = q.replace(/^the\s+term\s+/i, "");
     q = q.replace(/^for\s+me\s+/i, "");
@@ -290,11 +289,11 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
   const isGitHub = lower.includes("github");
   if (isGitHub) {
     let ghQuery = "";
-    const commaMatch = text.match(/[,“"']\s*([a-zA-Z0-9_\-\.]+)\s*[,“"']/);
+    const commaMatch = text.match(/[,“"']\s*([^,“"'\n\r]+)\s*[,“"']/);
     if (commaMatch && commaMatch[1]) {
       ghQuery = commaMatch[1].trim();
     } else {
-      const searchMatch = text.match(/(?:searrch|search|find|for)\s+([a-zA-Z0-9_\-\.]+)/i);
+      const searchMatch = text.match(/(?:searrch|search|find|for)\s+([^,\n\r]+?)(?:\s+and\s+(?:then\s+)?(?:bring|take|show|send|give)|\s+in\s+chrome|$)/i);
       if (searchMatch && searchMatch[1]) {
         ghQuery = searchMatch[1].trim();
       }
@@ -555,7 +554,8 @@ ACTIVE MONITORING & INTEGRITY DIRECTIVE:
 Examine the live screen pixels critically:
 1. Did the page load the genuine requested content, or is it blocked by a network security block (e.g. "blocked by network security", "access denied", Cloudflare turnstile, CAPTCHA, or mandatory login screen)?
 2. If BLOCKED or CHALLENGED: Explicitly state "Status: BLOCKED_BY_PLATFORM (Security Challenge Detected)" and specify the exact blocker text.
-3. If VERIFIED: State "Status: VERIFIED (Objective fulfilled on live screen)".
+3. If the requested platform or topic is NOT visible (e.g. wrong browser, wrong website, empty history, or desktop wallpaper): Explicitly state "Status: NOT_VERIFIED (Reason why screen does not match requested objective)".
+4. If VERIFIED: State "Status: VERIFIED (Objective fulfilled on live screen)".
 Be completely truthful, concise, and razor-sharp.`;
 
     let promptText = "";
@@ -1039,7 +1039,9 @@ export async function executeAgentChromeTask(
     visualAnalysis.toLowerCase().includes("security challenge") ||
     visualAnalysis.toLowerCase().includes("blocked by network security") ||
     visualAnalysis.toLowerCase().includes("access denied") ||
-    visualAnalysis.toLowerCase().includes("not verified");
+    visualAnalysis.toLowerCase().includes("not verified") ||
+    visualAnalysis.toLowerCase().includes("not_verified") ||
+    visualAnalysis.toLowerCase().includes("firefox");
 
   // 3. Update agent status in database
   await db
@@ -1337,24 +1339,31 @@ export async function handleAgencyExecutiveCommand(
     }
   }
 
-  // 4b. Action: Live Workstation Screenshot Capture on demand ("show me the screenshot now", "give me the screenshot", "i cant see that screenshot")
+  // Check if prompt specifies an actionable browsing, search, navigation, or computer-use task
+  const isTaskOrBrowse =
+    /(?:search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play|github|repo|repos|repository|facebook|fb|look up|twitter|twittwer|x\.com|\/x|instagram|insta|medium|reddit|chatgpt|unfollow|follow|navigate|view|go\s+to|go\s+[a-z]+)/i.test(
+      lower
+    );
+
+  // 4b. Action: Live Workstation Screenshot Capture on demand (ONLY if NOT accompanied by a new browsing/search/navigation task!)
   const isScreenshotRequest =
-    /(?:show|send|give|bring|take|capture|get)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?screenshot/i.test(lower) ||
-    /(?:cant|can't|cannot|didn't|didnt)\s+(?:see|find|get)\s+(?:the|that|any)?\s*screenshot/i.test(lower) ||
-    lower.includes("show me the screenshot") ||
-    lower.includes("where is the screenshot") ||
-    lower.includes("give me the screenshot") ||
-    lower.includes("send the screenshot") ||
-    lower.includes("send it here") ||
-    lower.includes("send it again") ||
-    lower.includes("cant see that screenshot") ||
-    lower.includes("can't see that screenshot") ||
-    lower.includes("cant see the screenshot") ||
-    lower.includes("can't see the screenshot") ||
-    lower.includes("take that screenshot") ||
-    lower === "show screenshot" ||
-    lower === "take screenshot" ||
-    lower === "screenshot";
+    !isTaskOrBrowse &&
+    (/(?:show|send|give|bring|take|capture|get)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?screenshot/i.test(lower) ||
+      /(?:cant|can't|cannot|didn't|didnt)\s+(?:see|find|get)\s+(?:the|that|any)?\s*screenshot/i.test(lower) ||
+      lower.includes("show me the screenshot") ||
+      lower.includes("where is the screenshot") ||
+      lower.includes("give me the screenshot") ||
+      lower.includes("send the screenshot") ||
+      lower.includes("send it here") ||
+      lower.includes("send it again") ||
+      lower.includes("cant see that screenshot") ||
+      lower.includes("can't see that screenshot") ||
+      lower.includes("cant see the screenshot") ||
+      lower.includes("can't see the screenshot") ||
+      lower.includes("take that screenshot") ||
+      lower === "show screenshot" ||
+      lower === "take screenshot" ||
+      lower === "screenshot");
 
   if (isScreenshotRequest) {
     let targetAgentId = extractAgentFromPrompt(text, contextId);
@@ -1387,6 +1396,10 @@ export async function handleAgencyExecutiveCommand(
       activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
     }
 
+    if (activeSb) {
+      await initSandboxBrowserAndCdp(activeSb);
+    }
+
     if (activeSb && typeof activeSb.screenshot === "function") {
       try {
         const shotBuffer = await activeSb.screenshot();
@@ -1401,9 +1414,13 @@ export async function handleAgencyExecutiveCommand(
 
     if (screenshotBase64) {
       const mediaUrl = `data:image/png;base64,${screenshotBase64}`;
+      const hasAnomaly =
+        visualAnalysis.toLowerCase().includes("firefox") ||
+        visualAnalysis.toLowerCase().includes("blocked") ||
+        visualAnalysis.toLowerCase().includes("not_verified");
       return {
         handled: true,
-        replyText: `📸 **Live Workstation Screenshot: ${displayName}**\n\n${visualAnalysis || "Current live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Status:** Active Live VNC`,
+        replyText: `${hasAnomaly ? "⚠️" : "📸"} **Live Workstation Screenshot: ${displayName}**\n\n${visualAnalysis || "Current live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Status:** ${hasAnomaly ? "Attention Required (Display anomaly or legacy window detected)" : "Active Live VNC"}`,
         mediaUrl,
       };
     } else {
@@ -1582,11 +1599,6 @@ export async function handleAgencyExecutiveCommand(
   }
 
   // 5. Action: Chrome Navigation & Autonomous Computer-Use Task
-  const isTaskOrBrowse =
-    /(?:search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play|github|repo|repos|repository|facebook|fb|look up|twitter|twittwer|x\.com|\/x|instagram|insta|medium|reddit|chatgpt|unfollow|follow|navigate|view)/i.test(
-      lower
-    );
-
   if (targetAgentId && isTaskOrBrowse && !isScreenshotRequest && !isCloseFirefox && !isPureWake) {
     const displayName = getAgentDisplayName(targetAgentId);
     if (contextId) lastActiveAgentByContext.set(contextId, targetAgentId);

@@ -119,7 +119,7 @@ export async function getOrCreateAgentSandbox(
       const currentSbId = sb.sandboxId;
 
       // Ensure Chrome is the fixed browser and CDP environment is ready
-      initSandboxBrowserAndCdp(sb).catch((e: any) => console.warn(`[E2B] initSandboxBrowser notice:`, e?.message));
+      await initSandboxBrowserAndCdp(sb).catch((e: any) => console.warn(`[E2B] initSandboxBrowser notice:`, e?.message));
 
       // Start or retrieve noVNC streaming server
       if (sb.stream && typeof sb.stream.start === "function") {
