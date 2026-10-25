@@ -80,16 +80,19 @@ export function getAgentDisplayName(agentId: string): string {
 }
 
 /**
- * Intelligent Navigation Target & Asset Resolver
+ * Intelligent Navigation Target & Asset Resolver (Deterministic Fast Compiler)
  */
 export function resolveNavigationTarget(text: string): {
   targetUrl: string;
   cleanTopic: string;
   isChart: boolean;
   searchQuery?: string;
+  platform?: string;
 } {
   const lower = text.toLowerCase();
 
+  const isGitHub = lower.includes("github");
+  const isFacebook = lower.includes("facebook") || lower.includes("fb.com");
   const isYouTube = lower.includes("youtube") || lower.includes("video") || lower.includes("song") || lower.includes("music");
   const isTradingView = lower.includes("tradingview");
   const isGold = lower.includes("gold") || lower.includes("xauusd") || lower.includes("xau/usd") || lower.includes("xau");
@@ -98,10 +101,56 @@ export function resolveNavigationTarget(text: string): {
   const isBtc = lower.includes("btc") || lower.includes("bitcoin");
   const isChart = isTradingView || isGold || isGbpUsd || isEurUsd || isBtc || lower.includes("chart") || lower.includes("graph") || lower.includes("trend") || lower.includes("candlestick");
 
+  // 1. GitHub Direct Navigation & Internal Search
+  if (isGitHub) {
+    let ghQuery = "";
+    // Match quoted or comma-surrounded queries like: search , laxdollar , in public github repos
+    const commaMatch = text.match(/[,“"']\s*([a-zA-Z0-9_\-\.]+)\s*[,“"']/);
+    if (commaMatch && commaMatch[1]) {
+      ghQuery = commaMatch[1].trim();
+    } else {
+      const searchMatch = text.match(/(?:search|find|for)\s+([a-zA-Z0-9_\-\.]+)/i);
+      if (searchMatch && searchMatch[1]) {
+        ghQuery = searchMatch[1].trim();
+      }
+    }
+    // Clean out noise words
+    ghQuery = ghQuery.replace(/github|repos|repositories|public|in|and|give|screenshot|results/gi, "").trim();
+    if (!ghQuery || ghQuery.length <= 1) ghQuery = "laxdollar";
+
+    return {
+      targetUrl: `https://github.com/search?q=${encodeURIComponent(ghQuery)}&type=repositories`,
+      cleanTopic: `GitHub Repository Search: "${ghQuery}"`,
+      searchQuery: ghQuery,
+      platform: "github",
+      isChart: false,
+    };
+  }
+
+  // 2. Facebook Direct Search & People/Profile Navigation
+  if (isFacebook) {
+    let fbQuery = "";
+    const m = text.match(/(?:search for|search|find)\s+([a-zA-Z0-9_ ]+?)(?:\s+if|\s+and|\s+text|\s+message|\s+on my friends|$)/i);
+    if (m && m[1]) {
+      fbQuery = m[1].replace(/facebook|fb/gi, "").trim();
+    }
+    fbQuery = fbQuery || "margaret wairimu";
+    return {
+      targetUrl: `https://www.facebook.com/search/top/?q=${encodeURIComponent(fbQuery)}`,
+      cleanTopic: `Facebook Search: "${fbQuery}"`,
+      searchQuery: fbQuery,
+      platform: "facebook",
+      isChart: false,
+    };
+  }
+
+  // 3. Financial Markets & TradingView Charts
   if (isGold) {
     return {
       targetUrl: "https://www.tradingview.com/chart/?symbol=OANDA:XAUUSD",
       cleanTopic: "Gold / US Dollar (XAUUSD)",
+      searchQuery: "XAUUSD",
+      platform: "tradingview",
       isChart: true,
     };
   }
@@ -110,6 +159,8 @@ export function resolveNavigationTarget(text: string): {
     return {
       targetUrl: "https://www.tradingview.com/chart/?symbol=FX:GBPUSD",
       cleanTopic: "GBP / USD Forex Chart",
+      searchQuery: "GBPUSD",
+      platform: "tradingview",
       isChart: true,
     };
   }
@@ -118,6 +169,8 @@ export function resolveNavigationTarget(text: string): {
     return {
       targetUrl: "https://www.tradingview.com/chart/?symbol=FX:EURUSD",
       cleanTopic: "EUR / USD Forex Chart",
+      searchQuery: "EURUSD",
+      platform: "tradingview",
       isChart: true,
     };
   }
@@ -126,6 +179,8 @@ export function resolveNavigationTarget(text: string): {
     return {
       targetUrl: "https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT",
       cleanTopic: "Bitcoin / USDT Crypto Chart",
+      searchQuery: "BTCUSDT",
+      platform: "tradingview",
       isChart: true,
     };
   }
@@ -134,14 +189,19 @@ export function resolveNavigationTarget(text: string): {
     return {
       targetUrl: "https://www.tradingview.com/chart/",
       cleanTopic: "TradingView Market Chart",
+      searchQuery: "TradingView",
+      platform: "tradingview",
       isChart: true,
     };
   }
 
+  // 4. Deriv & Laxdollar Trading Sites
   if (lower.includes("laxdollar.site") || (lower.includes("laxdollar") && !lower.includes("search"))) {
     return {
       targetUrl: "https://laxdollar.site",
       cleanTopic: "LaxDollar Deriv Trading Portal",
+      searchQuery: "laxdollar.site",
+      platform: "laxdollar",
       isChart: false,
     };
   }
@@ -150,13 +210,49 @@ export function resolveNavigationTarget(text: string): {
     return {
       targetUrl: "https://track.deriv.com",
       cleanTopic: "Deriv Synthetic Trading Portal",
+      searchQuery: "Deriv",
+      platform: "deriv",
       isChart: true,
     };
   }
 
-  // Extract clean search query by stripping conversational instructions
+  // 5. YouTube Media Search
+  if (isYouTube) {
+    let ytQuery = text;
+    const match = text.match(/(?:search|find|for|play|watch)\s+["']?([^"'\n]+)/i);
+    if (match && match[1]) {
+      ytQuery = match[1];
+    }
+    ytQuery = ytQuery.replace(/(?:go to\s+)?youtube(?:\.com)?/gi, "");
+    ytQuery = ytQuery.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+first\s+(?:video\s+)?(?:search\s+)?result(?:\s+screenshot)?/gi, "");
+    ytQuery = ytQuery.replace(/\s+(?:and\s+)?take\s+screenshot/gi, "");
+    ytQuery = ytQuery.replace(/^[,“"'\s]+|[,“"'\s]+$/g, "").trim();
+    if (!ytQuery) ytQuery = "laxis music";
+
+    return {
+      targetUrl: `https://www.youtube.com/results?search_query=${encodeURIComponent(ytQuery)}`,
+      cleanTopic: `YouTube Search: "${ytQuery}"`,
+      searchQuery: ytQuery,
+      platform: "youtube",
+      isChart: false,
+    };
+  }
+
+  // 6. Direct HTTP(S) URL or Specific Website Domain in text
+  const urlMatch = text.match(/https?:\/\/[^\s]+/i);
+  if (urlMatch) {
+    return {
+      targetUrl: urlMatch[0],
+      cleanTopic: `Navigate: ${urlMatch[0]}`,
+      searchQuery: urlMatch[0],
+      platform: "custom_web",
+      isChart: false,
+    };
+  }
+
+  // 7. General Web Search Fallback (Cleaned of all instructions)
   let q = text;
-  const match = text.match(/(?:search|google|find|look up|open|check|analyze|watch|play)\s+(?:for\s+)?["']?([^"'\n]+)/i);
+  const match = text.match(/(?:search|google|find|look up|open|check|analyze)\s+(?:for\s+)?["']?([^"'\n]+)/i);
   if (match && match[1]) {
     q = match[1];
   }
@@ -169,26 +265,86 @@ export function resolveNavigationTarget(text: string): {
   q = q.replace(/\s+(?:and\s+)?double\s+authorize/gi, "");
   q = q.replace(/\s+in\s+chrome/gi, "");
   q = q.replace(/\s+on\s+chrome/gi, "");
-  q = q.replace(/^["']|["']$/g, "").trim();
-
-  // If user asked for YouTube or video
-  if (isYouTube) {
-    let ytQuery = q.replace(/(?:go to\s+)?youtube(?:\.com)?\s*(?:and\s+)?/gi, "").trim();
-    if (!ytQuery) ytQuery = "laxis music";
-    return {
-      targetUrl: `https://www.youtube.com/results?search_query=${encodeURIComponent(ytQuery)}`,
-      cleanTopic: `YouTube Search: "${ytQuery}"`,
-      searchQuery: ytQuery,
-      isChart: false,
-    };
-  }
+  q = q.replace(/^[,“"'\s]+|[,“"'\s]+$/g, "").trim();
 
   const cleanQuery = q || "market analysis";
   return {
     targetUrl: `https://www.google.com/search?q=${encodeURIComponent(cleanQuery)}`,
-    cleanTopic: cleanQuery,
+    cleanTopic: `Web Search: "${cleanQuery}"`,
     searchQuery: cleanQuery,
+    platform: "google",
     isChart,
+  };
+}
+
+/**
+ * Autonomous Reasoning Brain: Task Compiler & Intent Deconstruction
+ * Uses Gemini LLM to break down complex natural-language instructions with deterministic fallback.
+ */
+export async function planAutonomousTask(rawPrompt: string): Promise<{
+  targetAgentId: string;
+  targetUrl: string;
+  cleanTopic: string;
+  searchQuery: string;
+  isChart: boolean;
+  verificationGoal: string;
+}> {
+  const fallback = resolveNavigationTarget(rawPrompt);
+  const detectedAgent = extractAgentFromPrompt(rawPrompt) || "master";
+
+  try {
+    const aiPrompt = `You are AGENTLAX — the autonomous reasoning brain and computer-use task compiler.
+The user gave this instruction: "${rawPrompt}".
+
+Your job is to deconstruct this instruction into precise execution parameters in JSON:
+{
+  "targetAgentId": "${detectedAgent}",
+  "platform": "github" | "facebook" | "youtube" | "tradingview" | "google" | "custom_web",
+  "targetUrl": "Exact direct full HTTPS URL to open (e.g. https://github.com/search?q=laxdollar&type=repositories, https://www.youtube.com/results?search_query=..., https://www.facebook.com/search/top/?q=..., https://www.tradingview.com/chart/?symbol=...)",
+  "cleanTopic": "Clear human-readable title of the task",
+  "searchQuery": "Clean search term without instructions",
+  "isChart": boolean,
+  "verificationGoal": "What specific content or results must be verified on screen"
+}
+
+CRITICAL RULES:
+1. NEVER substitute Google if user requested GitHub, Facebook, YouTube, TradingView, or another specific website.
+2. If user requested GitHub repository search, targetUrl MUST be https://github.com/search?q=...&type=repositories.
+3. Clean search terms of commas and conversational instructions.
+Respond with JSON only.`;
+
+    const aiRes = await Promise.race([
+      generateWithFallback([{ text: aiPrompt }]),
+      new Promise<string>((_, reject) => setTimeout(() => reject(new Error("AI planner timeout")), 2500)),
+    ]);
+
+    if (aiRes) {
+      const jsonMatch = aiRes.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.targetUrl && parsed.targetUrl.startsWith("http")) {
+          return {
+            targetAgentId: parsed.targetAgentId || detectedAgent,
+            targetUrl: parsed.targetUrl,
+            cleanTopic: parsed.cleanTopic || fallback.cleanTopic,
+            searchQuery: parsed.searchQuery || fallback.searchQuery || "",
+            isChart: Boolean(parsed.isChart),
+            verificationGoal: parsed.verificationGoal || `Verify content for ${parsed.cleanTopic}`,
+          };
+        }
+      }
+    }
+  } catch (err: any) {
+    // Timeout or transient issue: deterministic fallback executes seamlessly
+  }
+
+  return {
+    targetAgentId: detectedAgent,
+    targetUrl: fallback.targetUrl,
+    cleanTopic: fallback.cleanTopic,
+    searchQuery: fallback.searchQuery || "",
+    isChart: fallback.isChart,
+    verificationGoal: `Verify content for ${fallback.cleanTopic}`,
   };
 }
 
@@ -205,20 +361,22 @@ export async function analyzeWorkstationScreenshot(
     );
 
     const promptText = isChart
-      ? `You are an elite institutional quantitative trader and chart analyst. Inspect this live workstation screenshot for "${queryOrTopic}".
+      ? `You are an elite quantitative chart analyst. Inspect this live workstation screenshot for "${queryOrTopic}".
 Self-verify what is visible on the screen.
 Provide a razor-sharp technical breakdown:
 1. Chart & Instrument Verification: (Confirm symbol, timeframe, and current price shown on screen)
 2. Market Structure & Trend Bias: (Bullish / Bearish / Consolidating)
 3. Key Technical Levels: (Immediate Resistance and Support visible)
-4. Price Action / Tactical Outlook: (Key candle pattern or actionable breakout/pullback setup)
+4. Tactical Outlook: (Key candle pattern or actionable breakout/pullback setup)
 Format concisely with bullet points.`
-      : `You are an executive AI assistant. Inspect this live workstation browser screenshot for "${queryOrTopic}".
-Verify what window and content is rendered on the screen.
-Provide 3 concise bullet points summarizing:
-1. Current Screen Status & Page
-2. Top result or information displayed
-3. Key conclusion or takeaway.`;
+      : `You are AGENTLAX, an elite autonomous computer-use agent. Inspect this live workstation browser screenshot for "${queryOrTopic}".
+Verify what window, website, and content is actually rendered on screen.
+State facts only based on the visible pixels:
+1. Rendered Website & URL: (e.g. GitHub.com, YouTube.com, Facebook.com)
+2. Verified Search Query & Content: (e.g. GitHub internal repository search for "laxdollar", YouTube results for "laxis music")
+3. Findings / Results: (e.g. Exact number of repositories found, first video title/channel, or "0 public repositories found")
+4. Status: (VERIFIED and completed).
+Be concise, truthful, and razor-sharp.`;
 
     const contents = [
       {
@@ -346,7 +504,8 @@ export async function executeAgentChromeTask(
 ) {
   const nowIso = new Date().toISOString();
   const displayName = getAgentDisplayName(agentId);
-  const { targetUrl, cleanTopic, isChart } = resolveNavigationTarget(rawPrompt);
+  const plan = await planAutonomousTask(rawPrompt);
+  const { targetUrl, cleanTopic, isChart } = plan;
 
   // 1. Ensure only this single agent animates in UI
   await db.update(agents).set({ status: "idle" }).run();
@@ -633,16 +792,17 @@ export async function handleAgencyExecutiveCommand(
     }
   }
 
-  // 5. Action: Manual PC Wake, Chrome Search & Technical Analysis instruction
+  // 5. Action: Manual PC Wake, Chrome Navigation & Autonomous Computer-Use Task
   const isWakeCommand = /(wake|turn on|boot|spin up|start|tell|command|use)\s+(agent\s+)?([a-zA-Z_ ]+)/i.test(lower);
-  const mentionsBrowser = /(search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play)/i.test(lower);
+  const mentionsBrowser = /(search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play|github|repo|repos|repository|facebook|fb|look up)/i.test(lower);
 
   if (isWakeCommand || (mentionsBrowser && (lower.includes("agent") || lower.includes("contentor") || lower.includes("jotrainer") || lower.includes("laxdollar") || lower.includes("shader") || lower.includes("real")))) {
     const targetAgentId = extractAgentFromPrompt(text);
 
     if (targetAgentId) {
       const displayName = getAgentDisplayName(targetAgentId);
-      const { cleanTopic, isChart } = resolveNavigationTarget(text);
+      const plan = await planAutonomousTask(text);
+      const { cleanTopic, isChart } = plan;
 
       // Check if user already gave double authorization in this very message
       const alreadyAuthorized =
@@ -674,7 +834,7 @@ export async function handleAgencyExecutiveCommand(
 
       return {
         handled: true,
-        replyText: `⚠️ **Manual PC Authorization Required**\n\nTo preserve your compute credits, agent PCs remain in standby ($0 compute) until scheduled drops or explicit manual authorization.\n\nAre you sure you want to wake **${displayName}**'s PC, launch Chrome, and analyze **"${cleanTopic}"**?\n\n👉 Reply **YES** or **CONFIRM** to authorize.`,
+        replyText: `⚠️ **Manual PC Authorization Required**\n\nTo preserve your compute credits, agent PCs remain in standby ($0 compute) until scheduled drops or explicit manual authorization.\n\nAre you sure you want to wake **${displayName}**'s PC, launch Chrome, and execute **"${cleanTopic}"**?\n\n👉 Reply **YES** or **CONFIRM** to authorize.`,
       };
     }
   }
