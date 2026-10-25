@@ -147,6 +147,49 @@ export async function askMasterAgent(
       return { text: execAction.replyText, mediaUrl: execAction.mediaUrl };
     }
 
+    // 2. ANTI-HALLUCINATION GUARD: If a workstation is active and user asks to "see" it,
+    //    NEVER let the LLM reply with text — always capture a screenshot immediately.
+    const lower = userPrompt.toLowerCase().trim();
+    const activeMap: Map<string, any> = (global as any).__activeSandboxes;
+    const lastActiveMap: Map<string, string> = (global as any).__lastActiveAgentByContext;
+    const activeAgentId = lastActiveMap?.get(contextId) || (activeMap && activeMap.size > 0 ? Array.from(activeMap.keys())[0]?.replace("default_campaign_", "") : null);
+    const activeSandbox = activeAgentId ? activeMap?.get(`default_campaign_${activeAgentId}`) : null;
+
+    const isRequestingVisual =
+      lower.includes("let me see") ||
+      lower === "show" ||
+      lower === "show me" ||
+      lower.includes("i want to see") ||
+      lower.includes("i told you let me see") ||
+      lower.includes("why do i have to explain") ||
+      lower.includes("take that screenshot") ||
+      lower.includes("send me the photo") ||
+      lower.includes("show me the photo") ||
+      lower.includes("send it here") ||
+      lower.includes("send it again") ||
+      lower === "photo" ||
+      lower === "pic" ||
+      lower === "picture";
+
+    if (isRequestingVisual && activeSandbox && typeof activeSandbox.screenshot === "function") {
+      try {
+        const { analyzeWorkstationScreenshot, getAgentDisplayName } = await import("./agency-actions");
+        const shotBuffer = await activeSandbox.screenshot().catch(() => null);
+        if (shotBuffer && shotBuffer.length > 0) {
+          const screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+          const displayName = getAgentDisplayName(activeAgentId!);
+          const visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} Live Workstation Display`);
+          const mediaUrl = `data:image/png;base64,${screenshotBase64}`;
+          return {
+            text: `📸 **Live Workstation Screenshot: ${displayName}**\n\n${visualAnalysis || "Current live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Status:** Active Live VNC`,
+            mediaUrl,
+          };
+        }
+      } catch (guardErr: any) {
+        console.warn("[MasterAgent] Anti-hallucination screenshot guard notice:", guardErr.message);
+      }
+    }
+
     const now = new Date();
     const liveClockString = `${now.toLocaleDateString("en-US", {
       weekday: "long",

@@ -218,19 +218,108 @@ class CDPClient:
 
     def click_text(self, text_to_find):
         js = f"""(() => {{
-            const target = "{text_to_find}".toLowerCase();
-            const elements = Array.from(document.querySelectorAll('a, button, span, div[role="tab"], input[type="submit"]'));
+            const target = "{text_to_find}".toLowerCase().trim();
+            const elements = Array.from(document.querySelectorAll('a, button, span, div[role="tab"], div[role="button"], input[type="submit"]'));
             for (const el of elements) {{
                 if (el.offsetParent !== null) {{
-                    const t = (el.innerText || el.value || '').trim().toLowerCase();
+                    const t = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
                     if (t === target || t.startsWith(target) || t.includes(target)) {{
                         el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                        el.focus();
                         el.click();
-                        return {{ success: true, clicked: (el.innerText || el.value || '').trim() }};
+                        return {{ success: true, clicked: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim() }};
                     }}
                 }}
             }}
             return {{ success: false, reason: f"Element with text '{text_to_find}' not found" }};
+        }})()"""
+        return self.evaluate(js)
+
+    def click_ordinal(self, target_type="result", index=1):
+        js = f"""(() => {{
+            const type = "{target_type}".toLowerCase().trim();
+            const idx = Math.max(0, {index} - 1);
+            let selectors = [];
+            if (type.includes("account") || type.includes("channel") || type.includes("user") || type.includes("profile")) {{
+                selectors = [
+                    'ytd-channel-renderer a#main-link',
+                    'ytd-channel-renderer',
+                    'a#channel-thumbnail',
+                    'a[href*="/@"]',
+                    '[data-testid="UserCell"]',
+                    'a[data-hovercard-type="user"]',
+                    'div[role="button"][tabindex="0"]',
+                    'article a[role="link"]',
+                    'a.avatar-link'
+                ];
+            }} else if (type.includes("video")) {{
+                selectors = [
+                    'ytd-video-renderer a#video-title',
+                    'ytd-video-renderer a#thumbnail',
+                    'ytd-rich-item-renderer a#video-title',
+                    'a[href*="watch?v="]',
+                    'article a'
+                ];
+            }} else {{
+                // Generic search results, items, cards, posts
+                selectors = [
+                    'ytd-channel-renderer a#main-link',
+                    'ytd-video-renderer a#video-title',
+                    'article a',
+                    'h3 a',
+                    '[data-testid="tweet"]',
+                    'div.g a',
+                    '.result a',
+                    'a[href]:not([href^="#"]):not([href=""])'
+                ];
+            }}
+
+            let candidates = [];
+            for (const sel of selectors) {{
+                const els = Array.from(document.querySelectorAll(sel)).filter(el => {{
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= (window.innerHeight * 2.5);
+                }});
+                if (els.length > 0) {{
+                    candidates = els;
+                    break;
+                }}
+            }}
+
+            if (candidates.length === 0) {{
+                candidates = Array.from(document.querySelectorAll('a, button')).filter(el => {{
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 20 && rect.height > 10 && (el.innerText || '').trim().length > 0;
+                }});
+            }}
+
+            if (idx < candidates.length) {{
+                const target = candidates[idx];
+                target.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                target.focus();
+                target.click();
+                return {{
+                    success: true,
+                    clicked: (target.innerText || target.getAttribute('aria-label') || target.getAttribute('href') || 'item').trim(),
+                    index: idx + 1,
+                    totalFound: candidates.length
+                }};
+            }}
+            return {{ success: false, reason: f"Target item at position {index} not found. Found {{len(candidates)}} items." }};
+        }})()"""
+        return self.evaluate(js)
+
+    def scroll(self, direction="down", amount=600):
+        dy = amount if direction == "down" else -amount
+        js = f"""(() => {{
+            if ("{direction}" === "top") {{
+                window.scrollTo({{ top: 0, behavior: 'smooth' }});
+            }} else if ("{direction}" === "bottom") {{
+                window.scrollTo({{ top: document.body.scrollHeight, behavior: 'smooth' }});
+            }} else {{
+                window.scrollBy({{ top: {dy}, behavior: 'smooth' }});
+            }}
+            return {{ success: true, direction: "{direction}", amount: {amount} }};
         }})()"""
         return self.evaluate(js)
 
@@ -288,6 +377,14 @@ if __name__ == "__main__":
             query = sys.argv[2]
             tab = sys.argv[3] if len(sys.argv) > 3 else None
             print(json.dumps(client.smart_search(query, target_tab=tab)))
+        elif cmd == "scroll":
+            direction = sys.argv[2] if len(sys.argv) > 2 else "down"
+            amount = int(sys.argv[3]) if len(sys.argv) > 3 else 600
+            print(json.dumps(client.scroll(direction, amount)))
+        elif cmd == "ordinal":
+            target_type = sys.argv[2] if len(sys.argv) > 2 else "result"
+            idx = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+            print(json.dumps(client.click_ordinal(target_type, idx)))
         elif cmd == "click":
             txt = sys.argv[2]
             print(json.dumps(client.click_text(txt)))
@@ -362,39 +459,71 @@ export async function launchChromeWithCdp(sb: any, initialUrl: string): Promise<
   if (!sb?.commands?.run) return;
 
   try {
-    // Kill any stale Chrome processes, dismiss keyring popups, and clean up singleton lock files
+    // 1. Check if Chrome is ALREADY running with port 9222 active and responsive
+    const checkPort = await sb.commands.run("curl -s http://127.0.0.1:9222/json/version").catch(() => null);
+    const isPortOpen = checkPort?.stdout && checkPort.stdout.includes("Chrome");
+
+    if (isPortOpen) {
+      console.log("[CDP] Chrome is already running with port 9222 active. Preserving active session.");
+      // Ensure Chrome window is focused and visible
+      await sb.commands.run(`
+        DISPLAY=:0 xdotool search --onlyvisible --class google-chrome windowactivate --sync 2>/dev/null || true
+      `).catch(() => {});
+
+      if (initialUrl && initialUrl !== "about:blank") {
+        try {
+          const info = await cdpGetInfo(sb);
+          const currentUrl = info?.url || "";
+          let targetHost = "";
+          try {
+            targetHost = new URL(initialUrl).hostname.replace(/^www\./, "");
+          } catch {
+            targetHost = initialUrl;
+          }
+
+          // Only navigate if we're on about:blank or a completely different domain
+          if (currentUrl.includes("about:blank") || (!currentUrl.includes(targetHost) && !currentUrl.includes("results"))) {
+            console.log(`[CDP] Navigating active tab to ${initialUrl}`);
+            await cdpNavigate(sb, initialUrl);
+          }
+        } catch {
+          // Keep current view if info check fails
+        }
+      }
+      return;
+    }
+
+    // 2. Chrome is not running. Clean up stale singleton lock files and dismiss any system modals
     await sb.commands.run(`
       killall -9 chrome google-chrome 2>/dev/null || true
       killall -9 gnome-keyring-daemon 2>/dev/null || true
       DISPLAY=:0 xdotool search --class "gcr-prompter" windowclose 2>/dev/null || true
       DISPLAY=:0 xdotool search --name "keyring" windowclose 2>/dev/null || true
       rm -f /home/user/.config/chrome-cdp/SingletonLock /home/user/.config/chrome-cdp/SingletonCookie /home/user/.config/chrome-cdp/SingletonSocket 2>/dev/null || true
+      
+      # Ensure Chrome exit state is marked clean so "Restore pages?" crash recovery bubble NEVER appears
+      python3 -c "import json, os; p='/home/user/.config/chrome-cdp/Default/Preferences'; os.makedirs(os.path.dirname(p), exist_ok=True); d = json.load(open(p)) if os.path.exists(p) else {}; d.setdefault('profile', {})['exit_type'] = 'Normal'; d.setdefault('profile', {})['exited_cleanly'] = True; json.dump(d, open(p, 'w'))" 2>/dev/null || true
     `).catch(() => {});
 
-    // Wait briefly for processes to die
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 600));
 
-    // Check if Chrome is already running with port 9222 active
-    const checkPort = await sb.commands.run("curl -s http://127.0.0.1:9222/json/version").catch(() => null);
-    const isPortOpen = checkPort?.stdout && checkPort.stdout.includes("Chrome");
-
-    if (isPortOpen) {
-      // Chrome is already running with CDP! Navigate current tab to initialUrl
-      await cdpNavigate(sb, initialUrl);
-      return;
-    }
-
-    // CRITICAL FIX: Use a clean, separate --user-data-dir (/home/user/.config/chrome-cdp)
-    // The default profile dir /home/user/.config/google-chrome was created by a regular Chrome
-    // session WITHOUT --remote-debugging-port, and Chrome refuses to open CDP on an existing
-    // profile unless it was started with debugging from the beginning.
+    // 3. Launch Google Chrome with full stealth, anti-bot, and clean UI flags:
+    // • --test-type: permanently suppresses the yellow "--no-sandbox" warning bar
+    // • --hide-crash-restore-bubble & --disable-session-crashed-bubble: suppresses crash recovery popups
+    // • --disable-infobars: eliminates UI notification bars
+    // • --password-store=basic: prevents keyring daemon password requests
     await sb.commands.run(`
-      mkdir -p /home/user/.config/chrome-cdp
+      mkdir -p /home/user/.config/chrome-cdp/Default
+      touch /home/user/.config/chrome-cdp/"First Run"
       DISPLAY=:0 nohup /usr/bin/google-chrome \
         --remote-debugging-port=9222 \
         --remote-debugging-address=127.0.0.1 \
         --remote-allow-origins=* \
         --user-data-dir=/home/user/.config/chrome-cdp \
+        --test-type \
+        --disable-infobars \
+        --hide-crash-restore-bubble \
+        --disable-session-crashed-bubble \
         --disable-blink-features=AutomationControlled \
         --no-sandbox \
         --disable-dev-shm-usage \
@@ -403,12 +532,16 @@ export async function launchChromeWithCdp(sb: any, initialUrl: string): Promise<
         --disable-search-engine-choice-screen \
         --disable-first-run-ui \
         --password-store=basic \
+        --disable-features=Translate,OptimizationHints,MediaRouter \
+        --disable-component-update \
+        --disable-popup-blocking \
+        --window-size=1280,800 \
         --start-maximized \
         "${initialUrl}" > /tmp/chrome_cdp.log 2>&1 &
     `).catch(() => {});
 
-    // Allow Chrome 4 seconds to spin up and bind port 9222
-    await new Promise((r) => setTimeout(r, 4000));
+    // Allow Chrome 3.5 seconds to spin up and bind port 9222
+    await new Promise((r) => setTimeout(r, 3500));
   } catch (err: any) {
     console.warn("[CDP] Chrome launch notice:", err.message);
   }
@@ -506,6 +639,44 @@ export async function cdpPressEnter(sb: any): Promise<any> {
   if (!sb?.commands?.run) return null;
   try {
     const res = await sb.commands.run("python3 /home/user/cdp_controller.py enter 2>&1");
+    return res.stdout ? JSON.parse(res.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Scroll page smoothly via CDP and X11 mouse wheel
+ */
+export async function cdpScroll(
+  sb: any,
+  direction: "up" | "down" | "top" | "bottom" = "down",
+  amount: number = 600
+): Promise<any> {
+  if (!sb?.commands?.run) return null;
+  try {
+    // 1. Scroll active viewport via CDP
+    const res = await sb.commands.run(`python3 /home/user/cdp_controller.py scroll "${direction}" ${amount} 2>&1`);
+    // 2. Also dispatch X11 mouse wheel clicks for inner scroll containers
+    const btn = direction === "up" || direction === "top" ? 4 : 5;
+    await sb.commands.run(`DISPLAY=:0 xdotool click ${btn} click ${btn} click ${btn} 2>/dev/null || true`).catch(() => {});
+    return res.stdout ? JSON.parse(res.stdout) : { success: true };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Click ordinal item (e.g. 1st account, 2nd video, 1st result) via CDP
+ */
+export async function cdpClickOrdinal(
+  sb: any,
+  targetType: string = "result",
+  index: number = 1
+): Promise<any> {
+  if (!sb?.commands?.run) return null;
+  try {
+    const res = await sb.commands.run(`python3 /home/user/cdp_controller.py ordinal "${targetType}" ${index} 2>&1`);
     return res.stdout ? JSON.parse(res.stdout) : null;
   } catch {
     return null;

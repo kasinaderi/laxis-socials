@@ -13,6 +13,8 @@ import {
   cdpGetInfo,
   cdpTypeInput,
   cdpPressEnter,
+  cdpScroll,
+  cdpClickOrdinal,
 } from "./cdp";
 
 const apiKey = process.env.E2B_API_KEY || "";
@@ -38,6 +40,7 @@ const lastActiveAgentByContext: Map<string, string> = new Map();
 // Smart Agent Identifier Extractor with Conversational Memory
 export function extractAgentFromPrompt(text: string, contextId?: string): string | null {
   const lower = text.toLowerCase();
+  const trimmedText = text.trim();
 
   // 1. Explicit multi-word agent names (Highest priority)
   let found: string | null = null;
@@ -93,7 +96,24 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
     lower.includes("click next") ||
     lower.includes("press enter") ||
     lower.includes("cant see that screenshot") ||
-    lower.includes("take that screenshot");
+    lower.includes("take that screenshot") ||
+    // Follow-up screenshot/show requests — always continue on the active VM
+    lower.includes("let me see") ||
+    lower.includes("show me") ||
+    lower.includes("i want to see") ||
+    lower.includes("send me") ||
+    lower.includes("where is the photo") ||
+    lower.includes("where is the screenshot") ||
+    lower.includes("send the screenshot") ||
+    lower.includes("send it") ||
+    lower === "show" ||
+    lower === "see" ||
+    lower === "photo" ||
+    lower === "pic" ||
+    lower === "picture" ||
+    // Ordinal / relative navigation
+    /^(?:click|open|tap|press)(?:\s+the)?\s+(?:first|second|third|1st|2nd|3rd|top|latest)/i.test(trimmedText) ||
+    /^(?:scroll|swipe)(?:\s+(?:up|down|left|right|top|bottom))?(?:\s+and)?/i.test(trimmedText);
 
   if (contextId && refersToContext) {
     const ctxAgent = lastActiveAgentByContext.get(contextId);
@@ -1479,6 +1499,188 @@ export async function handleAgencyExecutiveCommand(
       lower
     );
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // 4b-EXTRA: Conversational Follow-Up Actions (NO new URL needed)
+  // Handles: "let me see it", "scroll up", "click the first account", etc.
+  // These MUST be processed BEFORE the screenshot/browse routing below.
+  // ────────────────────────────────────────────────────────────────────────────
+
+  // Helper: resolve the currently active sandbox
+  function getActiveSb(): { agentId: string | null; sb: any } {
+    let agentId: string | null = contextId ? lastActiveAgentByContext.get(contextId) || null : null;
+    if (!agentId) {
+      const activeMap: Map<string, any> = (global as any).__activeSandboxes;
+      if (activeMap && activeMap.size > 0) {
+        const firstKey = Array.from(activeMap.keys())[0];
+        agentId = firstKey.replace(new RegExp(`^${campaignId}_`), "");
+      }
+    }
+    const sb = agentId ? (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`) : null;
+    return { agentId, sb };
+  }
+
+  // ── 4b-1: SCROLL request ──────────────────────────────────────────────────
+  const isScrollRequest =
+    !isTaskOrBrowse &&
+    (/^scroll(?:\s+(?:up|down|left|right|top|bottom))?(?:\s+and)?/i.test(trimmed) ||
+      lower.startsWith("scroll ") ||
+      lower === "scroll up" ||
+      lower === "scroll down" ||
+      lower === "scroll to top" ||
+      lower === "scroll to bottom" ||
+      (lower.includes("scroll") && !lower.includes("search")) ||
+      lower.includes("swipe up") ||
+      lower.includes("swipe down"));
+
+  if (isScrollRequest) {
+    const { agentId, sb: activeSb } = getActiveSb();
+    if (!activeSb || !agentId) {
+      return {
+        handled: false,
+      };
+    }
+    if (contextId) lastActiveAgentByContext.set(contextId, agentId);
+    const displayName = getAgentDisplayName(agentId);
+
+    const isUp = lower.includes("up") || lower.includes("top");
+    const direction = isUp ? (lower.includes("top") ? "top" : "up") : lower.includes("bottom") ? "bottom" : "down";
+    const amountMatch = lower.match(/(\d+)/);
+    const amount = amountMatch ? parseInt(amountMatch[1]) * 120 : 600;
+
+    console.log(`[AgencyActions] Scrolling ${direction} on ${displayName}`);
+    await cdpScroll(activeSb, direction as any, amount);
+    await new Promise((r) => setTimeout(r, 1200));
+
+    let shotBuffer: Uint8Array | null = null;
+    if (typeof activeSb.screenshot === "function") {
+      shotBuffer = await activeSb.screenshot().catch(() => null);
+    }
+
+    let screenshotBase64 = "";
+    let visualAnalysis = "";
+    if (shotBuffer && shotBuffer.length > 0) {
+      screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+      visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} after scrolling ${direction}`);
+    }
+
+    const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
+    return {
+      handled: true,
+      replyText: `📸 **${displayName} – Scrolled ${direction.toUpperCase()}**\n\n${visualAnalysis || "Live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Action:** Scrolled ${direction}`,
+      mediaUrl,
+    };
+  }
+
+  // ── 4b-2: ORDINAL CLICK request ("click the first account", "open second video") ──
+  const ordinalMatch =
+    !isTaskOrBrowse &&
+    trimmed.match(/^(?:click|open|tap|press)(?:\s+the\s+|\s+)?(first|second|third|1st|2nd|3rd|top|latest)\s*(?:account|channel|video|result|item|one|profile|user)?/i);
+
+  if (ordinalMatch) {
+    const { agentId, sb: activeSb } = getActiveSb();
+    if (!activeSb || !agentId) {
+      return { handled: false };
+    }
+    if (contextId) lastActiveAgentByContext.set(contextId, agentId);
+    const displayName = getAgentDisplayName(agentId);
+
+    const ordinalWord = ordinalMatch[1].toLowerCase();
+    const index = ordinalWord === "first" || ordinalWord === "1st" || ordinalWord === "top" ? 1
+      : ordinalWord === "second" || ordinalWord === "2nd" ? 2
+      : ordinalWord === "third" || ordinalWord === "3rd" ? 3
+      : 1;
+
+    const typeKeyword = (ordinalMatch[0].match(/(?:account|channel|video|result|item|profile|user)/i) || ["result"])[0];
+
+    console.log(`[AgencyActions] Ordinal click: ${index}${ordinalWord.slice(-2)} ${typeKeyword} on ${displayName}`);
+    const clickResult = await cdpClickOrdinal(activeSb, typeKeyword, index);
+    const clickedName = clickResult?.clicked || `${ordinalWord} item`;
+    await new Promise((r) => setTimeout(r, 2500));
+
+    let shotBuffer: Uint8Array | null = null;
+    if (typeof activeSb.screenshot === "function") {
+      shotBuffer = await activeSb.screenshot().catch(() => null);
+    }
+
+    let screenshotBase64 = "";
+    let visualAnalysis = "";
+    if (shotBuffer && shotBuffer.length > 0) {
+      screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+      visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName}: Clicked ${typeKeyword} #${index}`);
+    }
+
+    const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
+    return {
+      handled: true,
+      replyText: `🎯 **${displayName} – Clicked ${ordinalWord} ${typeKeyword}**\n\n${visualAnalysis ? `${visualAnalysis}\n\n` : ""}• **Clicked:** "${clickedName}"\n• **Workstation:** ${displayName} (Live screenshot above)`,
+      mediaUrl,
+    };
+  }
+
+  // ── 4b-3: "LET ME SEE IT" / "SHOW ME" / conversational screenshot request ──
+  const isShowMeRequest =
+    !isTaskOrBrowse &&
+    (lower === "let me see" ||
+      lower === "let me see it" ||
+      lower.includes("let me see") ||
+      lower.includes("i want to see") ||
+      lower.includes("i told you let me see") ||
+      lower.includes("show me the screenshot") ||
+      lower.includes("show it to me") ||
+      lower.includes("where is the photo") ||
+      lower.includes("i want to see the screenshot") ||
+      lower === "show" ||
+      lower === "show me" ||
+      lower === "photo" ||
+      lower === "pic" ||
+      lower === "picture" ||
+      lower === "image" ||
+      lower.includes("send me the photo") ||
+      lower.includes("send me the screenshot") ||
+      lower.includes("show me the photo") ||
+      lower.includes("where is the picture") ||
+      lower === "send it here" ||
+      lower === "send it again");
+
+  if (isShowMeRequest) {
+    const { agentId, sb: activeSb } = getActiveSb();
+    if (!activeSb || !agentId) {
+      return { handled: false };
+    }
+    if (contextId) lastActiveAgentByContext.set(contextId, agentId);
+    const displayName = getAgentDisplayName(agentId);
+
+    let shotBuffer: Uint8Array | null = null;
+    if (typeof activeSb.screenshot === "function") {
+      shotBuffer = await activeSb.screenshot().catch(() => null);
+    }
+
+    let screenshotBase64 = "";
+    let visualAnalysis = "";
+    if (shotBuffer && shotBuffer.length > 0) {
+      screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+      visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} Live Workstation Display`);
+    }
+
+    if (screenshotBase64) {
+      const mediaUrl = `data:image/png;base64,${screenshotBase64}`;
+      const hasAnomaly =
+        visualAnalysis.toLowerCase().includes("firefox") ||
+        visualAnalysis.toLowerCase().includes("blocked") ||
+        visualAnalysis.toLowerCase().includes("not_verified");
+      return {
+        handled: true,
+        replyText: `${hasAnomaly ? "⚠️" : "📸"} **Live Workstation Screenshot: ${displayName}**\n\n${visualAnalysis || "Current live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Status:** ${hasAnomaly ? "Attention Required" : "Active Live VNC"}`,
+        mediaUrl,
+      };
+    }
+
+    return {
+      handled: true,
+      replyText: `📸 **Workstation in Standby ($0 Compute)**\n\nThe microVM for **${displayName}** is currently in standby.\n\nReply **WAKE ${displayName}** or give a direct task command to boot the PC and view the live screen.`,
+    };
+  }
+
   // 4b. Action: Live Workstation Screenshot Capture on demand (ONLY if NOT accompanied by a new browsing/search/navigation task!)
   const isScreenshotRequest =
     !isTaskOrBrowse &&
@@ -1595,11 +1797,14 @@ export async function handleAgencyExecutiveCommand(
     lower.includes("type in the email") ||
     (lower.startsWith("type ") && (lower.includes("@") || lower.includes("email") || lower.includes("into") || lower.includes("in ")));
 
+  // isClickAction: generic clicks. Ordinal clicks are handled above in 4b-2,
+  // so here we only handle literal text targets (not ordinal ones).
   const isClickAction =
-    /^(?:click|press|tap)\s+["']?([a-zA-Z0-9_ ]+?)["']?$/i.test(trimmed) ||
-    lower.startsWith("click ") ||
-    lower === "click next" ||
-    lower === "press enter";
+    !ordinalMatch &&
+    (/^(?:click|press|tap)\s+["']?([a-zA-Z0-9_ ]+?)["']?$/i.test(trimmed) ||
+      lower.startsWith("click ") ||
+      lower === "click next" ||
+      lower === "press enter");
 
   if (isTypeAction || isClickAction) {
     let targetAgentId = extractAgentFromPrompt(text, contextId);
