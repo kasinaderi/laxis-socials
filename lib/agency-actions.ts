@@ -4,6 +4,14 @@ import { eq, and, inArray, desc } from "drizzle-orm";
 import { getOrCreateAgentSandbox, pauseAgentSandbox } from "./sandbox";
 import { Sandbox } from "@e2b/desktop";
 import { generateWithFallback } from "./ai";
+import {
+  initSandboxBrowserAndCdp,
+  launchChromeWithCdp,
+  cdpNavigate,
+  cdpSearch,
+  cdpClickText,
+  cdpGetInfo,
+} from "./cdp";
 
 const apiKey = process.env.E2B_API_KEY || "";
 
@@ -805,49 +813,39 @@ export async function executeAgentChromeTask(
 
   if (activeSb) {
     try {
-      // Step A: Suppress Chrome first-run dialogs
-      await activeSb.commands?.run(`
-        mkdir -p /home/user/.config/google-chrome/Default
-        touch /home/user/.config/google-chrome/"First Run"
-      `).catch(() => {});
+      // Step A: Initialize Sandbox OS environment for strict Google Chrome only & CDP
+      await initSandboxBrowserAndCdp(activeSb);
 
-      // Step B: Launch Google Chrome at the BASE PLATFORM URL (Not a deep search link)
-      if (activeSb.commands?.run) {
-        await activeSb.commands.run(
-          `DISPLAY=:0 nohup google-chrome \
-            --test-type \
-            --disable-infobars \
-            --silent-debugger-extension-api \
-            --no-sandbox \
-            --disable-dev-shm-usage \
-            --no-first-run \
-            --no-default-browser-check \
-            --disable-search-engine-choice-screen \
-            --disable-first-run-ui \
-            --disable-fre \
-            --password-store=basic \
-            --start-maximized \
-            "${baseUrl}" >/dev/null 2>&1 &`
-        ).catch(() => {});
-      }
+      // Step B: Launch Google Chrome at the BASE PLATFORM URL with CDP enabled
+      await launchChromeWithCdp(activeSb, baseUrl);
 
-      // Step C: Also open base URL directly as desktop fallback
-      if (typeof activeSb.open === "function") {
-        await activeSb.open(baseUrl).catch(() => {});
-      }
-
-      // Step D: Wait 3.5s for base homepage to render
-      await new Promise((r) => setTimeout(r, 3500));
-
-      // Step E: Ensure Chrome or browser window is focused and active on X11
+      // Step C: Ensure Chrome window is focused and active on primary X11 display
       if (activeSb.commands?.run) {
         await activeSb.commands.run(`
-          DISPLAY=:0 xdotool search --onlyvisible --class google-chrome windowactivate --sync 2>/dev/null || \
-          DISPLAY=:0 xdotool search --onlyvisible --class firefox windowactivate --sync 2>/dev/null || true
+          DISPLAY=:0 xdotool search --onlyvisible --class google-chrome windowactivate --sync 2>/dev/null || true
           DISPLAY=:0 xdotool key Return 2>/dev/null || true
         `).catch(() => {});
       }
       await new Promise((r) => setTimeout(r, 1000));
+
+      // Step D: Execute primary task intent via CDP (high-speed, rock-solid DOM automation)
+      if (intentType === "search" && searchQuery) {
+        console.log(`[AgencyActions] Executing CDP Smart Search for "${searchQuery}" (targetTab: ${targetTab || "all"})...`);
+        await cdpSearch(activeSb, searchQuery, targetTab);
+        actionHistory.push(`CDP Smart Search: typed "${searchQuery}" into search box, submitted${targetTab && targetTab !== "all" ? ` & clicked ${targetTab} tab` : ""}`);
+        await new Promise((r) => setTimeout(r, 3000));
+      } else if (intentType === "unfollow" && searchQuery) {
+        await cdpClickText(activeSb, "Following");
+        actionHistory.push(`CDP Click: clicked 'Following'`);
+        await new Promise((r) => setTimeout(r, 1500));
+        await cdpClickText(activeSb, "Unfollow");
+        actionHistory.push(`CDP Click: confirmed 'Unfollow'`);
+        await new Promise((r) => setTimeout(r, 2000));
+      } else if (intentType === "follow" && searchQuery) {
+        await cdpClickText(activeSb, "Follow");
+        actionHistory.push(`CDP Click: clicked 'Follow'`);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
 
       // Step F: Iterative Autonomous Human-Like Reasoning Loop (up to 5 steps)
       const maxSteps = 5;
@@ -936,9 +934,7 @@ export async function executeAgentChromeTask(
             actionHistory.push(`Scrolled ${decision.direction || "down"}`);
             await new Promise((r) => setTimeout(r, 1500));
           } else if (decision.action === "navigate" && decision.url) {
-            if (typeof activeSb.open === "function") {
-              await activeSb.open(decision.url);
-            }
+            await cdpNavigate(activeSb, decision.url);
             actionHistory.push(`Navigated to ${decision.url}`);
             await new Promise((r) => setTimeout(r, 3000));
           } else if (decision.action === "wait") {
@@ -969,11 +965,10 @@ export async function executeAgentChromeTask(
           visualAnalysis.toLowerCase().includes("wallpaper") ||
           (visualAnalysis.toLowerCase().includes("desktop") && !visualAnalysis.toLowerCase().includes("browser") && !visualAnalysis.toLowerCase().includes("result"))
         ) {
-          console.log("[AgencyActions] Desktop wallpaper detected, activating browser window and re-capturing...");
+          console.log("[AgencyActions] Desktop wallpaper detected, activating Chrome window and re-capturing...");
           if (activeSb.commands?.run) {
             await activeSb.commands.run(`
-              DISPLAY=:0 xdotool search --onlyvisible --class google-chrome windowactivate --sync 2>/dev/null || \
-              DISPLAY=:0 xdotool search --onlyvisible --class firefox windowactivate --sync 2>/dev/null || true
+              DISPLAY=:0 xdotool search --onlyvisible --class google-chrome windowactivate --sync 2>/dev/null || true
             `).catch(() => {});
           }
           await new Promise((r) => setTimeout(r, 2000));
@@ -1276,21 +1271,13 @@ export async function handleAgencyExecutiveCommand(
     const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
 
     if (activeSb?.commands?.run) {
-      await activeSb.commands.run(`
-        pkill -9 -f firefox 2>/dev/null || true
-        DISPLAY=:0 nohup google-chrome \
-          --test-type \
-          --disable-infobars \
-          --silent-debugger-extension-api \
-          --no-sandbox \
-          --disable-dev-shm-usage \
-          --start-maximized "about:blank" >/dev/null 2>&1 &
-      `).catch(() => {});
+      await initSandboxBrowserAndCdp(activeSb);
+      await launchChromeWithCdp(activeSb, "about:blank");
     }
 
     return {
       handled: true,
-      replyText: `🧹 **Workstation Cleanup Complete: ${displayName}**\n\nI have terminated all Firefox processes on the workstation and ensured Google Chrome is the active browser on primary display.\n\n• **Active Browser:** Google Chrome\n• **Firefox Status:** Closed\n• **Workstation:** ${displayName} (Ready for next command)`,
+      replyText: `🧹 **Workstation Cleanup Complete: ${displayName}**\n\nI have terminated all Firefox processes on the workstation, replaced system browser handlers, and ensured Google Chrome is the fixed, exclusive browser with Chrome DevTools Protocol (CDP) ready.\n\n• **Active Browser:** Google Chrome (CDP enabled on :9222)\n• **Firefox Status:** Blocked & Terminated\n• **Workstation:** ${displayName} (Ready for next command)`,
     };
   }
 

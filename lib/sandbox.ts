@@ -2,6 +2,7 @@ import { Sandbox } from "@e2b/desktop";
 import { db } from "@/db";
 import { agentSandboxes } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
+import { initSandboxBrowserAndCdp } from "./cdp";
 
 const apiKey = process.env.E2B_API_KEY || "";
 
@@ -116,6 +117,9 @@ export async function getOrCreateAgentSandbox(
       }
 
       const currentSbId = sb.sandboxId;
+
+      // Ensure Chrome is the fixed browser and CDP environment is ready
+      initSandboxBrowserAndCdp(sb).catch((e: any) => console.warn(`[E2B] initSandboxBrowser notice:`, e?.message));
 
       // Start or retrieve noVNC streaming server
       if (sb.stream && typeof sb.stream.start === "function") {
