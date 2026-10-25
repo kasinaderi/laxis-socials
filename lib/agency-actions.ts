@@ -413,8 +413,24 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
     };
   }
 
-  // 9. Arbitrary Website: "go to <site> and search <query>"
-  const genericMatch = text.match(/(?:go to|open|visit)\s+([a-zA-Z0-9\-\.]+)(?:\.com|\.org|\.net|\.io|\.site)?\s+(?:and\s+)?(?:search|find|look for)\s+["']?([^"'\n]+)/i);
+  // 9. Arbitrary Website: "go to <site> and <action>" or explicit domain like "open amazon.com", "go to wikipedia.org"
+  const domainOnlyMatch = text.match(/(?:go to|open|visit|navigate to)\s+([a-zA-Z0-9\-]+\.(?:com|org|net|io|site|app|co|dev|tv|ai|gov|edu))/i);
+  if (domainOnlyMatch) {
+    const domain = domainOnlyMatch[1].trim();
+    return {
+      baseUrl: `https://${domain}`,
+      targetUrl: `https://${domain}`,
+      cleanTopic: `Open: ${domain}`,
+      searchQuery: "",
+      platform: domain.split(".")[0],
+      intentType: "browse",
+      isChart: false,
+    };
+  }
+
+  const genericMatch = text.match(
+    /(?:go to|open|visit|navigate to)\s+([a-zA-Z0-9\-\.]+)(?:\.com|\.org|\.net|\.io|\.site|\.app|\.co)?\s+(?:and\s+)?(?:search|find|look for|check|read|get|explore|follow|buy|see)\s+["']?([^"'\n]+)/i
+  );
   if (genericMatch) {
     const site = genericMatch[1].trim();
     const domain = site.includes(".") ? site : `${site}.com`;
@@ -422,7 +438,7 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
     return {
       baseUrl: `https://${domain}`,
       targetUrl: `https://${domain}`,
-      cleanTopic: `${site.toUpperCase()} Search: "${query}"`,
+      cleanTopic: `${site.toUpperCase()}: "${query}"`,
       searchQuery: query,
       platform: site.toLowerCase(),
       intentType: "search",
@@ -779,50 +795,57 @@ STEP 2 — CHECK PROGRESS AGAINST OBJECTIVE:
   - For multi-step tasks (e.g. "follow 5 people"): track how many steps are done vs. remaining.
 
 STEP 3 — DECIDE THE NEXT SINGLE ACTION:
-  Choose the ONE next action a careful, natural human would take:
+  Choose the ONE next action a careful, natural human would take on THIS specific website:
 
-  A) POPUPS / BANNERS blocking the view:
-     → click the X, Dismiss, Accept, or Close button.
+  A) POPUPS / BANNERS / DIALOGS (Any website):
+     - If a cookie banner, newsletter signup, notification prompt, modal, or overlay is blocking:
+       → click the 'X', 'Dismiss', 'Close', 'Accept All', or 'Skip' button.
 
-  B) COOKIE / CONSENT DIALOG:
-     → click "Accept All", "Allow", or "I agree".
+  B) SEARCH & QUERY (Any search bar, catalog, or database):
+     - If search box / icon is visible but not active:
+       → click the search box / icon.
+     - If search box is focused / open:
+       → type the query value, pressEnter: true.
 
-  C) SEARCH TASK: need to find someone or something:
-     - If search icon/bar visible but not active → click the search icon.
-     - If search bar is focused/open → type the query, pressEnter: true.
+  C) NAVIGATING & SELECTING RESULTS (Any platform - Google, Amazon, YouTube, GitHub, Reddit, Medium):
+     - If search results or listings are visible:
+       → click the target result, article title, repository link, product card, or video.
+     - If category tabs or filters are needed (e.g. 'Articles', 'People', 'Repositories', 'Under $50'):
+       → click that tab / filter button.
 
-  D) PROFILE / ACCOUNT NAVIGATION (Instagram, X, Facebook):
-     - If on a search results page showing profiles → click the first relevant profile.
-     - If on a profile page:
-       * To FOLLOW: click the "Follow" button.
-       * To UNFOLLOW: click "Following" then confirm "Unfollow".
-     - After following, use BROWSER BACK or navigate to search results to find the next person.
+  D) SOCIAL & COMMUNITY ACTIONS (Instagram, X, Facebook, Reddit, YouTube):
+     - Follow / Unfollow: click "Follow" or "Following" (confirm in dialog if needed).
+     - Like / Upvote / Star: click the like heart, upvote arrow, or star button.
+     - Comment / Reply: click comment box, type message, click submit.
 
-  E) MULTI-FOLLOW TASK ("follow 5 people", "follow top accounts"):
-     - Follow one account per step. After each follow:
-       → navigate back to the search or explore page and follow the next.
-     - Track count in the "reason" field.
-     - Only mark "done" when ALL requested follows/unfollows are complete.
+  E) MULTI-ITEM / BATCH TASKS (e.g. "follow 5 people", "extract 3 articles", "check 4 stocks"):
+     - Complete ONE item per turn.
+     - After completing each item, navigate back or scroll to find the next item.
+     - Track sub-goal progress in the "reason" field (e.g. "Completed item 2 of 5").
+     - NEVER mark "done" until ALL requested items are completed!
 
-  F) FORM FILLING (sign up, login, email input):
-     - Find the relevant input field and type the value.
-     - If button visible → click it after typing.
+  F) FORM FILLING & REGISTRATION (Sign up, login, checkout, inputs):
+     - Find the relevant input field, click to focus, type value.
+     - After filling inputs, click the submit/continue button.
 
-  G) SCROLL needed to find content or buttons:
-     → scroll down.
+  G) SCROLLING (Any website):
+     - If the target element or more results are further down the page:
+       → scroll down (amount: 3 to 5).
 
-  H) PAGE LOADING / WAITING:
-     → wait 2000ms.
+  H) WAITING:
+     - If content is actively rendering, buffering, or loading:
+       → wait 2000ms.
 
   I) OBJECTIVE FULLY COMPLETE:
-     → action: "done". Provide a detailed summary of everything accomplished.
-     ⚠️ NEVER mark done prematurely. Only "done" when the complete objective is achieved.
+     - ONLY return action: "done" when the user's FULL objective is achieved and verified!
+     - Provide a thorough, factual summary of everything accomplished on the live screen.
+     ⚠️ NEVER mark done prematurely if steps remain unexecuted!
 
 IMPORTANT RULES:
 - Make exactly ONE decision per step (one click, one type, one scroll, etc.)
 - Use EXACT pixel coordinates from the screenshot for clicks
-- Never hallucinate coordinates — only click on things you can see in the screenshot
-- For Instagram/X/Facebook: navigate using back button or URL changes, not link text
+- Never hallucinate coordinates — only click on elements clearly visible in the screenshot
+- You operate ANY website across the internet with human-level competence
 
 ═══════════════════════════════════════
 Return ONLY a valid JSON object:
@@ -982,11 +1005,13 @@ export async function executeAgentChromeTask(
         await new Promise((r) => setTimeout(r, 2000));
       }
 
-      // Step F: Iterative Autonomous Human-Like Reasoning Loop
-      // Complex multi-step tasks (follow 5 people, post content, fill forms) get up to 25 steps
-      const isComplexTask =
-        /follow\s+\d+|unfollow\s+\d+|follow\s+(?:five|ten|three|four|two)|post\s+(?:a\s+)?(?:video|photo|image|reel|story)|sign\s+up|create\s+(?:an?\s+)?account|comment\s+on\s+\d+|like\s+\d+/i.test(rawPrompt);
-      const maxSteps = isComplexTask ? 25 : 8;
+      // Step F: Iterative Autonomous Human-Like Reasoning Loop for ANY website
+      // Dynamic Step Budget: Multi-step or batch tasks get up to 25 steps; single-step tasks get up to 12 steps
+      const isMultiStepTask =
+        /\d+|several|multiple|few|top\s+\d+|first\s+\d+|all|each|every|and\s+then|after\s+that|follow|unfollow|sign\s+up|create|register|post|upload|extract|collect|buy|cart|compare|check\s+\d+|find\s+\d+/i.test(
+          rawPrompt
+        );
+      const maxSteps = isMultiStepTask ? 25 : 12;
       let lastShotBuffer: Uint8Array | null = null;
       let finalDecisionSummary = "";
       let progressTracker = `Starting: ${cleanTopic}`;
