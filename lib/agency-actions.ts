@@ -510,42 +510,48 @@ export async function analyzeWorkstationScreenshot(
     const isTwitterOrX = /(twitter|twittwer|x\.com|\/x|x\s+search)/i.test(queryOrTopic);
     const isInstagram = /(instagram|insta)/i.test(queryOrTopic);
 
+    const monitoringDirective = `
+ACTIVE MONITORING & INTEGRITY DIRECTIVE:
+Examine the live screen pixels critically:
+1. Did the page load the genuine requested content, or is it blocked by a network security block (e.g. "blocked by network security", "access denied", Cloudflare turnstile, CAPTCHA, or mandatory login screen)?
+2. If BLOCKED or CHALLENGED: Explicitly state "Status: BLOCKED_BY_PLATFORM (Security Challenge Detected)" and specify the exact blocker text.
+3. If VERIFIED: State "Status: VERIFIED (Objective fulfilled on live screen)".
+Be completely truthful, concise, and razor-sharp.`;
+
     let promptText = "";
     if (isChart) {
-      promptText = `You are an elite quantitative chart analyst. Inspect this live workstation screenshot for "${queryOrTopic}".
+      promptText = `You are an elite quantitative chart analyst and workstation monitor. Inspect this live workstation screenshot for "${queryOrTopic}".
 Self-verify what is visible on the screen.
 Provide a razor-sharp technical breakdown:
 1. Chart & Instrument Verification: (Confirm symbol, timeframe, and current price shown on screen)
 2. Market Structure & Trend Bias: (Bullish / Bearish / Consolidating)
 3. Key Technical Levels: (Immediate Resistance and Support visible)
 4. Tactical Outlook: (Key candle pattern or actionable breakout/pullback setup)
+${monitoringDirective}
 Format concisely with bullet points.`;
     } else if (isTwitterOrX) {
-      promptText = `You are AGENTLAX, an elite autonomous computer-use agent. Inspect this live workstation browser screenshot on X (Twitter) for "${queryOrTopic}".
+      promptText = `You are AGENTLAX, an elite autonomous computer-use agent and workstation monitor. Inspect this live workstation browser screenshot on X (Twitter) for "${queryOrTopic}".
 State facts only based on the visible pixels:
 1. Rendered Platform: X (Twitter)
 2. Search Query & Category: (e.g. "${queryOrTopic}" under Accounts / People tab)
 3. Accounts Visible: (List specific account names, @handles, bio details, or follow status visible on screen)
-4. Status: VERIFIED (Accounts captured live on workstation).
-Be concise, truthful, and razor-sharp.`;
+${monitoringDirective}`;
     } else if (isInstagram) {
-      promptText = `You are AGENTLAX, an elite autonomous computer-use agent. Inspect this live workstation browser screenshot on Instagram for "${queryOrTopic}".
+      promptText = `You are AGENTLAX, an elite autonomous computer-use agent and workstation monitor. Inspect this live workstation browser screenshot on Instagram for "${queryOrTopic}".
 State facts only based on the visible pixels:
 1. Rendered Platform: Instagram
 2. Profile / Account Name: (Name and @handle displayed)
 3. Following / Follow Status: (State whether button shows 'Follow', 'Following', or 'Requested', and confirmation if unfollowed)
 4. Visual Elements: (Profile photo, bio, or grid posts visible)
-5. Status: VERIFIED.
-Be concise, truthful, and razor-sharp.`;
+${monitoringDirective}`;
     } else {
-      promptText = `You are AGENTLAX, an elite autonomous computer-use agent. Inspect this live workstation browser screenshot for "${queryOrTopic}".
+      promptText = `You are AGENTLAX, an elite autonomous computer-use agent and workstation monitor. Inspect this live workstation browser screenshot for "${queryOrTopic}".
 Verify what window, website, and content is actually rendered on screen.
 State facts only based on the visible pixels:
-1. Rendered Website & URL: (e.g. GitHub.com, YouTube.com, Facebook.com)
-2. Verified Search Query & Content: (e.g. GitHub internal repository search for "laxdollar", YouTube results for "laxis music")
-3. Findings / Results: (e.g. Exact number of repositories found, first video title/channel, or "0 public repositories found")
-4. Status: (VERIFIED and completed).
-Be concise, truthful, and razor-sharp.`;
+1. Rendered Website & URL: (e.g. GitHub.com, YouTube.com, Facebook.com, Reddit.com)
+2. Verified Search Query & Content: (e.g. GitHub repository search for "laxdollar", YouTube results for "laxis music")
+3. Findings / Results: (e.g. Exact number of repositories found, first video title/channel, or exact results rendered)
+${monitoringDirective}`;
     }
 
     const contents = [
@@ -988,10 +994,20 @@ export async function executeAgentChromeTask(
     }
   }
 
-  // 3. Mark agent status as "done" so typing animation immediately stops!
+  const isBlocked =
+    visualAnalysis.toLowerCase().includes("blocked_by_platform") ||
+    visualAnalysis.toLowerCase().includes("security challenge") ||
+    visualAnalysis.toLowerCase().includes("blocked by network security") ||
+    visualAnalysis.toLowerCase().includes("access denied") ||
+    visualAnalysis.toLowerCase().includes("not verified");
+
+  // 3. Update agent status in database
   await db
     .update(agents)
-    .set({ status: "done", currentTask: `Completed: ${cleanTopic}` })
+    .set({
+      status: isBlocked ? "idle" : "done",
+      currentTask: isBlocked ? `Challenge detected: ${cleanTopic}` : `Completed: ${cleanTopic}`
+    })
     .where(eq(agents.id, agentId))
     .run();
 
@@ -1003,7 +1019,7 @@ export async function executeAgentChromeTask(
     agentId,
     title: isChart ? `Market Chart Analysis: ${cleanTopic}` : `Human Browser Task: ${cleanTopic}`,
     instructions: rawPrompt,
-    status: "completed",
+    status: isBlocked ? "failed" : "completed",
     output: visualAnalysis || `Operated ${baseUrl} and captured live screenshot.`,
     startedAt: nowIso,
     completedAt: new Date().toISOString(),
@@ -1025,11 +1041,20 @@ export async function executeAgentChromeTask(
 
   const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
 
-  let replyText = `🎯 **Task Complete: ${displayName} Live Workstation Execution**\n\n`;
-  if (visualAnalysis) {
-    replyText += `${visualAnalysis}\n\n`;
+  let replyText = "";
+  if (isBlocked) {
+    replyText = `⚠️ **Active Monitoring Alert: ${displayName} Workstation Challenge**\n\n`;
+    if (visualAnalysis) {
+      replyText += `${visualAnalysis}\n\n`;
+    }
+    replyText += `• **Active Platform:** \`${baseUrl}\`\n• **Subject:** ${cleanTopic}\n• **Monitoring Observation:** Platform security barrier detected on live screen.\n• **Status:** ACTION REQUIRED (Take over via Live VNC)\n• **Workstation:** Live VNC connected (Click to solve or log in)`;
+  } else {
+    replyText = `🎯 **Task Verified: ${displayName} Live Workstation Execution**\n\n`;
+    if (visualAnalysis) {
+      replyText += `${visualAnalysis}\n\n`;
+    }
+    replyText += `• **Active Platform:** \`${baseUrl}\`\n• **Subject:** ${cleanTopic}\n• **Human Steps:** ${actionHistory.length > 0 ? actionHistory.join(" ➔ ") : "Direct human interaction"}\n• **Status:** Verified & Complete (Live screenshot attached above)\n• **Workstation:** Live VNC connected`;
   }
-  replyText += `• **Active Platform:** \`${baseUrl}\`\n• **Subject:** ${cleanTopic}\n• **Human Steps:** ${actionHistory.length > 0 ? actionHistory.join(" ➔ ") : "Direct human interaction"}\n• **Status:** Completed (Live screenshot attached above)\n• **Workstation:** Live VNC connected`;
 
   return {
     success: true,
