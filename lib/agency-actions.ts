@@ -80,20 +80,46 @@ export function getAgentDisplayName(agentId: string): string {
 }
 
 /**
- * Intelligent Navigation Target & Asset Resolver (Deterministic Fast Compiler)
+ * Navigation & Intent Structure for Human-Like Computer-Use
  */
-export function resolveNavigationTarget(text: string): {
+export interface NavigationIntent {
+  baseUrl: string;
   targetUrl: string;
   cleanTopic: string;
+  searchQuery: string;
+  platform: string;
+  intentType: "search" | "unfollow" | "follow" | "post" | "browse" | "chart";
+  targetTab?: "people" | "groups" | "repositories" | "all";
   isChart: boolean;
-  searchQuery?: string;
-  platform?: string;
-} {
+}
+
+/**
+ * Intelligent Navigation Target & Asset Resolver
+ * Points to the root platform homepage so the agent operates like a real human (typing, clicking search)
+ * and never triggers bot detection flags with pre-baked deep URLs.
+ */
+export function resolveNavigationTarget(text: string): NavigationIntent {
   const lower = text.toLowerCase();
 
-  const isGitHub = lower.includes("github");
-  const isFacebook = lower.includes("facebook") || lower.includes("fb.com");
-  const isYouTube = lower.includes("youtube") || lower.includes("video") || lower.includes("song") || lower.includes("music");
+  // 1. Medium Articles & Stories Search
+  if (lower.includes("medium")) {
+    let q = "";
+    const match = text.match(/(?:search|find|for)\s+["']?([^"'\n]+)/i);
+    if (match) q = match[1];
+    q = q.replace(/medium|and\s+screenshot|and\s+give|and\s+bring|and\s+verify|search|find|for/gi, "").trim();
+    if (!q) q = "social anxiety";
+    return {
+      baseUrl: "https://medium.com",
+      targetUrl: "https://medium.com",
+      cleanTopic: `Medium: "${q}"`,
+      searchQuery: q,
+      platform: "medium",
+      intentType: "search",
+      isChart: false,
+    };
+  }
+
+  // 2. Twitter / X Direct Account & Post Search
   const isTwitterOrX =
     lower.includes("twitter") ||
     lower.includes("twittwer") ||
@@ -103,59 +129,57 @@ export function resolveNavigationTarget(text: string): {
     lower.includes(" to x") ||
     lower.includes("search x") ||
     lower.includes("x search");
-  const isInstagram = lower.includes("instagram") || lower.includes("insta");
-  const isTradingView = lower.includes("tradingview");
-  const isGold = lower.includes("gold") || lower.includes("xauusd") || lower.includes("xau/usd") || lower.includes("xau");
-  const isGbpUsd = lower.includes("gbp/usd") || lower.includes("gbpusd") || (lower.includes("gbp") && lower.includes("usd"));
-  const isEurUsd = lower.includes("eur/usd") || lower.includes("eurusd") || (lower.includes("eur") && lower.includes("usd"));
-  const isBtc = lower.includes("btc") || lower.includes("bitcoin");
-  const isChart = isTradingView || isGold || isGbpUsd || isEurUsd || isBtc || lower.includes("chart") || lower.includes("graph") || lower.includes("trend") || lower.includes("candlestick");
 
-  // 1. Twitter / X Direct Account & Post Search
   if (isTwitterOrX) {
-    let xQuery = text;
+    let xQuery = "";
     const match = text.match(/(?:search|find|for)\s+["']?([a-zA-Z0-9_\-\.]+)/i);
     if (match && match[1]) {
       xQuery = match[1];
     }
     xQuery = xQuery.replace(/twittwer|twitter|x\.com|\/x|search|accounts|account|screenshot|and|the|it|will|show/gi, "").trim();
     if (!xQuery) xQuery = "neo_vibes";
-    const isAccountSearch = lower.includes("account") || lower.includes("user") || lower.includes("profile");
-    const targetUrl = isAccountSearch
-      ? `https://x.com/search?q=${encodeURIComponent(xQuery)}&f=user`
-      : `https://x.com/search?q=${encodeURIComponent(xQuery)}`;
+    const isAccountSearch = lower.includes("account") || lower.includes("user") || lower.includes("profile") || lower.includes("people");
 
     return {
-      targetUrl,
+      baseUrl: "https://x.com",
+      targetUrl: "https://x.com",
       cleanTopic: `X (Twitter) ${isAccountSearch ? "Accounts" : "Search"}: "${xQuery}"`,
       searchQuery: xQuery,
       platform: "x",
+      intentType: "search",
+      targetTab: isAccountSearch ? "people" : "all",
       isChart: false,
     };
   }
 
-  // 2. Instagram Navigation & Profile Actions
+  // 3. Instagram Navigation & Profile Actions
+  const isInstagram = lower.includes("instagram") || lower.includes("insta");
   if (isInstagram) {
-    let igQuery = text;
+    let igQuery = "";
     const match = text.match(/(?:unfollow|follow|search|find|profile)\s+["']?([a-zA-Z0-9_\-\.]+)/i);
     if (match && match[1]) {
       igQuery = match[1];
     }
     igQuery = igQuery.replace(/instagram|insta|unfollow|follow|search|on|and|somebody/gi, "").trim();
-    const targetUrl = igQuery ? `https://www.instagram.com/${encodeURIComponent(igQuery)}/` : "https://www.instagram.com";
+    if (!igQuery) igQuery = "wakanugu";
+    const isUnfollow = lower.includes("unfollow");
+    const isFollow = lower.includes("follow") && !isUnfollow;
+
     return {
-      targetUrl,
-      cleanTopic: igQuery ? `Instagram: "${igQuery}"` : "Instagram Home",
+      baseUrl: "https://www.instagram.com",
+      targetUrl: "https://www.instagram.com",
+      cleanTopic: isUnfollow ? `Instagram Unfollow: "${igQuery}"` : isFollow ? `Instagram Follow: "${igQuery}"` : `Instagram: "${igQuery}"`,
       searchQuery: igQuery,
       platform: "instagram",
+      intentType: isUnfollow ? "unfollow" : isFollow ? "follow" : "search",
       isChart: false,
     };
   }
 
-  // 3. GitHub Direct Navigation & Internal Search
+  // 4. GitHub Direct Navigation & Internal Search
+  const isGitHub = lower.includes("github");
   if (isGitHub) {
     let ghQuery = "";
-    // Match quoted or comma-surrounded queries like: search , laxdollar , in public github repos
     const commaMatch = text.match(/[,“"']\s*([a-zA-Z0-9_\-\.]+)\s*[,“"']/);
     if (commaMatch && commaMatch[1]) {
       ghQuery = commaMatch[1].trim();
@@ -169,104 +193,42 @@ export function resolveNavigationTarget(text: string): {
     if (!ghQuery || ghQuery.length <= 1) ghQuery = "laxdollar";
 
     return {
-      targetUrl: `https://github.com/search?q=${encodeURIComponent(ghQuery)}&type=repositories`,
+      baseUrl: "https://github.com",
+      targetUrl: "https://github.com",
       cleanTopic: `GitHub Repository Search: "${ghQuery}"`,
       searchQuery: ghQuery,
       platform: "github",
+      intentType: "search",
+      targetTab: "repositories",
       isChart: false,
     };
   }
 
-  // 4. Facebook Direct Search & People/Profile Navigation
+  // 5. Facebook Direct Search & People/Profile/Group Navigation
+  const isFacebook = lower.includes("facebook") || lower.includes("fb.com");
   if (isFacebook) {
     let fbQuery = "";
-    const m = text.match(/(?:search for|search|find)\s+([a-zA-Z0-9_ ]+?)(?:\s+if|\s+and|\s+text|\s+message|\s+on my friends|$)/i);
+    const m = text.match(/(?:search for|search|find)\s+([a-zA-Z0-9_ ]+?)(?:\s+if|\s+and|\s+text|\s+message|\s+on my friends|\s+group|$)/i);
     if (m && m[1]) {
       fbQuery = m[1].replace(/facebook|fb/gi, "").trim();
     }
-    fbQuery = fbQuery || "margaret wairimu";
+    fbQuery = fbQuery || "forex trading";
+    const isGroups = lower.includes("group") || lower.includes("groups");
+
     return {
-      targetUrl: `https://www.facebook.com/search/top/?q=${encodeURIComponent(fbQuery)}`,
-      cleanTopic: `Facebook Search: "${fbQuery}"`,
+      baseUrl: "https://www.facebook.com",
+      targetUrl: "https://www.facebook.com",
+      cleanTopic: `Facebook ${isGroups ? "Groups" : "Search"}: "${fbQuery}"`,
       searchQuery: fbQuery,
       platform: "facebook",
+      intentType: "search",
+      targetTab: isGroups ? "groups" : "all",
       isChart: false,
     };
   }
 
-  // 5. Financial Markets & TradingView Charts
-  if (isGold) {
-    return {
-      targetUrl: "https://www.tradingview.com/chart/?symbol=OANDA:XAUUSD",
-      cleanTopic: "Gold / US Dollar (XAUUSD)",
-      searchQuery: "XAUUSD",
-      platform: "tradingview",
-      isChart: true,
-    };
-  }
-
-  if (isGbpUsd) {
-    return {
-      targetUrl: "https://www.tradingview.com/chart/?symbol=FX:GBPUSD",
-      cleanTopic: "GBP / USD Forex Chart",
-      searchQuery: "GBPUSD",
-      platform: "tradingview",
-      isChart: true,
-    };
-  }
-
-  if (isEurUsd) {
-    return {
-      targetUrl: "https://www.tradingview.com/chart/?symbol=FX:EURUSD",
-      cleanTopic: "EUR / USD Forex Chart",
-      searchQuery: "EURUSD",
-      platform: "tradingview",
-      isChart: true,
-    };
-  }
-
-  if (isBtc) {
-    return {
-      targetUrl: "https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT",
-      cleanTopic: "Bitcoin / USDT Crypto Chart",
-      searchQuery: "BTCUSDT",
-      platform: "tradingview",
-      isChart: true,
-    };
-  }
-
-  if (isTradingView) {
-    return {
-      targetUrl: "https://www.tradingview.com/chart/",
-      cleanTopic: "TradingView Market Chart",
-      searchQuery: "TradingView",
-      platform: "tradingview",
-      isChart: true,
-    };
-  }
-
-  // 6. Deriv & Laxdollar Trading Sites
-  if (lower.includes("laxdollar.site") || (lower.includes("laxdollar") && !lower.includes("search"))) {
-    return {
-      targetUrl: "https://laxdollar.site",
-      cleanTopic: "LaxDollar Deriv Trading Portal",
-      searchQuery: "laxdollar.site",
-      platform: "laxdollar",
-      isChart: false,
-    };
-  }
-
-  if (lower.includes("deriv") || lower.includes("boom") || lower.includes("crash")) {
-    return {
-      targetUrl: "https://track.deriv.com",
-      cleanTopic: "Deriv Synthetic Trading Portal",
-      searchQuery: "Deriv",
-      platform: "deriv",
-      isChart: true,
-    };
-  }
-
-  // 7. YouTube Media Search
+  // 6. YouTube Media Search
+  const isYouTube = lower.includes("youtube") || lower.includes("video") || lower.includes("song") || lower.includes("music");
   if (isYouTube) {
     let ytQuery = text;
     const match = text.match(/(?:search|find|for|play|watch)\s+["']?([^"'\n]+)/i);
@@ -280,27 +242,80 @@ export function resolveNavigationTarget(text: string): {
     if (!ytQuery) ytQuery = "laxis music";
 
     return {
-      targetUrl: `https://www.youtube.com/results?search_query=${encodeURIComponent(ytQuery)}`,
+      baseUrl: "https://www.youtube.com",
+      targetUrl: "https://www.youtube.com",
       cleanTopic: `YouTube Search: "${ytQuery}"`,
       searchQuery: ytQuery,
       platform: "youtube",
+      intentType: "search",
       isChart: false,
     };
   }
 
-  // 8. Direct HTTP(S) URL or Specific Website Domain in text
-  const urlMatch = text.match(/https?:\/\/[^\s]+/i);
-  if (urlMatch) {
+  // 7. TradingView & Financial Charts
+  const isTradingView = lower.includes("tradingview");
+  const isGold = lower.includes("gold") || lower.includes("xauusd") || lower.includes("xau/usd") || lower.includes("xau");
+  const isGbpUsd = lower.includes("gbp/usd") || lower.includes("gbpusd") || (lower.includes("gbp") && lower.includes("usd"));
+  const isEurUsd = lower.includes("eur/usd") || lower.includes("eurusd") || (lower.includes("eur") && lower.includes("usd"));
+  const isBtc = lower.includes("btc") || lower.includes("bitcoin");
+  const isChart = isTradingView || isGold || isGbpUsd || isEurUsd || isBtc || lower.includes("chart") || lower.includes("graph") || lower.includes("trend") || lower.includes("candlestick");
+
+  if (isChart) {
+    const symbol = isGold ? "XAUUSD" : isBtc ? "BTCUSDT" : isGbpUsd ? "GBPUSD" : isEurUsd ? "EURUSD" : "market";
     return {
-      targetUrl: urlMatch[0],
-      cleanTopic: `Navigate: ${urlMatch[0]}`,
-      searchQuery: urlMatch[0],
-      platform: "custom_web",
+      baseUrl: "https://www.tradingview.com/chart/",
+      targetUrl: "https://www.tradingview.com/chart/",
+      cleanTopic: `TradingView Chart: ${symbol}`,
+      searchQuery: symbol,
+      platform: "tradingview",
+      intentType: "chart",
+      isChart: true,
+    };
+  }
+
+  // 8. Deriv & Laxdollar Trading Sites
+  if (lower.includes("laxdollar.site") || (lower.includes("laxdollar") && !lower.includes("search"))) {
+    return {
+      baseUrl: "https://laxdollar.site",
+      targetUrl: "https://laxdollar.site",
+      cleanTopic: "LaxDollar Deriv Trading Portal",
+      searchQuery: "laxdollar.site",
+      platform: "laxdollar",
+      intentType: "browse",
       isChart: false,
     };
   }
 
-  // 9. General Web Search Fallback (Cleaned of all instructions)
+  if (lower.includes("deriv") || lower.includes("boom") || lower.includes("crash")) {
+    return {
+      baseUrl: "https://track.deriv.com",
+      targetUrl: "https://track.deriv.com",
+      cleanTopic: "Deriv Synthetic Trading Portal",
+      searchQuery: "Deriv",
+      platform: "deriv",
+      intentType: "chart",
+      isChart: true,
+    };
+  }
+
+  // 9. Arbitrary Website: "go to <site> and search <query>"
+  const genericMatch = text.match(/(?:go to|open|visit)\s+([a-zA-Z0-9\-\.]+)(?:\.com|\.org|\.net|\.io|\.site)?\s+(?:and\s+)?(?:search|find|look for)\s+["']?([^"'\n]+)/i);
+  if (genericMatch) {
+    const site = genericMatch[1].trim();
+    const domain = site.includes(".") ? site : `${site}.com`;
+    const query = genericMatch[2].replace(/and\s+screenshot|and\s+give|and\s+bring|and\s+verify/gi, "").trim();
+    return {
+      baseUrl: `https://${domain}`,
+      targetUrl: `https://${domain}`,
+      cleanTopic: `${site.toUpperCase()} Search: "${query}"`,
+      searchQuery: query,
+      platform: site.toLowerCase(),
+      intentType: "search",
+      isChart: false,
+    };
+  }
+
+  // 10. General Web Search Fallback (Cleaned of all conversational noise)
   let q = text;
   const match = text.match(/(?:search|google|find|look up|open|check|analyze)\s+(?:for\s+)?["']?([^"'\n]+)/i);
   if (match && match[1]) {
@@ -319,24 +334,29 @@ export function resolveNavigationTarget(text: string): {
 
   const cleanQuery = q || "market analysis";
   return {
-    targetUrl: `https://www.google.com/search?q=${encodeURIComponent(cleanQuery)}`,
+    baseUrl: "https://www.google.com",
+    targetUrl: "https://www.google.com",
     cleanTopic: `Web Search: "${cleanQuery}"`,
     searchQuery: cleanQuery,
     platform: "google",
-    isChart,
+    intentType: "search",
+    isChart: false,
   };
 }
 
 /**
  * Autonomous Reasoning Brain: Task Compiler & Intent Deconstruction
- * Uses Gemini LLM to break down complex natural-language instructions with deterministic fallback.
+ * Deconstructs instructions into natural human operations (Base URL + query to type)
  */
 export async function planAutonomousTask(rawPrompt: string): Promise<{
   targetAgentId: string;
+  baseUrl: string;
   targetUrl: string;
   cleanTopic: string;
   searchQuery: string;
   isChart: boolean;
+  intentType: "search" | "unfollow" | "follow" | "post" | "browse" | "chart";
+  targetTab: "people" | "groups" | "repositories" | "all";
   verificationGoal: string;
 }> {
   const fallback = resolveNavigationTarget(rawPrompt);
@@ -346,21 +366,23 @@ export async function planAutonomousTask(rawPrompt: string): Promise<{
     const aiPrompt = `You are AGENTLAX — the autonomous reasoning brain and computer-use task compiler.
 The user gave this instruction: "${rawPrompt}".
 
-Your job is to deconstruct this instruction into precise execution parameters in JSON:
+Your job is to deconstruct this instruction into human execution parameters in JSON:
 {
   "targetAgentId": "${detectedAgent}",
-  "platform": "github" | "facebook" | "youtube" | "tradingview" | "google" | "custom_web",
-  "targetUrl": "Exact direct full HTTPS URL to open (e.g. https://github.com/search?q=laxdollar&type=repositories, https://www.youtube.com/results?search_query=..., https://www.facebook.com/search/top/?q=..., https://www.tradingview.com/chart/?symbol=...)",
+  "platform": "medium" | "x" | "instagram" | "github" | "facebook" | "youtube" | "tradingview" | "custom_web" | "google",
+  "baseUrl": "Base homepage URL of the service to open in browser (e.g. https://medium.com, https://x.com, https://github.com, https://www.facebook.com, https://www.instagram.com, https://www.youtube.com, https://www.tradingview.com)",
   "cleanTopic": "Clear human-readable title of the task",
-  "searchQuery": "Clean search term without instructions",
+  "searchQuery": "Clean search term or username to be typed into the search box",
+  "intentType": "search" | "unfollow" | "follow" | "post" | "browse" | "chart",
+  "targetTab": "people" | "groups" | "repositories" | "all",
   "isChart": boolean,
   "verificationGoal": "What specific content or results must be verified on screen"
 }
 
 CRITICAL RULES:
-1. NEVER substitute Google if user requested GitHub, Facebook, YouTube, TradingView, or another specific website.
-2. If user requested GitHub repository search, targetUrl MUST be https://github.com/search?q=...&type=repositories.
-3. Clean search terms of commas and conversational instructions.
+1. baseUrl MUST BE the root website homepage (e.g. https://medium.com, https://x.com, https://github.com), NEVER a deep query URL like /search?q=... because real human interaction will type the query into the search box.
+2. Clean search terms of conversational noise ("and screenshot", "and give results").
+3. NEVER substitute Google when a specific platform was requested.
 Respond with JSON only.`;
 
     const aiRes = await Promise.race([
@@ -372,12 +394,15 @@ Respond with JSON only.`;
       const jsonMatch = aiRes.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
-        if (parsed.targetUrl && parsed.targetUrl.startsWith("http")) {
+        if (parsed.baseUrl && parsed.baseUrl.startsWith("http")) {
           return {
             targetAgentId: parsed.targetAgentId || detectedAgent,
-            targetUrl: parsed.targetUrl,
+            baseUrl: parsed.baseUrl,
+            targetUrl: parsed.baseUrl,
             cleanTopic: parsed.cleanTopic || fallback.cleanTopic,
             searchQuery: parsed.searchQuery || fallback.searchQuery || "",
+            intentType: parsed.intentType || fallback.intentType || "search",
+            targetTab: parsed.targetTab || fallback.targetTab || "all",
             isChart: Boolean(parsed.isChart),
             verificationGoal: parsed.verificationGoal || `Verify content for ${parsed.cleanTopic}`,
           };
@@ -390,9 +415,12 @@ Respond with JSON only.`;
 
   return {
     targetAgentId: detectedAgent,
-    targetUrl: fallback.targetUrl,
+    baseUrl: fallback.baseUrl,
+    targetUrl: fallback.baseUrl,
     cleanTopic: fallback.cleanTopic,
     searchQuery: fallback.searchQuery || "",
+    intentType: fallback.intentType,
+    targetTab: fallback.targetTab || "all",
     isChart: fallback.isChart,
     verificationGoal: `Verify content for ${fallback.cleanTopic}`,
   };
@@ -582,38 +610,55 @@ export interface ComputerUseDecision {
 
 /**
  * Multimodal Computer-Use Reasoning: Decides next physical mouse/keyboard action or signals completion
+ * Guides the agent like a human operator (clicking search bar, typing query, selecting tabs)
  */
 export async function decideNextComputerUseAction(
   screenshotBuffer: Buffer | Uint8Array,
   userObjective: string,
   topic: string,
+  searchQuery: string,
+  intentType: string,
+  targetTab: string,
   currentStep: number,
   maxSteps: number,
   history: string[]
 ): Promise<ComputerUseDecision> {
   try {
     const promptText = `You are the autonomous computer-use brain of AGENTLAX operating a real desktop PC with Chrome (screen resolution 1024x768).
+You act like a careful human user operating a web browser so accounts remain safe and never trigger bot flags.
+
 USER OBJECTIVE: "${userObjective}"
-TOPIC / GOAL: "${topic}"
-STEP: ${currentStep} of ${maxSteps}
-PREVIOUS ACTIONS:
-${history.length > 0 ? history.map((h, i) => `${i + 1}. ${h}`).join("\n") : "None yet (Initial page loaded)"}
+TASK: ${topic}
+SEARCH QUERY TO TYPE: "${searchQuery}"
+TASK INTENT: ${intentType}
+TARGET TAB/CATEGORY: ${targetTab}
+CURRENT STEP: ${currentStep} of ${maxSteps}
 
-Look carefully at the current workstation screenshot:
-1. Is the user's objective already achieved and visible on screen? (e.g. requested search results, accounts list, chart, profile, or action outcome is rendered)
-   -> If YES, respond with action "done" and a rich summary of what you see.
-2. If the page is blank or still loading:
-   -> Respond with action "wait" (ms: 2000).
-3. If an overlay/modal (like cookie dialog, sign-in prompt, or confirmation popup) needs to be dismissed or confirmed:
-   -> Respond with action "click" (x, y coordinates).
-4. If a button like 'People' / 'Accounts' tab, 'Follow' / 'Following' button, or search button needs to be clicked:
-   -> Respond with action "click" (x, y coordinates).
-5. If text needs to be typed into an input or search bar:
-   -> Respond with action "type" (text, pressEnter: true).
-6. If scrolling is needed to view more accounts or results:
-   -> Respond with action "scroll" (direction: "down", amount: 3).
+ACTION HISTORY:
+${history.length > 0 ? history.map((h, i) => `${i + 1}. ${h}`).join("\n") : "Browser opened to homepage"}
 
-Return ONLY valid JSON matching this schema:
+HUMAN-LIKE DECISION LOGIC:
+1. Examine the current workstation screenshot:
+   - What page or website is currently shown?
+   - If a cookie banner, modal, or prompt is blocking the page:
+     -> Action: "click" (x, y coordinates of the 'X' / 'Dismiss' / 'Accept' button).
+   - If the user's objective is already fulfilled and the desired results/accounts/content are rendered:
+     -> Action: "done". In "summary", list the factual findings visible on screen.
+   - If you need to search:
+     a. If the search box or search icon (magnifying glass) is NOT yet focused:
+        -> Action: "click" (x, y coordinates of the search icon or search bar).
+     b. If the search box is focused / active:
+        -> Action: "type" with text: "${searchQuery}", pressEnter: true.
+   - If search results are loaded, but the user requested a specific category (e.g. 'People' / 'Accounts' on X, 'Groups' on Facebook, 'Repositories' on GitHub):
+     -> Action: "click" (x, y coordinates of that tab).
+   - If the task is to unfollow/follow:
+     -> Look for the 'Following' or 'Follow' button and click it, then confirm in any popup dialog.
+   - If the page is still loading or rendering:
+     -> Action: "wait", ms: 2000.
+   - If scrolling is needed to reveal more results:
+     -> Action: "scroll", direction: "down", amount: 3.
+
+Return ONLY a valid JSON object matching this schema:
 {
   "action": "done" | "click" | "type" | "press_key" | "scroll" | "navigate" | "wait",
   "x": number,
@@ -625,8 +670,8 @@ Return ONLY valid JSON matching this schema:
   "amount": number,
   "url": string,
   "ms": number,
-  "reason": "short explanation of why this action was chosen",
-  "summary": "if done, clear factual breakdown of accounts, chart price, or items visible on screen"
+  "reason": "Clear explanation of this human step",
+  "summary": "Factual breakdown if done"
 }`;
 
     const contents = [
@@ -666,8 +711,8 @@ Return ONLY valid JSON matching this schema:
 }
 
 /**
- * Real Infrastructure Action: Autonomous Multi-Turn Computer-Use Engine
- * Operates live desktop PC with human-like reasoning, visual verification, and direct interaction.
+ * Real Infrastructure Action: Autonomous Multi-Turn Human-Like Computer-Use Engine
+ * Operates live desktop PC with real mouse clicks, keystrokes, and visual verification.
  */
 export async function executeAgentChromeTask(
   campaignId: string,
@@ -677,7 +722,7 @@ export async function executeAgentChromeTask(
   const nowIso = new Date().toISOString();
   const displayName = getAgentDisplayName(agentId);
   const plan = await planAutonomousTask(rawPrompt);
-  const { targetUrl, cleanTopic, isChart } = plan;
+  const { baseUrl, cleanTopic, searchQuery, isChart, intentType, targetTab } = plan;
 
   // 1. Ensure only this single agent animates in UI
   await db.update(agents).set({ status: "idle" }).run();
@@ -704,7 +749,7 @@ export async function executeAgentChromeTask(
         touch /home/user/.config/google-chrome/"First Run"
       `).catch(() => {});
 
-      // Step B: Launch Google Chrome with security and infobar suppression flags
+      // Step B: Launch Google Chrome at the BASE PLATFORM URL (Not a deep search link)
       if (activeSb.commands?.run) {
         await activeSb.commands.run(
           `DISPLAY=:0 nohup google-chrome \
@@ -720,17 +765,17 @@ export async function executeAgentChromeTask(
             --disable-fre \
             --password-store=basic \
             --start-maximized \
-            "${targetUrl}" >/dev/null 2>&1 &`
+            "${baseUrl}" >/dev/null 2>&1 &`
         ).catch(() => {});
       }
 
-      // Step C: Also execute open as desktop fallback
+      // Step C: Also open base URL directly as desktop fallback
       if (typeof activeSb.open === "function") {
-        await activeSb.open(targetUrl).catch(() => {});
+        await activeSb.open(baseUrl).catch(() => {});
       }
 
-      // Step D: Wait 4s for initial page render
-      await new Promise((r) => setTimeout(r, 4000));
+      // Step D: Wait 3.5s for base homepage to render
+      await new Promise((r) => setTimeout(r, 3500));
 
       // Step E: Ensure Chrome or browser window is focused and active on X11
       if (activeSb.commands?.run) {
@@ -742,8 +787,8 @@ export async function executeAgentChromeTask(
       }
       await new Promise((r) => setTimeout(r, 1000));
 
-      // Step F: Iterative Autonomous Computer-Use Reasoning Loop (up to 4 steps)
-      const maxSteps = 4;
+      // Step F: Iterative Autonomous Human-Like Reasoning Loop (up to 5 steps)
+      const maxSteps = 5;
       let lastShotBuffer: Uint8Array | null = null;
       let finalDecisionSummary = "";
 
@@ -769,6 +814,9 @@ export async function executeAgentChromeTask(
           lastShotBuffer,
           rawPrompt,
           cleanTopic,
+          searchQuery,
+          intentType,
+          targetTab || "all",
           step,
           maxSteps,
           actionHistory
@@ -781,46 +829,56 @@ export async function executeAgentChromeTask(
 
         try {
           if (decision.action === "click" && typeof decision.x === "number" && typeof decision.y === "number") {
-            if (typeof activeSb.leftClick === "function") {
+            if (activeSb.commands?.run) {
+              await activeSb.commands.run(
+                `DISPLAY=:0 xdotool mousemove ${decision.x} ${decision.y} click 1 2>/dev/null || true`
+              );
+            } else if (typeof activeSb.leftClick === "function") {
               await activeSb.leftClick(decision.x, decision.y);
-            } else if (activeSb.commands?.run) {
-              await activeSb.commands.run(`DISPLAY=:0 xdotool mousemove ${decision.x} ${decision.y} click 1 2>/dev/null || true`);
             }
-            actionHistory.push(`Click at (${decision.x}, ${decision.y}): ${decision.reason || "element interact"}`);
+            actionHistory.push(`Clicked at (${decision.x}, ${decision.y}): ${decision.reason || "element interact"}`);
+            await new Promise((r) => setTimeout(r, 1000));
           } else if (decision.action === "type" && decision.text) {
-            if (typeof activeSb.write === "function") {
+            if (activeSb.commands?.run) {
+              await activeSb.commands.run(
+                `DISPLAY=:0 xdotool type --delay 35 "${decision.text.replace(/"/g, '\\"')}" 2>/dev/null || true`
+              );
+            } else if (typeof activeSb.write === "function") {
               await activeSb.write(decision.text);
-            } else if (activeSb.commands?.run) {
-              await activeSb.commands.run(`DISPLAY=:0 xdotool type --delay 20 "${decision.text.replace(/"/g, '\\"')}" 2>/dev/null || true`);
             }
             if (decision.pressEnter) {
-              if (typeof activeSb.press === "function") {
-                await activeSb.press("Return");
-              } else if (activeSb.commands?.run) {
+              await new Promise((r) => setTimeout(r, 250));
+              if (activeSb.commands?.run) {
                 await activeSb.commands.run(`DISPLAY=:0 xdotool key Return 2>/dev/null || true`);
+              } else if (typeof activeSb.press === "function") {
+                await activeSb.press("Return");
               }
             }
-            actionHistory.push(`Typed "${decision.text}": ${decision.reason || "search/input"}`);
+            actionHistory.push(`Typed "${decision.text}" (Enter: ${Boolean(decision.pressEnter)}): ${decision.reason || "search/input"}`);
+            await new Promise((r) => setTimeout(r, 2500));
           } else if (decision.action === "press_key" && decision.key) {
-            if (typeof activeSb.press === "function") {
-              await activeSb.press(decision.key);
-            } else if (activeSb.commands?.run) {
+            if (activeSb.commands?.run) {
               await activeSb.commands.run(`DISPLAY=:0 xdotool key ${decision.key} 2>/dev/null || true`);
+            } else if (typeof activeSb.press === "function") {
+              await activeSb.press(decision.key);
             }
             actionHistory.push(`Pressed ${decision.key}: ${decision.reason || "key press"}`);
+            await new Promise((r) => setTimeout(r, 1200));
           } else if (decision.action === "scroll") {
-            if (typeof activeSb.scroll === "function") {
-              await activeSb.scroll(decision.direction || "down", decision.amount || 3);
-            } else if (activeSb.commands?.run) {
-              const btn = decision.direction === "up" ? 4 : 5;
+            const btn = decision.direction === "up" ? 4 : 5;
+            if (activeSb.commands?.run) {
               await activeSb.commands.run(`DISPLAY=:0 xdotool click ${btn} 2>/dev/null || true`);
+            } else if (typeof activeSb.scroll === "function") {
+              await activeSb.scroll(decision.direction || "down", decision.amount || 3);
             }
             actionHistory.push(`Scrolled ${decision.direction || "down"}`);
+            await new Promise((r) => setTimeout(r, 1500));
           } else if (decision.action === "navigate" && decision.url) {
             if (typeof activeSb.open === "function") {
               await activeSb.open(decision.url);
             }
             actionHistory.push(`Navigated to ${decision.url}`);
+            await new Promise((r) => setTimeout(r, 3000));
           } else if (decision.action === "wait") {
             await new Promise((r) => setTimeout(r, decision.ms || 2000));
             actionHistory.push(`Waited for UI render`);
@@ -829,7 +887,7 @@ export async function executeAgentChromeTask(
           console.warn(`[AgencyActions] Action execution notice (step ${step}):`, actErr.message);
         }
 
-        await new Promise((r) => setTimeout(r, 1800));
+        await new Promise((r) => setTimeout(r, 1000));
       }
 
       // Step G: Capture final verified workstation screenshot
@@ -886,10 +944,10 @@ export async function executeAgentChromeTask(
     id: taskId,
     campaignId,
     agentId,
-    title: isChart ? `Market Chart Analysis: ${cleanTopic}` : `Browser Task: ${cleanTopic}`,
+    title: isChart ? `Market Chart Analysis: ${cleanTopic}` : `Human Browser Task: ${cleanTopic}`,
     instructions: rawPrompt,
     status: "completed",
-    output: visualAnalysis || `Navigated to ${targetUrl} and captured live screenshot.`,
+    output: visualAnalysis || `Operated ${baseUrl} and captured live screenshot.`,
     startedAt: nowIso,
     completedAt: new Date().toISOString(),
     createdAt: nowIso,
@@ -903,7 +961,7 @@ export async function executeAgentChromeTask(
     agentId,
     type: isChart ? "research" : "link",
     name: `${cleanTopic}`,
-    url: targetUrl,
+    url: baseUrl,
     content: visualAnalysis || `Live workstation screen captured for ${cleanTopic}`,
     createdAt: nowIso,
   }).run();
@@ -914,14 +972,14 @@ export async function executeAgentChromeTask(
   if (visualAnalysis) {
     replyText += `${visualAnalysis}\n\n`;
   }
-  replyText += `• **Active URL:** \`${targetUrl}\`\n• **Subject:** ${cleanTopic}\n• **Status:** Completed (Live screenshot attached above)\n• **Workstation:** Live VNC connected`;
+  replyText += `• **Active Platform:** \`${baseUrl}\`\n• **Subject:** ${cleanTopic}\n• **Human Steps:** ${actionHistory.length > 0 ? actionHistory.join(" ➔ ") : "Direct human interaction"}\n• **Status:** Completed (Live screenshot attached above)\n• **Workstation:** Live VNC connected`;
 
   return {
     success: true,
     agentId,
     agentName: displayName,
     cleanTopic,
-    targetUrl,
+    targetUrl: baseUrl,
     screenshotBase64,
     mediaUrl,
     streamUrl: sbInfo.streamUrl,
@@ -1086,10 +1144,12 @@ export async function handleAgencyExecutiveCommand(
       ? "fb_laxdollar"
       : lower.includes("meme") || lower.includes("comedy")
       ? "fb_contentor"
-      : null);
+      : lower.includes("medium") || lower.includes("article") || lower.includes("story") || lower.includes("news")
+      ? "analytics"
+      : "analytics");
 
   const isTaskOrBrowse =
-    /(?:search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play|github|repo|repos|repository|facebook|fb|look up|twitter|twittwer|x\.com|\/x|instagram|insta|unfollow|follow|navigate|screenshot|view|show|run|wake|start|boot|spin up|tell|command|use)/i.test(
+    /(?:search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play|github|repo|repos|repository|facebook|fb|look up|twitter|twittwer|x\.com|\/x|instagram|insta|medium|unfollow|follow|navigate|screenshot|view|show|run|wake|start|boot|spin up|tell|command|use)/i.test(
       lower
     );
 
