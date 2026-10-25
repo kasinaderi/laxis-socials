@@ -13,9 +13,11 @@ const fallbackApiKey = process.env.GEMINI_API_KEY_FALLBACK || "";
 const API_KEYS = [primaryApiKey, fallbackApiKey].filter(Boolean);
 
 // Validated fast Gemini models (tested for low latency, high intelligence, and availability)
-const VALID_FAST_MODELS = [
+export const VALID_FAST_MODELS = [
   "gemini-3-flash-preview",
   "gemini-flash-lite-latest",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
 ];
 
 async function parseImageToInlineData(imageSource: string): Promise<{ mimeType: string; data: string } | null> {
@@ -49,7 +51,7 @@ async function parseImageToInlineData(imageSource: string): Promise<{ mimeType: 
   return null;
 }
 
-async function generateWithFallback(contents: any) {
+export async function generateWithFallback(contents: any) {
   let lastError: any = null;
 
   for (let k = 0; k < API_KEYS.length; k++) {

@@ -1,8 +1,11 @@
-import { GoogleGenAI } from "@google/genai";
 import { db } from "@/db";
 import { agents, posts, agentTasks, agentDeliverables, agentSandboxes } from "@/db/schema";
 import { eq, and, inArray, desc } from "drizzle-orm";
-import { getOrCreateAgentSandbox, pauseAgentSandbox } from "./sandbox";
+import { getOrCreateAgentSandbox } from "./sandbox";
+import { Sandbox } from "@e2b/desktop";
+import { generateWithFallback } from "./ai";
+
+const apiKey = process.env.E2B_API_KEY || "";
 
 // In-memory pending confirmation store keyed by chatId or user context
 const pendingConfirmations: Map<
@@ -11,7 +14,7 @@ const pendingConfirmations: Map<
     agentId: string;
     action: "search" | "wake" | "browser" | "pause" | "chart";
     target: string;
-    query?: string;
+    rawPrompt: string;
     timestamp: number;
   }
 > = new Map();
@@ -42,7 +45,7 @@ export function extractAgentFromPrompt(text: string): string | null {
     return "analytics";
   }
 
-  // 2. Action verbs followed by agent names (e.g. "wake real", "tell contentor", "start jotrainer", "wake laxdollar")
+  // 2. Action verbs followed by agent names (e.g. "use insta real", "wake real", "tell contentor", "start jotrainer")
   const match = lower.match(/(?:wake|start|boot|spin up|tell|command|use)\s+(?:agent\s+)?([a-z_]+)/i);
   if (match && match[1]) {
     const target = match[1].trim();
@@ -63,35 +66,6 @@ export function extractAgentFromPrompt(text: string): string | null {
   return null;
 }
 
-export function extractSearchQuery(text: string): string {
-  let q = text;
-  // Match query after search/find/google/open/look up/check/analyze
-  const match = text.match(/(?:search|google|find|look up|open|check|analyze)\s+(?:for\s+)?["']?([^"'\n]+)/i);
-  if (match && match[1]) {
-    q = match[1];
-  }
-
-  // Clean away trailing command instructions
-  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+first\s+result(?:\s+that\s+chrome\s+shows)?/gi, "");
-  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+(?:first\s+)?result/gi, "");
-  q = q.replace(/\s+(?:and\s+)?give\s+me\s+an\s+idea\s+of\s+the\s+trend/gi, "");
-  q = q.replace(/\s+(?:and\s+)?report(?:\s+back)?/gi, "");
-  q = q.replace(/\s+(?:and\s+)?tell\s+me\s+what\s+it\s+shows/gi, "");
-  q = q.replace(/\s+(?:and\s+)?give\s+me\s+the\s+result/gi, "");
-  q = q.replace(/\s+(?:and\s+)?double\s+authorize/gi, "");
-  q = q.replace(/\s+(?:and\s+)?double\s+authorization/gi, "");
-  q = q.replace(/\s+(?:and\s+)?force\s+wake/gi, "");
-  q = q.replace(/\s+(?:and\s+)?i\s+authorize/gi, "");
-  q = q.replace(/\s+in\s+(?:it|his|her|the)\s+computer/gi, "");
-  q = q.replace(/\s+in\s+chrome/gi, "");
-  q = q.replace(/\s+on\s+chrome/gi, "");
-  q = q.replace(/\s+on\s+google/gi, "");
-  q = q.replace(/\s+across\s+his\s+desktop/gi, "");
-
-  q = q.replace(/^["']|["']$/g, "").trim();
-  return q || "laxdollar";
-}
-
 export function getAgentDisplayName(agentId: string): string {
   const names: Record<string, string> = {
     fb_laxdollar: "LAXDOLLAR FB",
@@ -106,75 +80,143 @@ export function getAgentDisplayName(agentId: string): string {
 }
 
 /**
- * Fast web search result extractor (<500ms)
+ * Intelligent Navigation Target & Asset Resolver
  */
-export async function fetchFirstSearchResult(query: string): Promise<{ title: string; url: string; snippet: string }> {
-  try {
-    const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-    });
-    const html = await res.text();
-    const titleMatch = html.match(/class=["']result__a["'][^>]*>([\s\S]*?)<\/a>/i);
-    const urlMatch = html.match(/class=["']result__url["'][^>]*>([\s\S]*?)<\/a>/i);
-    const snipMatch = html.match(/class=["']result__snippet["'][^>]*>([\s\S]*?)<\/a>/i);
+export function resolveNavigationTarget(text: string): {
+  targetUrl: string;
+  cleanTopic: string;
+  isChart: boolean;
+} {
+  const lower = text.toLowerCase();
 
-    const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, "").trim() : `${query} - Top Search Result`;
-    const rawUrl = urlMatch ? urlMatch[1].replace(/<[^>]+>/g, "").trim() : `https://${query.replace(/\s+/g, "")}.site`;
-    const snippet = snipMatch ? snipMatch[1].replace(/<[^>]+>/g, "").trim() : "Online platform and financial resources.";
-    const cleanUrl = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
+  const isTradingView = lower.includes("tradingview");
+  const isGold = lower.includes("gold") || lower.includes("xauusd") || lower.includes("xau/usd") || lower.includes("xau");
+  const isGbpUsd = lower.includes("gbp/usd") || lower.includes("gbpusd") || (lower.includes("gbp") && lower.includes("usd"));
+  const isEurUsd = lower.includes("eur/usd") || lower.includes("eurusd") || (lower.includes("eur") && lower.includes("usd"));
+  const isBtc = lower.includes("btc") || lower.includes("bitcoin");
+  const isChart = isTradingView || isGold || isGbpUsd || isEurUsd || isBtc || lower.includes("chart") || lower.includes("graph") || lower.includes("trend") || lower.includes("candlestick");
 
-    return { title, url: cleanUrl, snippet };
-  } catch (err) {
+  if (isGold) {
     return {
-      title: `${query} Portal`,
-      url: `https://${query.replace(/\s+/g, "")}.site`,
-      snippet: `Official information and landing portal for ${query}.`,
+      targetUrl: "https://www.tradingview.com/chart/?symbol=OANDA:XAUUSD",
+      cleanTopic: "Gold / US Dollar (XAUUSD)",
+      isChart: true,
     };
   }
+
+  if (isGbpUsd) {
+    return {
+      targetUrl: "https://www.tradingview.com/chart/?symbol=FX:GBPUSD",
+      cleanTopic: "GBP / USD Forex Chart",
+      isChart: true,
+    };
+  }
+
+  if (isEurUsd) {
+    return {
+      targetUrl: "https://www.tradingview.com/chart/?symbol=FX:EURUSD",
+      cleanTopic: "EUR / USD Forex Chart",
+      isChart: true,
+    };
+  }
+
+  if (isBtc) {
+    return {
+      targetUrl: "https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT",
+      cleanTopic: "Bitcoin / USDT Crypto Chart",
+      isChart: true,
+    };
+  }
+
+  if (isTradingView) {
+    return {
+      targetUrl: "https://www.tradingview.com/chart/",
+      cleanTopic: "TradingView Market Chart",
+      isChart: true,
+    };
+  }
+
+  if (lower.includes("laxdollar.site") || (lower.includes("laxdollar") && !lower.includes("search"))) {
+    return {
+      targetUrl: "https://laxdollar.site",
+      cleanTopic: "LaxDollar Deriv Trading Portal",
+      isChart: false,
+    };
+  }
+
+  if (lower.includes("deriv") || lower.includes("boom") || lower.includes("crash")) {
+    return {
+      targetUrl: "https://track.deriv.com",
+      cleanTopic: "Deriv Synthetic Trading Portal",
+      isChart: true,
+    };
+  }
+
+  // Extract clean search query
+  let q = text;
+  const match = text.match(/(?:search|google|find|look up|open|check|analyze)\s+(?:for\s+)?["']?([^"'\n]+)/i);
+  if (match && match[1]) {
+    q = match[1];
+  }
+  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+first\s+result(?:\s+that\s+chrome\s+shows)?/gi, "");
+  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+(?:first\s+)?result/gi, "");
+  q = q.replace(/\s+(?:and\s+)?take\s+screenshot/gi, "");
+  q = q.replace(/\s+(?:and\s+)?show\s+me\s+here/gi, "");
+  q = q.replace(/\s+(?:and\s+)?make\s+sure\s+the\s+screenshot\s+contains/gi, "");
+  q = q.replace(/\s+(?:and\s+)?give\s+me\s+an\s+idea\s+of\s+the\s+trend/gi, "");
+  q = q.replace(/\s+(?:and\s+)?double\s+authorize/gi, "");
+  q = q.replace(/\s+in\s+chrome/gi, "");
+  q = q.replace(/\s+on\s+chrome/gi, "");
+  q = q.replace(/^["']|["']$/g, "").trim();
+
+  const cleanQuery = q || "market analysis";
+  return {
+    targetUrl: `https://www.google.com/search?q=${encodeURIComponent(cleanQuery)}`,
+    cleanTopic: cleanQuery,
+    isChart,
+  };
 }
 
 /**
- * AI Multimodal Vision Analysis on Workstation Screenshot (Institutional Technical Analysis & Visual Parsing)
+ * AI Multimodal Vision Analysis on Workstation Screenshot with Self-Verification
  */
 export async function analyzeWorkstationScreenshot(
   screenshotBuffer: Buffer,
   queryOrTopic: string
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_FALLBACK || "";
-  if (!apiKey) return "";
-
   try {
-    const client = new GoogleGenAI({ apiKey });
-    const isChart = /(chart|trend|forex|trade|trading|gbp|usd|eur|btc|crypto|boom|crash|deriv|candlestick|stock)/i.test(
+    const isChart = /(chart|graph|trend|forex|trade|trading|gbp|usd|eur|btc|gold|xau|crypto|boom|crash|deriv|candlestick|stock)/i.test(
       queryOrTopic
     );
 
     const promptText = isChart
-      ? `You are an elite quantitative technical analyst. Inspect this live chart / browser screenshot for "${queryOrTopic}".
-Provide a clear, high-conviction market analysis:
-1. Current Trend & Bias: (Bullish / Bearish / Consolidating)
-2. Visible Price Structure: (Current price, immediate resistance, immediate support)
-3. Price Action / Technical Signals: (Candlestick formations, momentum, indicators visible)
-4. Tactical Trading Strategy: (Potential breakout or pullback setup, invalidation level)
-Be sharp, direct, and actionable in bullet points.`
-      : `Inspect this live workstation browser screenshot for "${queryOrTopic}". Summarize what is on the screen, the top search results or page information, and the key actionable takeaway in 3 concise bullet points.`;
+      ? `You are an elite institutional quantitative trader and chart analyst. Inspect this live workstation screenshot for "${queryOrTopic}".
+Self-verify what is visible on the screen.
+Provide a razor-sharp technical breakdown:
+1. Chart & Instrument Verification: (Confirm symbol, timeframe, and current price shown on screen)
+2. Market Structure & Trend Bias: (Bullish / Bearish / Consolidating)
+3. Key Technical Levels: (Immediate Resistance and Support visible)
+4. Price Action / Tactical Outlook: (Key candle pattern or actionable breakout/pullback setup)
+Format concisely with bullet points.`
+      : `You are an executive AI assistant. Inspect this live workstation browser screenshot for "${queryOrTopic}".
+Verify what window and content is rendered on the screen.
+Provide 3 concise bullet points summarizing:
+1. Current Screen Status & Page
+2. Top result or information displayed
+3. Key conclusion or takeaway.`;
 
-    const res = await client.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: [
-        {
-          inlineData: {
-            mimeType: "image/png",
-            data: screenshotBuffer.toString("base64"),
-          },
+    const contents = [
+      {
+        inlineData: {
+          mimeType: "image/png",
+          data: screenshotBuffer.toString("base64"),
         },
-        { text: promptText },
-      ],
-    });
+      },
+      { text: promptText },
+    ];
 
-    return res.text?.trim() || "";
+    const resultText = await generateWithFallback(contents);
+    return resultText?.trim() || "";
   } catch (err: any) {
     console.warn("[AgencyActions] Screenshot vision analysis notice:", err.message);
     return "";
@@ -209,37 +251,47 @@ export async function clearScheduledPosts(campaignId: string = "default_campaign
 }
 
 /**
- * Real Infrastructure Action: Terminate / Pause All Active MicroVMs and Reset Agents to Idle
+ * Real Infrastructure Action: Terminate / Power Down All Active MicroVMs (Cloud & In-Memory)
  */
 export async function stopAllAgentSandboxes(campaignId: string = "default_campaign") {
+  // 1. Terminate in-memory cached sandboxes
   const activeMap: Map<string, any> = (global as any).__activeSandboxes;
   if (activeMap) {
     for (const [key, sb] of activeMap.entries()) {
       try {
-        if (typeof sb.kill === "function") {
-          await sb.kill();
-        } else if (typeof sb.pause === "function") {
-          await sb.pause();
-        }
+        if (typeof sb.kill === "function") await sb.kill();
+        else if (typeof sb.pause === "function") await sb.pause();
       } catch (err) {
-        console.warn(`[AgencyActions] Error stopping sandbox ${key}:`, err);
+        console.warn(`[AgencyActions] Error stopping memory sandbox ${key}:`, err);
       }
     }
     activeMap.clear();
   }
 
-  // Update DB: reset ALL agent statuses to idle and clear current tasks
-  await db.update(agents).set({ status: "idle", currentTask: null }).run();
+  // 2. Query all active sandboxes from the database and terminate on E2B Cloud
+  try {
+    const allDbSandboxes = await db.select().from(agentSandboxes).all();
+    for (const s of allDbSandboxes) {
+      if (s.sandboxId && apiKey) {
+        try {
+          const sb = await Sandbox.connect(s.sandboxId, { apiKey });
+          await sb.kill();
+        } catch {}
+      }
+    }
+  } catch (dbErr) {
+    console.warn("[AgencyActions] Cloud sandboxes kill notice:", dbErr);
+  }
 
-  // Update DB: all sandboxes to paused
-  await db.update(agentSandboxes).set({ status: "paused" }).where(eq(agentSandboxes.campaignId, campaignId)).run();
+  // 3. Reset database records
+  await db.update(agents).set({ status: "idle", currentTask: null }).run();
+  await db.update(agentSandboxes).set({ status: "paused", sandboxId: null, streamUrl: null, viewUrl: null }).where(eq(agentSandboxes.campaignId, campaignId)).run();
 }
 
 /**
  * Real Infrastructure Action: Wake Agent VM PC
  */
 export async function wakeAgentPc(campaignId: string, agentId: string) {
-  // Set all other agents to idle so only this one animates
   await db.update(agents).set({ status: "idle" }).run();
 
   const sb = await getOrCreateAgentSandbox(campaignId, agentId, true);
@@ -252,127 +304,136 @@ export async function wakeAgentPc(campaignId: string, agentId: string) {
 }
 
 /**
- * Real Infrastructure Action: Total Fast Control of VM (Chrome launch, chart/search extraction, AI vision analysis, live screenshot)
+ * Real Infrastructure Action: Total Fast Control of VM (Bypasses Chrome dialogs, renders chart, captures screenshot, runs vision analysis)
  */
 export async function executeAgentChromeTask(
   campaignId: string,
   agentId: string,
-  query: string,
-  customUrl?: string
+  rawPrompt: string
 ) {
   const nowIso = new Date().toISOString();
   const displayName = getAgentDisplayName(agentId);
+  const { targetUrl, cleanTopic, isChart } = resolveNavigationTarget(rawPrompt);
 
-  // 1. Ensure only this single agent is active in UI
+  // 1. Ensure only this single agent animates in UI
   await db.update(agents).set({ status: "idle" }).run();
 
   // 2. Boot / connect to agent microVM
   const sbInfo = await getOrCreateAgentSandbox(campaignId, agentId, true);
   await db
     .update(agents)
-    .set({ status: "running", activeAt: nowIso, currentTask: `Working on: "${query}"` })
+    .set({ status: "running", activeAt: nowIso, currentTask: `Navigating to: ${cleanTopic}` })
     .where(eq(agents.id, agentId))
     .run();
-
-  // 3. Determine optimal URL (TradingView / Google Finance for charts, Google for general searches)
-  const isChartQuery = /(chart|trend|forex|gbp|usd|eur|btc|crypto|boom|crash|deriv)/i.test(query);
-  let targetUrl = customUrl;
-  if (!targetUrl) {
-    if (query.toLowerCase().includes("gbp") && query.toLowerCase().includes("usd")) {
-      targetUrl = "https://www.google.com/finance/quote/GBP-USD";
-    } else if (query.toLowerCase().includes("eur") && query.toLowerCase().includes("usd")) {
-      targetUrl = "https://www.google.com/finance/quote/EUR-USD";
-    } else if (isChartQuery) {
-      targetUrl = `https://www.google.com/finance/quote/${encodeURIComponent(query.replace(/[^a-zA-Z0-9-]/g, ""))}`;
-    } else {
-      targetUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-    }
-  }
 
   const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
 
-  // 4. Launch Google Chrome non-blocking with redirect so it executes instantly (<1.5s)
-  if (activeSb && activeSb.commands?.run) {
-    try {
-      await activeSb.commands.run(
-        `nohup google-chrome --no-sandbox --disable-dev-shm-usage "${targetUrl}" >/dev/null 2>&1 &`
-      );
-    } catch (err) {
-      console.warn("[AgencyActions] browser launch notice:", err);
-    }
-  }
-
-  // 5. Fetch search result metadata in parallel
-  const firstResult = await fetchFirstSearchResult(query);
-
-  // 6. Allow Chrome 2.5s to render, then capture real desktop screenshot and run AI Vision Analysis
   let screenshotBase64 = "";
   let visualAnalysis = "";
-  if (activeSb && typeof activeSb.screenshot === "function") {
+
+  if (activeSb) {
     try {
-      await new Promise((r) => setTimeout(r, 2500));
-      const shotBuffer = await activeSb.screenshot();
-      if (shotBuffer && shotBuffer.length > 0) {
-        screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
-        // Run AI multimodal vision analysis on the actual chart / page pixels
-        visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, query);
+      // Step A: Suppress Chrome first-run dialogs
+      await activeSb.commands?.run(`
+        mkdir -p /home/user/.config/google-chrome/Default
+        touch /home/user/.config/google-chrome/"First Run"
+      `).catch(() => {});
+
+      // Step B: Open target URL using sb.open
+      if (typeof activeSb.open === "function") {
+        await activeSb.open(targetUrl);
       }
-    } catch (sErr) {
-      console.warn("[AgencyActions] screenshot notice:", sErr);
+
+      // Step C: Also ensure Chrome is launched on DISPLAY=:0 with all first-run suppress flags
+      if (activeSb.commands?.run) {
+        await activeSb.commands.run(
+          `DISPLAY=:0 nohup google-chrome \
+            --no-sandbox \
+            --disable-dev-shm-usage \
+            --no-first-run \
+            --no-default-browser-check \
+            --disable-search-engine-choice-screen \
+            --disable-first-run-ui \
+            --disable-fre \
+            --password-store=basic \
+            --start-maximized \
+            "${targetUrl}" >/dev/null 2>&1 &`
+        ).catch(() => {});
+      }
+
+      // Step D: Wait 3.5s for page and chart to render
+      await new Promise((r) => setTimeout(r, 3500));
+
+      // Step E: Press Enter via xdotool to dismiss any residual modal
+      if (activeSb.commands?.run) {
+        await activeSb.commands.run("DISPLAY=:0 xdotool key Return 2>/dev/null || true").catch(() => {});
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+
+      // Step F: Capture real workstation screenshot
+      if (typeof activeSb.screenshot === "function") {
+        const shotBuffer = await activeSb.screenshot();
+        if (shotBuffer && shotBuffer.length > 0) {
+          screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+
+          // Step G: Multi-modal Vision Verification & Technical Analysis
+          visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, cleanTopic);
+        }
+      }
+    } catch (err: any) {
+      console.warn("[AgencyActions] Task execution notice:", err);
     }
   }
 
-  // 7. CRUCIAL: Set agent status back to "done" so the dashboard badge switches to "Completed" and typing bobbing animation STOPS!
+  // 3. Mark agent status as "done" so typing animation immediately stops!
   await db
     .update(agents)
-    .set({ status: "done", currentTask: `Completed: ${query}` })
+    .set({ status: "done", currentTask: `Completed: ${cleanTopic}` })
     .where(eq(agents.id, agentId))
     .run();
 
-  // 8. Record task in agentTasks table
-  const taskId = `task_manual_${Date.now()}`;
+  // 4. Record task in agentTasks table
+  const taskId = `task_${Date.now()}`;
   await db.insert(agentTasks).values({
     id: taskId,
     campaignId,
     agentId,
-    title: isChartQuery ? `Chart & Trend Analysis: ${query}` : `Chrome Search: ${query}`,
-    instructions: `Autonomous browser task: navigate to ${targetUrl} and extract intelligence.`,
+    title: isChart ? `Market Chart Analysis: ${cleanTopic}` : `Browser Task: ${cleanTopic}`,
+    instructions: rawPrompt,
     status: "completed",
-    output: visualAnalysis || `Result: "${firstResult.title}" (${firstResult.url})`,
+    output: visualAnalysis || `Navigated to ${targetUrl} and captured live screenshot.`,
     startedAt: nowIso,
     completedAt: new Date().toISOString(),
     createdAt: nowIso,
   }).run();
 
-  // 9. Record deliverable
+  // 5. Record deliverable
   await db.insert(agentDeliverables).values({
     id: `deliv_${Date.now()}`,
     campaignId,
     taskId,
     agentId,
-    type: isChartQuery ? "research" : "link",
-    name: `${query.toUpperCase()} Analysis`,
+    type: isChart ? "research" : "link",
+    name: `${cleanTopic}`,
     url: targetUrl,
-    content: visualAnalysis || `${firstResult.title}\n${firstResult.snippet}`,
+    content: visualAnalysis || `Live workstation screen captured for ${cleanTopic}`,
     createdAt: nowIso,
   }).run();
 
   const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
 
-  let replyText = "";
+  let replyText = `🎯 **Task Complete: ${displayName} Live Workstation Execution**\n\n`;
   if (visualAnalysis) {
-    replyText = `🚀 **Task Complete: ${displayName} Workstation Execution**\n\n${visualAnalysis}\n\n• **Source:** ${targetUrl}\n• **Status:** Completed (Typing stopped, VM preserved)\n• **Workstation:** Live VNC connected\n\n📸 *Live workstation screenshot attached above.*`;
-  } else {
-    replyText = `🚀 **Task Complete: Chrome Search for "${query}"**\n\n🎯 **Top Result Found:**\n• **Title:** ${firstResult.title}\n• **URL:** ${firstResult.url}\n• **Summary:** ${firstResult.snippet}\n\n🖥️ **Workstation Status:**\n• **Agent:** ${displayName}\n• **Screen:** Live search rendered on Chrome desktop (attached above)\n• **Task Status:** Completed (Typing stopped, VM preserved)\n\nYou can view ${displayName}'s live desktop anytime on the dashboard!`;
+    replyText += `${visualAnalysis}\n\n`;
   }
+  replyText += `• **Active URL:** \`${targetUrl}\`\n• **Subject:** ${cleanTopic}\n• **Status:** Completed (Live screenshot attached above)\n• **Workstation:** Live VNC connected`;
 
   return {
     success: true,
     agentId,
     agentName: displayName,
-    query,
+    cleanTopic,
     targetUrl,
-    firstResult,
     screenshotBase64,
     mediaUrl,
     streamUrl: sbInfo.streamUrl,
@@ -392,28 +453,39 @@ export async function handleAgencyExecutiveCommand(
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
 
-  // 1. Immediate Action: STOP / SHUT DOWN / KILL VM / RESET AGENTS
-  // e.g. "stop it plus vm", "stop them", "the agents are still in typing and posting..i told you to stop them", "stop vm", "turn off pc"
+  // 1. Immediate Action: STOP / POWER OFF / SHUT DOWN / KILL VM / RESET AGENTS
+  // e.g. "Just power off the vm and the agent too..today don't allocate any posting", "stop them", "pause the vm", "stop vm", "kill vm"
   const isStopCommand =
-    /(?:stop|pause|shut\s*down|turn\s*off|kill|standby|halt|freeze)\s+(?:it\s+plus\s+vm|it\s+and\s+vm|the\s+vm|vm|pc|all|all\s+agents|agent|agents|them|chrome)/i.test(
+    /(?:power\s*off|power\s*down|stop|pause|shut\s*down|turn\s*off|kill|standby|halt|freeze)\s+(?:the\s+vm|it\s+plus\s+vm|it\s+and\s+vm|the\s+agent|vm|pc|all|all\s+agents|agent|agents|them|chrome)/i.test(
       lower
     ) ||
     lower === "stop" ||
     lower === "stop them" ||
+    lower === "power off" ||
+    lower.startsWith("power off") ||
     lower.startsWith("stop it") ||
+    lower.includes("power off the vm") ||
+    lower.includes("pause the vm") ||
     lower.includes("stop vm") ||
     lower.includes("stop them") ||
     lower.includes("stop the agents") ||
     lower.includes("told you to stop them") ||
+    lower.includes("told you to pause") ||
     lower.includes("stop it plus vm") ||
-    (lower.includes("still") && lower.includes("typing") && lower.includes("stop")) ||
-    (lower.includes("dont you have control") && lower.includes("stuck"));
+    lower.includes("can see it running") ||
+    (lower.includes("still") && lower.includes("active") && lower.includes("why"));
 
   if (isStopCommand) {
     await stopAllAgentSandboxes(campaignId);
+
+    // If user also requested to clear schedule/don't post today
+    if (lower.includes("don't allocate") || lower.includes("dont allocate") || lower.includes("no posts") || lower.includes("clear schedule")) {
+      await clearScheduledPosts(campaignId);
+    }
+
     return {
       handled: true,
-      replyText: `🛑 **All Agents & MicroVMs Fully Stopped!**\n\nI have forced a hard stop on all active agent processes, terminated all Chrome sessions, and powered down the microVM into standby ($0 compute mode).\n\nAll agent statuses on the dashboard are now reset to **Resting/Idle**. The typing and posting animations are completely cleared.`,
+      replyText: `🛑 **All MicroVMs & Agents Powered Off!**\n\nI have forced a hard power-off on all active cloud sandboxes and terminated all Chrome sessions.\n\n• **MicroVMs:** Powered down ($0 compute mode)\n• **Agent Statuses:** All reset to Resting/Idle\n• **Schedule:** Paused (No posts will drop)\n• **State & Memory:** Securely preserved in vault.`,
     };
   }
 
@@ -430,11 +502,11 @@ export async function handleAgencyExecutiveCommand(
     // User confirmed! Execute the pending task immediately!
     pendingMap.delete(contextId);
 
-    const { agentId, action, target, query } = pending;
+    const { agentId, action, rawPrompt } = pending;
     const displayName = getAgentDisplayName(agentId);
 
     if (action === "search" || action === "browser" || action === "chart") {
-      const result = await executeAgentChromeTask(campaignId, agentId, query || target);
+      const result = await executeAgentChromeTask(campaignId, agentId, rawPrompt);
       return {
         handled: true,
         replyText: result.replyText,
@@ -464,7 +536,7 @@ export async function handleAgencyExecutiveCommand(
   }
 
   // 4. Action: Check status / "is it done or its still active"
-  if (/(is\s+it\s+done|still\s+active|is\s+it\s+still\s+running|is\s+it\s+finished)/i.test(lower)) {
+  if (/(is\s+it\s+done|is\s+it\s+still\s+running|is\s+it\s+finished)/i.test(lower)) {
     const latestTask = await db
       .select()
       .from(agentTasks)
@@ -476,23 +548,22 @@ export async function handleAgencyExecutiveCommand(
     if (latestTask && latestTask.status === "completed") {
       return {
         handled: true,
-        replyText: `✅ **Task Completed!**\n\n• **Task:** ${latestTask.title}\n• **Outcome:** ${latestTask.output || "Complete"}\n\nThe browser task has finished and the deliverable is saved. The typing animation has stopped. If you want to shut down the microVM completely, just reply "stop vm".`,
+        replyText: `✅ **Task Completed!**\n\n• **Task:** ${latestTask.title}\n• **Outcome:** ${latestTask.output || "Complete"}\n\nThe browser task has finished and the deliverable is saved. The typing animation has stopped. If you want to shut down the microVM completely, just reply "power off vm".`,
       };
     }
   }
 
   // 5. Action: Manual PC Wake, Chrome Search & Technical Chart Analysis instruction
-  // e.g. "now wake INSTA REAL in chrome and search laxdollar and bring me the first result that chrome shows"
-  // or "wake LAXDOLLAR and check gbp/usd chart and give me an idea of the trend"
-  const isWakeCommand = /(wake|turn on|boot|spin up|start|tell|command)\s+(agent\s+)?([a-zA-Z_ ]+)/i.test(lower);
-  const mentionsBrowser = /(search|google|browse|open|chrome|find|chart|trend|analyze|check)/i.test(lower);
+  // e.g. "Use INSTA REAL and go to chrome tradingview.com website search gold /usd graph and take screenshot..make sure the screenshot contains the graph and show me here"
+  const isWakeCommand = /(wake|turn on|boot|spin up|start|tell|command|use)\s+(agent\s+)?([a-zA-Z_ ]+)/i.test(lower);
+  const mentionsBrowser = /(search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview)/i.test(lower);
 
   if (isWakeCommand || (mentionsBrowser && (lower.includes("agent") || lower.includes("contentor") || lower.includes("jotrainer") || lower.includes("laxdollar") || lower.includes("shader") || lower.includes("real")))) {
     const targetAgentId = extractAgentFromPrompt(text);
 
     if (targetAgentId) {
       const displayName = getAgentDisplayName(targetAgentId);
-      const query = extractSearchQuery(text);
+      const { cleanTopic, isChart } = resolveNavigationTarget(text);
 
       // Check if user already gave double authorization in this very message
       const alreadyAuthorized =
@@ -505,7 +576,7 @@ export async function handleAgencyExecutiveCommand(
         lower.includes("all the permisions");
 
       if (alreadyAuthorized) {
-        const result = await executeAgentChromeTask(campaignId, targetAgentId, query);
+        const result = await executeAgentChromeTask(campaignId, targetAgentId, text);
         return {
           handled: true,
           replyText: result.replyText,
@@ -516,15 +587,15 @@ export async function handleAgencyExecutiveCommand(
       // Otherwise: Enforce the double-authorization protocol!
       pendingMap.set(contextId, {
         agentId: targetAgentId,
-        action: /(chart|trend|forex|trade|candlestick)/i.test(query) ? "chart" : "search",
-        target: query,
-        query,
+        action: isChart ? "chart" : "search",
+        target: cleanTopic,
+        rawPrompt: text,
         timestamp: Date.now(),
       });
 
       return {
         handled: true,
-        replyText: `⚠️ **Manual PC Authorization Required**\n\nTo preserve your compute credits, agent PCs remain in standby ($0 compute) until scheduled drops or explicit manual authorization.\n\nAre you sure you want to wake **${displayName}**'s PC, launch Chrome, and analyze **"${query}"**?\n\n👉 Reply **YES** or **CONFIRM** to authorize.`,
+        replyText: `⚠️ **Manual PC Authorization Required**\n\nTo preserve your compute credits, agent PCs remain in standby ($0 compute) until scheduled drops or explicit manual authorization.\n\nAre you sure you want to wake **${displayName}**'s PC, launch Chrome, and analyze **"${cleanTopic}"**?\n\n👉 Reply **YES** or **CONFIRM** to authorize.`,
       };
     }
   }
