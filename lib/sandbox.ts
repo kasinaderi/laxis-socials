@@ -81,49 +81,60 @@ export async function getOrCreateAgentSandbox(
 
       if (!sb && sandboxId) {
         try {
-          console.log(`[E2B] Reconnecting to existing persistent microVM ${sandboxId} for ${agentId}...`);
+          console.log(`[E2B] Connecting & resuming persistent microVM ${sandboxId} for ${agentId}...`);
           sb = await Sandbox.connect(sandboxId, { apiKey });
-          const alive = await sb.isRunning();
-          if (alive) {
-            activeSandboxes.set(cacheKey, sb);
-            console.log(`[E2B] Reconnected successfully to ${sandboxId}`);
+          // Note: In E2B, connect automatically resumes a paused sandbox with full memory state.
+          activeSandboxes.set(cacheKey, sb);
+          console.log(`[E2B] Reconnected successfully to persistent microVM ${sandboxId}`);
+        } catch (connErr: any) {
+          console.warn(`[E2B] Reconnect notice for ${sandboxId}: ${connErr.message}`);
+          // ONLY create fresh sandbox if E2B explicitly returns 404 / not found
+          const isNotFound = /not found|404|does not exist/i.test(connErr.message || "");
+          if (!isNotFound) {
+            // Transient network or connection hiccup - retry connect once
+            try {
+              await new Promise(r => setTimeout(r, 1000));
+              sb = await Sandbox.connect(sandboxId, { apiKey });
+              activeSandboxes.set(cacheKey, sb);
+            } catch {
+              sb = null;
+            }
           } else {
             sb = null;
           }
-        } catch (connErr: any) {
-          console.log(`[E2B] Reconnect notice: ${connErr.message}, creating fresh persistent microVM...`);
-          sb = null;
         }
       }
 
       if (!sb) {
-        console.log(`[E2B] User triggered launch: Spawning cloud desktop sandbox for ${agentId}...`);
+        console.log(`[E2B] Creating new permanent microVM for ${agentId}...`);
         sb = await Sandbox.create({
           apiKey,
-          timeoutMs: 3600000, // 1 hour session while user is active
+          timeoutMs: 3600000, // 1 hour keepalive while active
         });
         activeSandboxes.set(cacheKey, sb);
-        console.log(`[E2B] Created Sandbox ID: ${sb.sandboxId}`);
+        console.log(`[E2B] Created Permanent Sandbox ID: ${sb.sandboxId} for ${agentId}`);
       }
 
       const currentSbId = sb.sandboxId;
 
-      // Start noVNC streaming server
+      // Start or retrieve noVNC streaming server
       if (sb.stream && typeof sb.stream.start === "function") {
         try {
           await sb.stream.start();
-          if (sb.stream.url) {
-            const baseUrl = typeof sb.stream.url === "object" ? sb.stream.url.href : String(sb.stream.url);
-            streamUrl = baseUrl.includes("?")
-              ? `${baseUrl}&autoconnect=true&resize=scale`
-              : `${baseUrl}?autoconnect=true&resize=scale`;
-            console.log(`[E2B] Live Desktop Stream URL: ${streamUrl}`);
-          }
         } catch (streamErr: any) {
-          if (sb.getHost) {
-            streamUrl = `https://${sb.getHost(6080)}/vnc.html?autoconnect=true&resize=scale`;
-          }
+          // "Stream is already running" is expected when resuming an existing microVM
+          console.log(`[E2B] Stream status notice: ${streamErr.message}`);
         }
+        if (sb.stream.url) {
+          const baseUrl = typeof sb.stream.url === "object" ? sb.stream.url.href : String(sb.stream.url);
+          streamUrl = baseUrl.includes("?")
+            ? `${baseUrl}&autoconnect=true&resize=scale`
+            : `${baseUrl}?autoconnect=true&resize=scale`;
+          console.log(`[E2B] Live Desktop Stream URL: ${streamUrl}`);
+        }
+      }
+      if (!streamUrl && sb.getHost) {
+        streamUrl = `https://${sb.getHost(6080)}/vnc.html?autoconnect=true&resize=scale`;
       }
 
       // Capture real screenshot
@@ -195,25 +206,41 @@ export async function getOrCreateAgentSandbox(
 
 export async function pauseAgentSandbox(campaignId: string, agentId: string) {
   const cacheKey = `${campaignId}_${agentId}`;
-  const sb = activeSandboxes.get(cacheKey);
+  let sb = activeSandboxes.get(cacheKey);
 
-  if (sb) {
-    try {
-      console.log(`[E2B] Pausing microVM for ${agentId} to freeze state and STOP billing...`);
-      if (typeof sb.pause === "function") {
-        await sb.pause();
-        console.log(`[E2B] Paused successfully! All memory, cookies and tabs preserved.`);
-      }
-      activeSandboxes.delete(cacheKey);
-    } catch (e: any) {
-      console.warn("[E2B] Pause error:", e.message);
+  // If not in local memory, check database for persistent sandboxId
+  if (!sb) {
+    const existing = await db
+      .select({ sandboxId: agentSandboxes.sandboxId })
+      .from(agentSandboxes)
+      .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agentId)))
+      .get();
+
+    if (existing?.sandboxId && apiKey) {
       try {
-        await sb.kill();
-        activeSandboxes.delete(cacheKey);
-      } catch (kErr) {}
+        console.log(`[E2B] Connecting to persistent microVM ${existing.sandboxId} for ${agentId} to pause...`);
+        sb = await Sandbox.connect(existing.sandboxId, { apiKey });
+      } catch (err: any) {
+        console.warn(`[E2B] Notice connecting to pause: ${err.message}`);
+      }
     }
   }
 
+  if (sb) {
+    try {
+      console.log(`[E2B] Pausing microVM for ${agentId} to freeze state and STOP compute billing ($0 cost)...`);
+      if (typeof sb.pause === "function") {
+        await sb.pause();
+        console.log(`[E2B] MicroVM for ${agentId} paused successfully! All memory, cookies, tabs and files preserved.`);
+      }
+    } catch (e: any) {
+      console.warn("[E2B] Pause notice:", e.message);
+    } finally {
+      activeSandboxes.delete(cacheKey);
+    }
+  }
+
+  // Preserve the sandboxId permanently in DB! ONLY update status to "paused"
   await db.update(agentSandboxes)
     .set({
       status: "paused",

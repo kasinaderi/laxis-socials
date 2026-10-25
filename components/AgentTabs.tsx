@@ -227,8 +227,9 @@ export function AgentTabs({
     }
   };
 
-  // 2-Minute Idle Detection & Auto-Pause state
+  // 10-Minute Idle Detection & Auto-Pause state
   const [isIdlePaused, setIsIdlePaused] = useState(false);
+  const [streamKey, setStreamKey] = useState<number>(0);
   const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastActiveTimeRef = useRef<number>(Date.now());
   const heartbeatTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -288,6 +289,7 @@ export function AgentTabs({
     setIsIdlePaused(false);
     setIsPaused(false);
     lastActiveTimeRef.current = Date.now();
+    setStreamKey((k) => k + 1);
     try {
       const res = await fetch("/api/sandbox", {
         method: "POST",
@@ -329,7 +331,7 @@ export function AgentTabs({
     return () => window.removeEventListener("paste", onGlobalPaste);
   }, [isFullscreenModal, agentId]);
 
-  // Track user activity, heartbeat keepalive, and 2-minute idle pause
+  // Track user activity, heartbeat keepalive, and 10-minute idle pause (with iframe focus protection)
   useEffect(() => {
     if (!isFullscreenModal || isPaused || isIdlePaused) {
       if (idleTimerRef.current) clearInterval(idleTimerRef.current);
@@ -356,12 +358,23 @@ export function AgentTabs({
       lastActiveTimeRef.current = Date.now();
     };
 
-    // Idle checker running every 5 seconds
+    // When user clicks inside iframe, window triggers blur: record activity!
+    const onWindowBlur = () => {
+      lastActiveTimeRef.current = Date.now();
+    };
+
+    // Idle checker running every 5 seconds (10 min idle threshold = 600,000ms)
     idleTimerRef.current = setInterval(async () => {
+      // If user is currently focused on the VNC iframe, keep alive!
+      if (typeof document !== "undefined" && document.activeElement?.tagName === "IFRAME") {
+        lastActiveTimeRef.current = Date.now();
+        return;
+      }
+
       const idleDuration = Date.now() - lastActiveTimeRef.current;
-      if (idleDuration >= 120000) {
-        // 2 minutes of idle detected!
-        console.log(`[Agent PC] 2 minutes idle detected. Pausing microVM for ${agentId}...`);
+      if (idleDuration >= 600000) {
+        // 10 minutes of true idle detected!
+        console.log(`[Agent PC] 10 minutes idle detected. Pausing microVM for ${agentId}...`);
         setIsIdlePaused(true);
         setIsPaused(true);
         try {
@@ -384,6 +397,7 @@ export function AgentTabs({
     window.addEventListener("keydown", onUserActivity, { passive: true });
     window.addEventListener("click", onUserActivity, { passive: true });
     window.addEventListener("touchstart", onUserActivity, { passive: true });
+    window.addEventListener("blur", onWindowBlur);
 
     return () => {
       if (idleTimerRef.current) clearInterval(idleTimerRef.current);
@@ -392,6 +406,7 @@ export function AgentTabs({
       window.removeEventListener("keydown", onUserActivity);
       window.removeEventListener("click", onUserActivity);
       window.removeEventListener("touchstart", onUserActivity);
+      window.removeEventListener("blur", onWindowBlur);
     };
   }, [isFullscreenModal, isPaused, isIdlePaused, agentId]);
 
@@ -1631,7 +1646,12 @@ export function AgentTabs({
             </div>
 
             {/* Real Interactive noVNC Cloud Stream */}
-            <div className="flex-1 bg-slate-950 relative overflow-hidden flex items-center justify-center">
+            <div
+              className="flex-1 bg-slate-950 relative overflow-hidden flex items-center justify-center"
+              onMouseMove={() => (lastActiveTimeRef.current = Date.now())}
+              onMouseEnter={() => (lastActiveTimeRef.current = Date.now())}
+              onClick={() => (lastActiveTimeRef.current = Date.now())}
+            >
               {/* Host PC Paste Toast Notification */}
               {pasteSuccessToast && (
                 <div className="absolute top-4 right-4 z-50 bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-xl shadow-xl flex items-center gap-1.5 animate-in fade-in slide-in-from-top-1">
@@ -1640,13 +1660,13 @@ export function AgentTabs({
                 </div>
               )}
 
-              {/* 2-Minute Inactivity Idle Overlay */}
+              {/* 10-Minute Inactivity Idle Overlay */}
               {isIdlePaused ? (
                 <div className="absolute inset-0 z-30 bg-slate-950/92 backdrop-blur-sm flex flex-col items-center justify-center text-white text-center p-6 animate-in fade-in">
                   <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-3">
                     <Power className="w-7 h-7 text-amber-400" />
                   </div>
-                  <h3 className="text-sm font-bold text-white mb-1">Agent PC Paused (2 Min Inactivity)</h3>
+                  <h3 className="text-sm font-bold text-white mb-1">Agent PC Paused (10 Min Inactivity)</h3>
                   <p className="text-xs text-slate-400 max-w-sm mb-4">
                     Desktop automatically paused to protect compute credits ($0 compute). Your opened tabs, Chrome logins, and state are preserved.
                   </p>
@@ -1660,6 +1680,7 @@ export function AgentTabs({
                 </div>
               ) : sandboxInfo?.streamUrl ? (
                 <iframe
+                  key={`${sandboxInfo.streamUrl}_${streamKey}`}
                   src={sandboxInfo.streamUrl}
                   className="w-full h-full border-none"
                   title="Interactive AGENT PC Desktop"

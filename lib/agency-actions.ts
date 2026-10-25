@@ -86,9 +86,11 @@ export function resolveNavigationTarget(text: string): {
   targetUrl: string;
   cleanTopic: string;
   isChart: boolean;
+  searchQuery?: string;
 } {
   const lower = text.toLowerCase();
 
+  const isYouTube = lower.includes("youtube") || lower.includes("video") || lower.includes("song") || lower.includes("music");
   const isTradingView = lower.includes("tradingview");
   const isGold = lower.includes("gold") || lower.includes("xauusd") || lower.includes("xau/usd") || lower.includes("xau");
   const isGbpUsd = lower.includes("gbp/usd") || lower.includes("gbpusd") || (lower.includes("gbp") && lower.includes("usd"));
@@ -152,14 +154,14 @@ export function resolveNavigationTarget(text: string): {
     };
   }
 
-  // Extract clean search query
+  // Extract clean search query by stripping conversational instructions
   let q = text;
-  const match = text.match(/(?:search|google|find|look up|open|check|analyze)\s+(?:for\s+)?["']?([^"'\n]+)/i);
+  const match = text.match(/(?:search|google|find|look up|open|check|analyze|watch|play)\s+(?:for\s+)?["']?([^"'\n]+)/i);
   if (match && match[1]) {
     q = match[1];
   }
-  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+first\s+result(?:\s+that\s+chrome\s+shows)?/gi, "");
-  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+(?:first\s+)?result/gi, "");
+  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+first\s+(?:video\s+)?(?:search\s+)?result(?:\s+screenshot)?(?:\s+that\s+chrome\s+shows)?/gi, "");
+  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+(?:first\s+)?(?:video\s+)?result/gi, "");
   q = q.replace(/\s+(?:and\s+)?take\s+screenshot/gi, "");
   q = q.replace(/\s+(?:and\s+)?show\s+me\s+here/gi, "");
   q = q.replace(/\s+(?:and\s+)?make\s+sure\s+the\s+screenshot\s+contains/gi, "");
@@ -169,10 +171,23 @@ export function resolveNavigationTarget(text: string): {
   q = q.replace(/\s+on\s+chrome/gi, "");
   q = q.replace(/^["']|["']$/g, "").trim();
 
+  // If user asked for YouTube or video
+  if (isYouTube) {
+    let ytQuery = q.replace(/(?:go to\s+)?youtube(?:\.com)?\s*(?:and\s+)?/gi, "").trim();
+    if (!ytQuery) ytQuery = "laxis music";
+    return {
+      targetUrl: `https://www.youtube.com/results?search_query=${encodeURIComponent(ytQuery)}`,
+      cleanTopic: `YouTube Search: "${ytQuery}"`,
+      searchQuery: ytQuery,
+      isChart: false,
+    };
+  }
+
   const cleanQuery = q || "market analysis";
   return {
     targetUrl: `https://www.google.com/search?q=${encodeURIComponent(cleanQuery)}`,
     cleanTopic: cleanQuery,
+    searchQuery: cleanQuery,
     isChart,
   };
 }
@@ -251,42 +266,59 @@ export async function clearScheduledPosts(campaignId: string = "default_campaign
 }
 
 /**
- * Real Infrastructure Action: Terminate / Power Down All Active MicroVMs (Cloud & In-Memory)
+ * Real Infrastructure Action: Safely Pause All Active MicroVMs (Freezes State & Stops Billing at $0 Compute)
+ * NEVER kills sandboxes and NEVER deletes sandboxId records so accounts and files are preserved permanently.
  */
-export async function stopAllAgentSandboxes(campaignId: string = "default_campaign") {
-  // 1. Terminate in-memory cached sandboxes
+export async function pauseAllAgentSandboxes(campaignId: string = "default_campaign") {
+  // 1. Pause in-memory cached sandboxes
   const activeMap: Map<string, any> = (global as any).__activeSandboxes;
   if (activeMap) {
     for (const [key, sb] of activeMap.entries()) {
       try {
-        if (typeof sb.kill === "function") await sb.kill();
-        else if (typeof sb.pause === "function") await sb.pause();
+        if (typeof sb.pause === "function") {
+          await sb.pause();
+        }
       } catch (err) {
-        console.warn(`[AgencyActions] Error stopping memory sandbox ${key}:`, err);
+        console.warn(`[AgencyActions] Notice pausing memory sandbox ${key}:`, err);
       }
     }
     activeMap.clear();
   }
 
-  // 2. Query all active sandboxes from the database and terminate on E2B Cloud
+  // 2. Query all active sandboxes from the database and pause on E2B Cloud ($0 compute)
   try {
     const allDbSandboxes = await db.select().from(agentSandboxes).all();
     for (const s of allDbSandboxes) {
       if (s.sandboxId && apiKey) {
         try {
           const sb = await Sandbox.connect(s.sandboxId, { apiKey });
-          await sb.kill();
-        } catch {}
+          const isAlive = await sb.isRunning();
+          if (isAlive && typeof sb.pause === "function") {
+            await sb.pause();
+            console.log(`[AgencyActions] Cloud microVM ${s.sandboxId} (${s.agentId}) paused successfully.`);
+          }
+        } catch (e: any) {
+          // If already paused or disconnected, harmless
+        }
       }
     }
   } catch (dbErr) {
-    console.warn("[AgencyActions] Cloud sandboxes kill notice:", dbErr);
+    console.warn("[AgencyActions] Cloud sandboxes pause notice:", dbErr);
   }
 
-  // 3. Reset database records
+  // 3. Reset database records: PRESERVE sandboxId permanently! ONLY set status to "paused"
   await db.update(agents).set({ status: "idle", currentTask: null }).run();
-  await db.update(agentSandboxes).set({ status: "paused", sandboxId: null, streamUrl: null, viewUrl: null }).where(eq(agentSandboxes.campaignId, campaignId)).run();
+  await db.update(agentSandboxes)
+    .set({
+      status: "paused",
+      activeAt: new Date().toISOString(),
+    })
+    .where(eq(agentSandboxes.campaignId, campaignId))
+    .run();
 }
+
+// Backward-compatible alias
+export const stopAllAgentSandboxes = pauseAllAgentSandboxes;
 
 /**
  * Real Infrastructure Action: Wake Agent VM PC
@@ -304,7 +336,8 @@ export async function wakeAgentPc(campaignId: string, agentId: string) {
 }
 
 /**
- * Real Infrastructure Action: Total Fast Control of VM (Bypasses Chrome dialogs, renders chart, captures screenshot, runs vision analysis)
+ * Real Infrastructure Action: Total Fast Control of VM
+ * (Bypasses Chrome dialogs, opens target directly, verifies window visibility, captures screenshot, runs vision analysis)
  */
 export async function executeAgentChromeTask(
   campaignId: string,
@@ -339,12 +372,7 @@ export async function executeAgentChromeTask(
         touch /home/user/.config/google-chrome/"First Run"
       `).catch(() => {});
 
-      // Step B: Open target URL using sb.open
-      if (typeof activeSb.open === "function") {
-        await activeSb.open(targetUrl);
-      }
-
-      // Step C: Also ensure Chrome is launched on DISPLAY=:0 with all first-run suppress flags
+      // Step B: Launch Google Chrome directly with the target URL maximized
       if (activeSb.commands?.run) {
         await activeSb.commands.run(
           `DISPLAY=:0 nohup google-chrome \
@@ -361,23 +389,51 @@ export async function executeAgentChromeTask(
         ).catch(() => {});
       }
 
-      // Step D: Wait 3.5s for page and chart to render
-      await new Promise((r) => setTimeout(r, 3500));
-
-      // Step E: Press Enter via xdotool to dismiss any residual modal
-      if (activeSb.commands?.run) {
-        await activeSb.commands.run("DISPLAY=:0 xdotool key Return 2>/dev/null || true").catch(() => {});
+      // Step C: Also execute open as desktop fallback
+      if (typeof activeSb.open === "function") {
+        await activeSb.open(targetUrl).catch(() => {});
       }
-      await new Promise((r) => setTimeout(r, 1000));
+
+      // Step D: Wait 4.5s for page to render
+      await new Promise((r) => setTimeout(r, 4500));
+
+      // Step E: Ensure Chrome or browser window is focused and active on X11
+      if (activeSb.commands?.run) {
+        await activeSb.commands.run(`
+          DISPLAY=:0 xdotool search --onlyvisible --class google-chrome windowactivate --sync 2>/dev/null || \
+          DISPLAY=:0 xdotool search --onlyvisible --class firefox windowactivate --sync 2>/dev/null || true
+          DISPLAY=:0 xdotool key Return 2>/dev/null || true
+        `).catch(() => {});
+      }
+      await new Promise((r) => setTimeout(r, 1200));
 
       // Step F: Capture real workstation screenshot
       if (typeof activeSb.screenshot === "function") {
-        const shotBuffer = await activeSb.screenshot();
+        let shotBuffer = await activeSb.screenshot();
         if (shotBuffer && shotBuffer.length > 0) {
-          screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
-
-          // Step G: Multi-modal Vision Verification & Technical Analysis
           visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, cleanTopic);
+
+          // If vision detects it's only desktop wallpaper with no window, force window activation & retry
+          if (
+            visualAnalysis.toLowerCase().includes("wallpaper") ||
+            (visualAnalysis.toLowerCase().includes("desktop") && !visualAnalysis.toLowerCase().includes("browser") && !visualAnalysis.toLowerCase().includes("result"))
+          ) {
+            console.log("[AgencyActions] Desktop wallpaper detected, activating browser window and re-capturing...");
+            if (activeSb.commands?.run) {
+              await activeSb.commands.run(`
+                DISPLAY=:0 xdotool search --onlyvisible --class google-chrome windowactivate --sync 2>/dev/null || \
+                DISPLAY=:0 xdotool search --onlyvisible --class firefox windowactivate --sync 2>/dev/null || true
+              `).catch(() => {});
+            }
+            await new Promise((r) => setTimeout(r, 2000));
+            const retryBuffer = await activeSb.screenshot();
+            if (retryBuffer && retryBuffer.length > 0) {
+              shotBuffer = retryBuffer;
+              visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, cleanTopic);
+            }
+          }
+
+          screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
         }
       }
     } catch (err: any) {
@@ -453,30 +509,54 @@ export async function handleAgencyExecutiveCommand(
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
 
-  // 1. Immediate Action: STOP / POWER OFF / SHUT DOWN / KILL VM / RESET AGENTS
-  // e.g. "Just power off the vm and the agent too..today don't allocate any posting", "stop them", "pause the vm", "stop vm", "kill vm"
+  // 1. Immediate Action: STOP / PAUSE / SWITCH OFF / POWER OFF / KILL VM / RESET AGENTS
+  // Handles: "switch of that vm", "switch off that vm", "power off", "pause the vm", "it is still running", etc.
   const isStopCommand =
-    /(?:power\s*off|power\s*down|stop|pause|shut\s*down|turn\s*off|kill|standby|halt|freeze)\s+(?:the\s+vm|it\s+plus\s+vm|it\s+and\s+vm|the\s+agent|vm|pc|all|all\s+agents|agent|agents|them|chrome)/i.test(
+    /(?:power\s*of+|stop|pause|shut\s*down|turn\s*of+|kill|standby|halt|freeze|switch\s*of+)\s+(?:the\s+vm|that\s+vm|it\s+plus\s+vm|it\s+and\s+vm|the\s+agent|vm|pc|all|all\s+agents|agent|agents|them|chrome)/i.test(
       lower
     ) ||
     lower === "stop" ||
+    lower === "stop it" ||
     lower === "stop them" ||
     lower === "power off" ||
+    lower === "power of" ||
+    lower === "switch of" ||
+    lower === "switch off" ||
+    lower === "switch of that vm" ||
+    lower === "switch off that vm" ||
+    lower === "switch of vm" ||
+    lower === "switch off vm" ||
+    lower === "pause" ||
+    lower === "pause it" ||
+    lower === "pause vm" ||
+    lower === "pause the vm" ||
+    lower.startsWith("switch of") ||
+    lower.startsWith("switch off") ||
     lower.startsWith("power off") ||
+    lower.startsWith("power of") ||
+    lower.startsWith("turn off") ||
+    lower.startsWith("turn of") ||
     lower.startsWith("stop it") ||
+    lower.includes("switch of that vm") ||
+    lower.includes("switch off that vm") ||
     lower.includes("power off the vm") ||
+    lower.includes("power of the vm") ||
     lower.includes("pause the vm") ||
+    lower.includes("pause that vm") ||
     lower.includes("stop vm") ||
     lower.includes("stop them") ||
     lower.includes("stop the agents") ||
     lower.includes("told you to stop them") ||
     lower.includes("told you to pause") ||
     lower.includes("stop it plus vm") ||
+    lower.includes("it is still running") ||
+    lower.includes("its still running") ||
+    lower.includes("still running") ||
     lower.includes("can see it running") ||
     (lower.includes("still") && lower.includes("active") && lower.includes("why"));
 
   if (isStopCommand) {
-    await stopAllAgentSandboxes(campaignId);
+    await pauseAllAgentSandboxes(campaignId);
 
     // If user also requested to clear schedule/don't post today
     if (lower.includes("don't allocate") || lower.includes("dont allocate") || lower.includes("no posts") || lower.includes("clear schedule")) {
@@ -485,7 +565,7 @@ export async function handleAgencyExecutiveCommand(
 
     return {
       handled: true,
-      replyText: `🛑 **All MicroVMs & Agents Powered Off!**\n\nI have forced a hard power-off on all active cloud sandboxes and terminated all Chrome sessions.\n\n• **MicroVMs:** Powered down ($0 compute mode)\n• **Agent Statuses:** All reset to Resting/Idle\n• **Schedule:** Paused (No posts will drop)\n• **State & Memory:** Securely preserved in vault.`,
+      replyText: `🛑 **Agent PC Paused ($0 Compute Mode)**\n\nI have securely paused the cloud microVM and frozen all browser sessions.\n\n• **MicroVM Status:** Paused ($0 compute)\n• **State & Memory:** Opened tabs, logins, and cookies 100% preserved in persistent sandbox\n• **Agent Status:** Resting / Idle\n• **Posting Schedule:** Preserved in vault`,
     };
   }
 
@@ -548,15 +628,14 @@ export async function handleAgencyExecutiveCommand(
     if (latestTask && latestTask.status === "completed") {
       return {
         handled: true,
-        replyText: `✅ **Task Completed!**\n\n• **Task:** ${latestTask.title}\n• **Outcome:** ${latestTask.output || "Complete"}\n\nThe browser task has finished and the deliverable is saved. The typing animation has stopped. If you want to shut down the microVM completely, just reply "power off vm".`,
+        replyText: `✅ **Task Completed!**\n\n• **Task:** ${latestTask.title}\n• **Outcome:** ${latestTask.output || "Complete"}\n\nThe browser task has finished and the deliverable is saved. The typing animation has stopped. If you want to pause the microVM, reply "switch off that vm".`,
       };
     }
   }
 
-  // 5. Action: Manual PC Wake, Chrome Search & Technical Chart Analysis instruction
-  // e.g. "Use INSTA REAL and go to chrome tradingview.com website search gold /usd graph and take screenshot..make sure the screenshot contains the graph and show me here"
+  // 5. Action: Manual PC Wake, Chrome Search & Technical Analysis instruction
   const isWakeCommand = /(wake|turn on|boot|spin up|start|tell|command|use)\s+(agent\s+)?([a-zA-Z_ ]+)/i.test(lower);
-  const mentionsBrowser = /(search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview)/i.test(lower);
+  const mentionsBrowser = /(search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play)/i.test(lower);
 
   if (isWakeCommand || (mentionsBrowser && (lower.includes("agent") || lower.includes("contentor") || lower.includes("jotrainer") || lower.includes("laxdollar") || lower.includes("shader") || lower.includes("real")))) {
     const targetAgentId = extractAgentFromPrompt(text);
