@@ -758,21 +758,26 @@ HUMAN-LIKE DECISION LOGIC:
    - What page or website is currently shown?
    - If a cookie banner, modal, or prompt is blocking the page:
      -> Action: "click" (x, y coordinates of the 'X' / 'Dismiss' / 'Accept' button).
-   - If the user's objective is already fulfilled and the desired results/accounts/content are rendered:
-     -> Action: "done". In "summary", list the factual findings visible on screen.
-   - If you need to search:
-     a. If the search box or search icon (magnifying glass) is NOT yet focused:
-        -> Action: "click" (x, y coordinates of the search icon or search bar).
-     b. If the search box is focused / active:
-        -> Action: "type" with text: "${searchQuery}", pressEnter: true.
+2. FORM FILLING & INPUT FIELDS:
+   - If the user objective involves entering an email or text, look for the input field. If it is empty or not yet submitted:
+     -> Action: "type" with text: (the requested email or value), pressEnter: false.
+3. BUTTON CLICKS (Sign Up, Next, Submit, Continue, Log In):
+   - If the user objective involves clicking a button (such as 'Sign up for GitHub', 'Next', 'Submit', 'Continue'):
+     -> Action: "click" (x, y coordinates of that button).
+4. SEARCHING:
+   - a. If the search box or search icon (magnifying glass) is NOT yet focused:
+      -> Action: "click" (x, y coordinates of the search icon or search bar).
+   - b. If the search box is focused / active:
+      -> Action: "type" with text: "${searchQuery}", pressEnter: true.
+5. TABS & CATEGORIES:
    - If search results are loaded, but the user requested a specific category (e.g. 'People' / 'Accounts' on X, 'Groups' on Facebook, 'Repositories' on GitHub):
      -> Action: "click" (x, y coordinates of that tab).
-   - If the task is to unfollow/follow:
-     -> Look for the 'Following' or 'Follow' button and click it, then confirm in any popup dialog.
-   - If the page is still loading or rendering:
-     -> Action: "wait", ms: 2000.
-   - If scrolling is needed to reveal more results:
-     -> Action: "scroll", direction: "down", amount: 3.
+6. OBJECTIVE COMPLETION:
+   - ONLY return "done" IF the user objective (e.g. typing email, clicking button, searching query) has ACTUALLY been completed and the resulting page is visible on screen!
+   - NEVER return "done" if an input field is still empty, or if the search hasn't happened, or if you are merely staring at the empty homepage!
+7. PAGE RENDERING / SCROLLING:
+   - If the page is still loading or rendering: Action: "wait", ms: 2000.
+   - If scrolling is needed to reveal more results: Action: "scroll", direction: "down", amount: 3.
 
 Return ONLY a valid JSON object matching this schema:
 {
@@ -874,7 +879,43 @@ export async function executeAgentChromeTask(
       }
       await new Promise((r) => setTimeout(r, 1000));
 
-      // Step D: Execute primary task intent via CDP (high-speed, rock-solid DOM automation)
+      // Step D: Execute in-page intelligent typing & button clicks via CDP
+      const promptLower = rawPrompt.toLowerCase();
+      const emailMatch = rawPrompt.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+      const emailToType = emailMatch ? emailMatch[0] : "";
+
+      if (emailToType) {
+        console.log(`[AgencyActions] In-page CDP typing email: "${emailToType}"`);
+        await cdpTypeInput(activeSb, emailToType);
+        actionHistory.push(`Typed email "${emailToType}" into input field`);
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+
+      // Check for button click instructions (e.g. "sign up", "next", "submit", "continue", "login")
+      let buttonTarget = "";
+      if (promptLower.includes("sign up") || promptLower.includes("signup")) {
+        buttonTarget = "Sign up";
+      } else if (promptLower.includes("click next") || promptLower.includes("press next")) {
+        buttonTarget = "Next";
+      } else if (promptLower.includes("click submit") || promptLower.includes("press submit")) {
+        buttonTarget = "Submit";
+      } else if (promptLower.includes("click continue") || promptLower.includes("press continue")) {
+        buttonTarget = "Continue";
+      } else if (promptLower.includes("click log in") || promptLower.includes("click login")) {
+        buttonTarget = "Log in";
+      } else {
+        const btnM = rawPrompt.match(/click\s+(?:the\s+)?["']?([a-zA-Z0-9_ ]+?)(?:\s+button)?["']?(?:\s+then|$)/i);
+        if (btnM) buttonTarget = btnM[1].trim();
+      }
+
+      if (buttonTarget) {
+        console.log(`[AgencyActions] In-page CDP clicking button: "${buttonTarget}"`);
+        await cdpClickText(activeSb, buttonTarget);
+        actionHistory.push(`Clicked "${buttonTarget}" button`);
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+
+      // Step E: Execute primary task intent via CDP (high-speed, rock-solid DOM automation)
       if (intentType === "search" && searchQuery) {
         console.log(`[AgencyActions] Executing CDP Smart Search for "${searchQuery}" (targetTab: ${targetTab || "all"})...`);
         await cdpSearch(activeSb, searchQuery, targetTab);
@@ -1575,6 +1616,16 @@ export async function handleAgencyExecutiveCommand(
     const displayName = getAgentDisplayName(targetAgentId);
     if (contextId) lastActiveAgentByContext.set(contextId, targetAgentId);
 
+    const activeMap: Map<string, any> = (global as any).__activeSandboxes;
+    const isAlreadyAwake = Boolean(activeMap && activeMap.has(`${campaignId}_${targetAgentId}`));
+
+    if (isAlreadyAwake) {
+      return {
+        handled: true,
+        replyText: `⚡ **${displayName}**'s PC is already booted and running! Google Chrome and Live VNC are active on DISPLAY=:0. What task would you like ${displayName} to execute?`,
+      };
+    }
+
     const alreadyAuthorized = lower.includes("confirm") || lower.includes("authorize");
     if (alreadyAuthorized) {
       const sb = await wakeAgentPc(campaignId, targetAgentId);
@@ -1605,8 +1656,13 @@ export async function handleAgencyExecutiveCommand(
     const plan = await planAutonomousTask(text);
     const { cleanTopic, isChart } = plan;
 
-    // Check if user already gave double authorization in this very message
+    // Check if target VM is ALREADY AWAKE & RUNNING in this session!
+    const activeMap: Map<string, any> = (global as any).__activeSandboxes;
+    const isAlreadyAwake = Boolean(activeMap && activeMap.has(`${campaignId}_${targetAgentId}`));
+
+    // Once authorized or already awake, never ask for authorization again!
     const alreadyAuthorized =
+      isAlreadyAwake ||
       lower.includes("double authorize") ||
       lower.includes("double authorization") ||
       lower.includes("force wake") ||

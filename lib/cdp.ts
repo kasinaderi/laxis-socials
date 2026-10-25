@@ -189,19 +189,44 @@ class CDPClient:
             time.sleep(2.5)
             self.click_text(target_tab)
 
+        # Resilient Fallback: If no search input was found or modal didn't open, navigate directly to platform search URL
+        if not res or not res.get("success"):
+            try:
+                current_url = str(self.evaluate("window.location.href") or "")
+                if "github.com" in current_url:
+                    tab_param = f"&type={target_tab}" if target_tab and target_tab != "all" else "&type=repositories"
+                    self.navigate(f"https://github.com/search?q={clean_q}{tab_param}")
+                    time.sleep(3.0)
+                    return {"success": True, "mode": "navigated_search_fallback"}
+                elif "reddit.com" in current_url:
+                    self.navigate(f"https://www.reddit.com/search/?q={clean_q}")
+                    time.sleep(3.0)
+                    return {"success": True, "mode": "navigated_search_fallback"}
+                elif "medium.com" in current_url:
+                    self.navigate(f"https://medium.com/search?q={clean_q}")
+                    time.sleep(3.0)
+                    return {"success": True, "mode": "navigated_search_fallback"}
+                elif "x.com" in current_url or "twitter.com" in current_url:
+                    tab_param = "&f=user" if target_tab == "people" else ""
+                    self.navigate(f"https://x.com/search?q={clean_q}{tab_param}")
+                    time.sleep(3.0)
+                    return {"success": True, "mode": "navigated_search_fallback"}
+            except Exception as e:
+                pass
+
         return res
 
     def click_text(self, text_to_find):
         js = f"""(() => {{
             const target = "{text_to_find}".toLowerCase();
-            const elements = Array.from(document.querySelectorAll('a, button, span, div[role="tab"]'));
+            const elements = Array.from(document.querySelectorAll('a, button, span, div[role="tab"], input[type="submit"]'));
             for (const el of elements) {{
                 if (el.offsetParent !== null) {{
-                    const t = (el.innerText || '').trim().toLowerCase();
-                    if (t === target || t.startsWith(target)) {{
+                    const t = (el.innerText || el.value || '').trim().toLowerCase();
+                    if (t === target || t.startsWith(target) || t.includes(target)) {{
                         el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
                         el.click();
-                        return {{ success: true, clicked: el.innerText.trim() }};
+                        return {{ success: true, clicked: (el.innerText || el.value || '').trim() }};
                     }}
                 }}
             }}
@@ -214,13 +239,14 @@ class CDPClient:
         js = f"""(() => {{
             const val = "{clean}";
             const selectors = [
-                'input[autocomplete*="username" i]',
+                'input[id*="email" i]',
+                'input[name*="email" i]',
                 'input[autocomplete*="email" i]',
-                'input[name="text"]',
                 'input[type="email"]',
-                'input[name="username"]',
-                'input[name="email"]',
                 'input[placeholder*="email" i]',
+                'input[autocomplete*="username" i]',
+                'input[name="text"]',
+                'input[name="username"]',
                 'input[placeholder*="phone" i]',
                 'input[type="text"]',
                 'input:not([type="hidden"])',
