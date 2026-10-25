@@ -309,7 +309,8 @@ export async function launchChromeWithCdp(sb: any, initialUrl: string): Promise<
         --remote-debugging-port=9222 \
         --remote-debugging-address=127.0.0.1 \
         --remote-allow-origins=* \
-        --user-data-dir=/tmp/chrome_profile \
+        --user-data-dir=/home/user/.config/google-chrome \
+        --disable-blink-features=AutomationControlled \
         --test-type \
         --disable-infobars \
         --silent-debugger-extension-api \
