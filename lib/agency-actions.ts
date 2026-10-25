@@ -264,20 +264,26 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
   const isInstagram = !mentionsInstaAgentOnly && (lower.includes("instagram") || /\binsta\b/.test(lower));
 
   if (isInstagram) {
-    let igQuery = "";
-    const match = text.match(/(?:unfollow|follow|searrch|search|find|profile)\s+["']?([a-zA-Z0-9_\-\.]+)/i);
-    if (match && match[1]) {
-      igQuery = match[1];
-    }
-    igQuery = cleanQueryText(igQuery);
-    if (!igQuery) igQuery = "wakanugu";
     const isUnfollow = lower.includes("unfollow");
     const isFollow = lower.includes("follow") && !isUnfollow;
+    const countMatch = lower.match(/(?:unfollow|follow)\s+(\d+|five|ten|three|four|two)\s+(?:people|accounts|users|creators|profiles)?/i);
 
+    let igQuery = "";
+    if (countMatch) {
+      igQuery = ""; // Multi-account action, not a single username search
+    } else {
+      const match = text.match(/(?:unfollow|follow|searrch|search|find|profile)\s+["']?([a-zA-Z0-9_\-\.]+)/i);
+      if (match && match[1]) {
+        igQuery = match[1];
+      }
+      igQuery = cleanQueryText(igQuery);
+    }
+
+    const countLabel = countMatch ? `${isUnfollow ? "Unfollow" : "Follow"} ${countMatch[1]} accounts` : "";
     return {
       baseUrl: "https://www.instagram.com",
       targetUrl: "https://www.instagram.com",
-      cleanTopic: isUnfollow ? `Instagram Unfollow: "${igQuery}"` : isFollow ? `Instagram Follow: "${igQuery}"` : `Instagram: "${igQuery}"`,
+      cleanTopic: countLabel ? `Instagram: ${countLabel}` : isUnfollow ? `Instagram Unfollow: "${igQuery || "target"}"` : isFollow ? `Instagram Follow: "${igQuery || "target"}"` : `Instagram: "${igQuery || "feed"}"`,
       searchQuery: igQuery,
       platform: "instagram",
       intentType: isUnfollow ? "unfollow" : isFollow ? "follow" : "search",
@@ -726,7 +732,7 @@ export interface ComputerUseDecision {
 
 /**
  * Multimodal Computer-Use Reasoning: Decides next physical mouse/keyboard action or signals completion
- * Guides the agent like a human operator (clicking search bar, typing query, selecting tabs)
+ * Guides the agent like a human operator - handles complex multi-step objectives autonomously
  */
 export async function decideNextComputerUseAction(
   screenshotBuffer: Buffer | Uint8Array,
@@ -737,62 +743,102 @@ export async function decideNextComputerUseAction(
   targetTab: string,
   currentStep: number,
   maxSteps: number,
-  history: string[]
+  history: string[],
+  progressTracker?: string  // Tracks sub-goal progress (e.g. "followed 2 of 5")
 ): Promise<ComputerUseDecision> {
   try {
-    const promptText = `You are the autonomous computer-use brain of AGENTLAX operating a real desktop PC with Chrome (screen resolution 1024x768).
-You act like a careful human user operating a web browser so accounts remain safe and never trigger bot flags.
+    const promptText = `You are the autonomous computer-use brain of AGENTLAX — a highly intelligent AI agent operating a real desktop PC (screen resolution 1024x768) inside a Linux VM with Google Chrome running.
 
-USER OBJECTIVE: "${userObjective}"
-TASK: ${topic}
-SEARCH QUERY TO TYPE: "${searchQuery}"
-TASK INTENT: ${intentType}
-TARGET TAB/CATEGORY: ${targetTab}
-CURRENT STEP: ${currentStep} of ${maxSteps}
+You think and reason exactly like a professional human VA (virtual assistant) would when completing browser tasks. You are self-directed, you do NOT wait for instructions between steps, and you figure out the full procedure yourself from the original objective.
 
-ACTION HISTORY:
-${history.length > 0 ? history.map((h, i) => `${i + 1}. ${h}`).join("\n") : "Browser opened to homepage"}
+═══════════════════════════════════════
+ORIGINAL USER OBJECTIVE: "${userObjective}"
+CURRENT TASK CONTEXT: ${topic}
+SEARCH/QUERY VALUE: "${searchQuery}"
+INTENT TYPE: ${intentType}
+STEP: ${currentStep} / ${maxSteps}
+PROGRESS: ${progressTracker || "Starting task"}
+═══════════════════════════════════════
 
-HUMAN-LIKE DECISION LOGIC:
-1. Examine the current workstation screenshot:
-   - What page or website is currently shown?
-   - If a cookie banner, modal, or prompt is blocking the page:
-     -> Action: "click" (x, y coordinates of the 'X' / 'Dismiss' / 'Accept' button).
-2. FORM FILLING & INPUT FIELDS:
-   - If the user objective involves entering an email or text, look for the input field. If it is empty or not yet submitted:
-     -> Action: "type" with text: (the requested email or value), pressEnter: false.
-3. BUTTON CLICKS (Sign Up, Next, Submit, Continue, Log In):
-   - If the user objective involves clicking a button (such as 'Sign up for GitHub', 'Next', 'Submit', 'Continue'):
-     -> Action: "click" (x, y coordinates of that button).
-4. SEARCHING:
-   - a. If the search box or search icon (magnifying glass) is NOT yet focused:
-      -> Action: "click" (x, y coordinates of the search icon or search bar).
-   - b. If the search box is focused / active:
-      -> Action: "type" with text: "${searchQuery}", pressEnter: true.
-5. TABS & CATEGORIES:
-   - If search results are loaded, but the user requested a specific category (e.g. 'People' / 'Accounts' on X, 'Groups' on Facebook, 'Repositories' on GitHub):
-     -> Action: "click" (x, y coordinates of that tab).
-6. OBJECTIVE COMPLETION:
-   - ONLY return "done" IF the user objective (e.g. typing email, clicking button, searching query) has ACTUALLY been completed and the resulting page is visible on screen!
-   - NEVER return "done" if an input field is still empty, or if the search hasn't happened, or if you are merely staring at the empty homepage!
-7. PAGE RENDERING / SCROLLING:
-   - If the page is still loading or rendering: Action: "wait", ms: 2000.
-   - If scrolling is needed to reveal more results: Action: "scroll", direction: "down", amount: 3.
+ACTION HISTORY (what has already been done):
+${history.length > 0 ? history.map((h, i) => `  ${i + 1}. ${h}`).join("\n") : "  (None yet — task just started)"}
 
-Return ONLY a valid JSON object matching this schema:
+═══════════════════════════════════════
+YOUR REASONING PROCESS (think step by step before deciding):
+
+STEP 1 — ASSESS SCREEN STATE:
+  Look carefully at the current screenshot. Identify:
+  - What website or app is visible?
+  - What is the current page state (homepage, search results, profile page, feed, login screen, popup, etc.)?
+  - Is there anything blocking progress (cookie banner, popup, modal, captcha)?
+
+STEP 2 — CHECK PROGRESS AGAINST OBJECTIVE:
+  Compare the current screen state against the original objective.
+  - What sub-task has been completed so far?
+  - What is the NEXT logical human action needed?
+  - For multi-step tasks (e.g. "follow 5 people"): track how many steps are done vs. remaining.
+
+STEP 3 — DECIDE THE NEXT SINGLE ACTION:
+  Choose the ONE next action a careful, natural human would take:
+
+  A) POPUPS / BANNERS blocking the view:
+     → click the X, Dismiss, Accept, or Close button.
+
+  B) COOKIE / CONSENT DIALOG:
+     → click "Accept All", "Allow", or "I agree".
+
+  C) SEARCH TASK: need to find someone or something:
+     - If search icon/bar visible but not active → click the search icon.
+     - If search bar is focused/open → type the query, pressEnter: true.
+
+  D) PROFILE / ACCOUNT NAVIGATION (Instagram, X, Facebook):
+     - If on a search results page showing profiles → click the first relevant profile.
+     - If on a profile page:
+       * To FOLLOW: click the "Follow" button.
+       * To UNFOLLOW: click "Following" then confirm "Unfollow".
+     - After following, use BROWSER BACK or navigate to search results to find the next person.
+
+  E) MULTI-FOLLOW TASK ("follow 5 people", "follow top accounts"):
+     - Follow one account per step. After each follow:
+       → navigate back to the search or explore page and follow the next.
+     - Track count in the "reason" field.
+     - Only mark "done" when ALL requested follows/unfollows are complete.
+
+  F) FORM FILLING (sign up, login, email input):
+     - Find the relevant input field and type the value.
+     - If button visible → click it after typing.
+
+  G) SCROLL needed to find content or buttons:
+     → scroll down.
+
+  H) PAGE LOADING / WAITING:
+     → wait 2000ms.
+
+  I) OBJECTIVE FULLY COMPLETE:
+     → action: "done". Provide a detailed summary of everything accomplished.
+     ⚠️ NEVER mark done prematurely. Only "done" when the complete objective is achieved.
+
+IMPORTANT RULES:
+- Make exactly ONE decision per step (one click, one type, one scroll, etc.)
+- Use EXACT pixel coordinates from the screenshot for clicks
+- Never hallucinate coordinates — only click on things you can see in the screenshot
+- For Instagram/X/Facebook: navigate using back button or URL changes, not link text
+
+═══════════════════════════════════════
+Return ONLY a valid JSON object:
 {
   "action": "done" | "click" | "type" | "press_key" | "scroll" | "navigate" | "wait",
-  "x": number,
-  "y": number,
-  "text": string,
-  "pressEnter": boolean,
-  "key": string,
+  "x": <pixel x coordinate for click>,
+  "y": <pixel y coordinate for click>,
+  "text": "<text to type>",
+  "pressEnter": <true|false>,
+  "key": "<key name for press_key>",
   "direction": "down" | "up",
-  "amount": number,
-  "url": string,
-  "ms": number,
-  "reason": "Clear explanation of this human step",
-  "summary": "Factual breakdown if done"
+  "amount": <scroll steps>,
+  "url": "<url for navigate action>",
+  "ms": <milliseconds for wait>,
+  "reason": "<single sentence: what you see and why this is the next action>",
+  "summary": "<only if done: full breakdown of everything completed>"
 }`;
 
     const contents = [
@@ -807,7 +853,7 @@ Return ONLY a valid JSON object matching this schema:
 
     const aiPromise = generateWithFallback(contents);
     const timeoutPromise = new Promise<string>((_, reject) =>
-      setTimeout(() => reject(new Error("Vision reasoning timeout")), 4500)
+      setTimeout(() => reject(new Error("Vision reasoning timeout")), 6000)
     );
 
     const aiRes = await Promise.race([aiPromise, timeoutPromise]);
@@ -816,6 +862,7 @@ Return ONLY a valid JSON object matching this schema:
       if (match) {
         const parsed = JSON.parse(match[0]);
         if (parsed.action) {
+          console.log(`[ComputerUse] Step ${currentStep}: ${parsed.action} — ${parsed.reason || ""}`);
           return parsed as ComputerUseDecision;
         }
       }
@@ -824,10 +871,11 @@ Return ONLY a valid JSON object matching this schema:
     console.warn(`[ComputerUse] Decision notice (step ${currentStep}):`, err.message);
   }
 
-  // Fallback: If step 1 or timeout, mark done so screen is delivered cleanly
+  // Fallback: continue waiting rather than quitting early
   return {
-    action: "done",
-    summary: `Workstation browser loaded ${topic}. Verified live screen.`,
+    action: "wait",
+    ms: 2000,
+    reason: "Waiting for page to render before next decision",
   };
 }
 
@@ -934,10 +982,14 @@ export async function executeAgentChromeTask(
         await new Promise((r) => setTimeout(r, 2000));
       }
 
-      // Step F: Iterative Autonomous Human-Like Reasoning Loop (up to 5 steps)
-      const maxSteps = 5;
+      // Step F: Iterative Autonomous Human-Like Reasoning Loop
+      // Complex multi-step tasks (follow 5 people, post content, fill forms) get up to 25 steps
+      const isComplexTask =
+        /follow\s+\d+|unfollow\s+\d+|follow\s+(?:five|ten|three|four|two)|post\s+(?:a\s+)?(?:video|photo|image|reel|story)|sign\s+up|create\s+(?:an?\s+)?account|comment\s+on\s+\d+|like\s+\d+/i.test(rawPrompt);
+      const maxSteps = isComplexTask ? 25 : 8;
       let lastShotBuffer: Uint8Array | null = null;
       let finalDecisionSummary = "";
+      let progressTracker = `Starting: ${cleanTopic}`;
 
       for (let step = 1; step <= maxSteps; step++) {
         let shotBuffer: Uint8Array | null = null;
@@ -966,12 +1018,18 @@ export async function executeAgentChromeTask(
           targetTab || "all",
           step,
           maxSteps,
-          actionHistory
+          actionHistory,
+          progressTracker
         );
 
         if (decision.action === "done") {
           finalDecisionSummary = decision.summary || "";
           break;
+        }
+
+        // Update progress tracker from reason field
+        if (decision.reason) {
+          progressTracker = decision.reason;
         }
 
         try {
@@ -986,6 +1044,16 @@ export async function executeAgentChromeTask(
             actionHistory.push(`Clicked at (${decision.x}, ${decision.y}): ${decision.reason || "element interact"}`);
             await new Promise((r) => setTimeout(r, 1000));
           } else if (decision.action === "type" && decision.text) {
+            if (typeof decision.x === "number" && typeof decision.y === "number") {
+              if (activeSb.commands?.run) {
+                await activeSb.commands.run(
+                  `DISPLAY=:0 xdotool mousemove ${decision.x} ${decision.y} click 1 2>/dev/null || true`
+                );
+              } else if (typeof activeSb.leftClick === "function") {
+                await activeSb.leftClick(decision.x, decision.y);
+              }
+              await new Promise((r) => setTimeout(r, 400));
+            }
             if (activeSb.commands?.run) {
               await activeSb.commands.run(
                 `DISPLAY=:0 xdotool type --delay 35 "${decision.text.replace(/"/g, '\\"')}" 2>/dev/null || true`
