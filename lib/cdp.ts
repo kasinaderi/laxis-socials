@@ -209,6 +209,37 @@ class CDPClient:
         }})()"""
         return self.evaluate(js)
 
+    def type_into_input(self, text):
+        clean = text.strip().replace('"', '\\"')
+        js = f"""(() => {{
+            const val = "{clean}";
+            const selectors = [
+                'input[autocomplete*="username" i]',
+                'input[autocomplete*="email" i]',
+                'input[name="text"]',
+                'input[type="email"]',
+                'input[name="username"]',
+                'input[name="email"]',
+                'input[placeholder*="email" i]',
+                'input[placeholder*="phone" i]',
+                'input[type="text"]',
+                'input:not([type="hidden"])',
+                'textarea'
+            ];
+            for (const s of selectors) {{
+                const el = document.querySelector(s);
+                if (el && el.offsetParent !== null) {{
+                    el.focus();
+                    el.value = val;
+                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    return {{ success: true, selector: s, value: el.value }};
+                }}
+            }}
+            return {{ success: false, reason: "No visible input element found" }};
+        }})()"""
+        return self.evaluate(js)
+
     def close(self):
         try:
             self.ws.close()
@@ -234,6 +265,9 @@ if __name__ == "__main__":
         elif cmd == "click":
             txt = sys.argv[2]
             print(json.dumps(client.click_text(txt)))
+        elif cmd == "type":
+            txt = sys.argv[2]
+            print(json.dumps(client.type_into_input(txt)))
         elif cmd == "eval":
             expr = sys.argv[2]
             print(json.dumps(client.evaluate(expr)))
@@ -399,6 +433,32 @@ export async function cdpEvaluate(sb: any, jsExpression: string): Promise<any> {
   if (!sb?.commands?.run) return null;
   try {
     const res = await sb.commands.run(`python3 /home/user/cdp_controller.py eval "${jsExpression.replace(/"/g, '\\"')}" 2>&1`);
+    return res.stdout ? JSON.parse(res.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Type text into the primary visible input field on active page via CDP
+ */
+export async function cdpTypeInput(sb: any, text: string): Promise<any> {
+  if (!sb?.commands?.run) return null;
+  try {
+    const res = await sb.commands.run(`python3 /home/user/cdp_controller.py type "${text.replace(/"/g, '\\"')}" 2>&1`);
+    return res.stdout ? JSON.parse(res.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Dispatch Enter key event via CDP
+ */
+export async function cdpPressEnter(sb: any): Promise<any> {
+  if (!sb?.commands?.run) return null;
+  try {
+    const res = await sb.commands.run("python3 /home/user/cdp_controller.py enter 2>&1");
     return res.stdout ? JSON.parse(res.stdout) : null;
   } catch {
     return null;
