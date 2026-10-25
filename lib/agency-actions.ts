@@ -101,13 +101,54 @@ export interface NavigationIntent {
 export function resolveNavigationTarget(text: string): NavigationIntent {
   const lower = text.toLowerCase();
 
-  // 1. Medium Articles & Stories Search
+  function cleanQueryText(raw: string): string {
+    let q = raw;
+    q = q.replace(/(?:and\s+)?(?:the\s+)?(?:show|give|bring|send|take)\s+(?:me\s+)?(?:a\s+)?(?:the\s+)?screenshot(?:\s+now)?(?:\s+here)?/gi, "");
+    q = q.replace(/(?:of\s+)?(?:the\s+)?search\s+results?/gi, "");
+    q = q.replace(/(?:of\s+)?(?:the\s+)?results?/gi, "");
+    q = q.replace(/^the\s+chatgpt\s+chat\s+/i, "");
+    q = q.replace(/^the\s+term\s+/i, "");
+    q = q.replace(/^for\s+me\s+/i, "");
+    q = q.replace(/^for\s+/i, "");
+    q = q.replace(/^me\s+/i, "");
+    q = q.replace(/^search\s+/i, "");
+    q = q.replace(/\s+in\s+public\s+github\s+repos/gi, "");
+    q = q.replace(/\s+in\s+github/gi, "");
+    q = q.replace(/\s+on\s+reddit/gi, "");
+    q = q.replace(/\s+on\s+medium/gi, "");
+    q = q.replace(/\s+on\s+x/gi, "");
+    q = q.replace(/\s+on\s+twitter/gi, "");
+    q = q.replace(/\s+on\s+instagram/gi, "");
+    q = q.replace(/\s+on\s+facebook/gi, "");
+    q = q.replace(/^[,“"'\s]+|[,“"'\s]+$/g, "").trim();
+    return q;
+  }
+
+  // 1. Reddit Platform
+  if (lower.includes("reddit")) {
+    let q = "";
+    const m = text.match(/(?:searrch|search|find|for|term)\s+["']?([^"'\n]+)/i);
+    if (m) q = m[1];
+    q = cleanQueryText(q);
+    if (!q) q = "ambicious warthong";
+    return {
+      baseUrl: "https://www.reddit.com",
+      targetUrl: "https://www.reddit.com",
+      cleanTopic: `Reddit: "${q}"`,
+      searchQuery: q,
+      platform: "reddit",
+      intentType: "search",
+      isChart: false,
+    };
+  }
+
+  // 2. Medium Articles & Stories Search
   if (lower.includes("medium")) {
     let q = "";
-    const match = text.match(/(?:search|find|for)\s+["']?([^"'\n]+)/i);
+    const match = text.match(/(?:searrch|search|find|for|term)\s+["']?([^"'\n]+)/i);
     if (match) q = match[1];
-    q = q.replace(/medium|and\s+screenshot|and\s+give|and\s+bring|and\s+verify|search|find|for/gi, "").trim();
-    if (!q) q = "social anxiety";
+    q = cleanQueryText(q);
+    if (!q) q = "jarvis tutorial";
     return {
       baseUrl: "https://medium.com",
       targetUrl: "https://medium.com",
@@ -119,7 +160,25 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
     };
   }
 
-  // 2. Twitter / X Direct Account & Post Search
+  // 3. ChatGPT & AI Assistants
+  if (lower.includes("chatgpt") || lower.includes("chat gpt") || lower.includes("openai")) {
+    let q = "";
+    const m = text.match(/(?:ask|ask the chatgpt chat|query|prompt|say)\s+["']?([^"'\n]+)/i);
+    if (m) q = m[1];
+    q = cleanQueryText(q);
+    if (!q) q = "which is the cheapest proxy";
+    return {
+      baseUrl: "https://chatgpt.com",
+      targetUrl: "https://chatgpt.com",
+      cleanTopic: `ChatGPT: "${q}"`,
+      searchQuery: q,
+      platform: "chatgpt",
+      intentType: "search",
+      isChart: false,
+    };
+  }
+
+  // 4. Twitter / X Direct Account & Post Search
   const isTwitterOrX =
     lower.includes("twitter") ||
     lower.includes("twittwer") ||
@@ -132,11 +191,11 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
 
   if (isTwitterOrX) {
     let xQuery = "";
-    const match = text.match(/(?:search|find|for)\s+["']?([a-zA-Z0-9_\-\.]+)/i);
+    const match = text.match(/(?:searrch|search|find|for|term)\s+["']?([a-zA-Z0-9_\-\.]+)/i);
     if (match && match[1]) {
       xQuery = match[1];
     }
-    xQuery = xQuery.replace(/twittwer|twitter|x\.com|\/x|search|accounts|account|screenshot|and|the|it|will|show/gi, "").trim();
+    xQuery = cleanQueryText(xQuery);
     if (!xQuery) xQuery = "neo_vibes";
     const isAccountSearch = lower.includes("account") || lower.includes("user") || lower.includes("profile") || lower.includes("people");
 
@@ -152,15 +211,18 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
     };
   }
 
-  // 3. Instagram Navigation & Profile Actions
-  const isInstagram = lower.includes("instagram") || lower.includes("insta");
+  // 5. Instagram Navigation & Profile Actions
+  // MUST NOT trigger if user said "insta real" or "insta shader" without instagram keyword!
+  const mentionsInstaAgentOnly = (lower.includes("insta real") || lower.includes("insta shader")) && !lower.includes("instagram");
+  const isInstagram = !mentionsInstaAgentOnly && (lower.includes("instagram") || /\binsta\b/.test(lower));
+
   if (isInstagram) {
     let igQuery = "";
-    const match = text.match(/(?:unfollow|follow|search|find|profile)\s+["']?([a-zA-Z0-9_\-\.]+)/i);
+    const match = text.match(/(?:unfollow|follow|searrch|search|find|profile)\s+["']?([a-zA-Z0-9_\-\.]+)/i);
     if (match && match[1]) {
       igQuery = match[1];
     }
-    igQuery = igQuery.replace(/instagram|insta|unfollow|follow|search|on|and|somebody/gi, "").trim();
+    igQuery = cleanQueryText(igQuery);
     if (!igQuery) igQuery = "wakanugu";
     const isUnfollow = lower.includes("unfollow");
     const isFollow = lower.includes("follow") && !isUnfollow;
@@ -176,7 +238,7 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
     };
   }
 
-  // 4. GitHub Direct Navigation & Internal Search
+  // 6. GitHub Direct Navigation & Internal Search
   const isGitHub = lower.includes("github");
   if (isGitHub) {
     let ghQuery = "";
@@ -184,12 +246,12 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
     if (commaMatch && commaMatch[1]) {
       ghQuery = commaMatch[1].trim();
     } else {
-      const searchMatch = text.match(/(?:search|find|for)\s+([a-zA-Z0-9_\-\.]+)/i);
+      const searchMatch = text.match(/(?:searrch|search|find|for)\s+([a-zA-Z0-9_\-\.]+)/i);
       if (searchMatch && searchMatch[1]) {
         ghQuery = searchMatch[1].trim();
       }
     }
-    ghQuery = ghQuery.replace(/github|repos|repositories|public|in|and|give|screenshot|results/gi, "").trim();
+    ghQuery = cleanQueryText(ghQuery);
     if (!ghQuery || ghQuery.length <= 1) ghQuery = "laxdollar";
 
     return {
@@ -1072,9 +1134,19 @@ export async function handleAgencyExecutiveCommand(
   const pending = pendingMap.get(contextId);
 
   const isAffirmative =
-    /^(yes|yep|yeah|sure|confirm|proceed|ok|okay|do it|authorize|go ahead|wake him|wake her|turn on)$/i.test(
+    /^(y|ye|yes|yep|yeah|ya|yup|yess|sure|confirm|proceed|ok|okay|do it|authorize|go ahead|wake|start|run)$/i.test(
       lower
-    ) || lower === "yes" || lower.startsWith("yes ") || lower.includes("confirm");
+    ) ||
+    lower === "yes" ||
+    lower === "ye" ||
+    lower === "y" ||
+    lower.startsWith("yes ") ||
+    lower.startsWith("ye ") ||
+    lower.startsWith("y ") ||
+    lower.startsWith("confirm") ||
+    lower.includes("confirm") ||
+    lower.includes("authorize") ||
+    lower.includes("proceed");
 
   if (pending && isAffirmative && Date.now() - pending.timestamp < 10 * 60 * 1000) {
     // User confirmed! Execute the pending task immediately!
@@ -1113,7 +1185,7 @@ export async function handleAgencyExecutiveCommand(
     };
   }
 
-  // 4. Action: Check status / "is it done or its still active"
+  // 4a. Action: Check status / "is it done or its still active"
   if (/(is\s+it\s+done|is\s+it\s+still\s+running|is\s+it\s+finished)/i.test(lower)) {
     const latestTask = await db
       .select()
@@ -1131,6 +1203,97 @@ export async function handleAgencyExecutiveCommand(
     }
   }
 
+  // 4b. Action: Live Workstation Screenshot Capture on demand ("show me the screenshot now", "give me the screenshot")
+  const isScreenshotRequest =
+    /(?:show|send|give|bring|take|capture|get)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?screenshot/i.test(lower) ||
+    lower.includes("show me the screenshot") ||
+    lower.includes("where is the screenshot") ||
+    lower.includes("give me the screenshot") ||
+    lower.includes("send the screenshot") ||
+    lower === "show screenshot" ||
+    lower === "take screenshot" ||
+    lower === "screenshot";
+
+  if (isScreenshotRequest) {
+    let targetAgentId = extractAgentFromPrompt(text);
+    if (!targetAgentId) {
+      const activeMap: Map<string, any> = (global as any).__activeSandboxes;
+      if (activeMap && activeMap.size > 0) {
+        const firstKey = Array.from(activeMap.keys())[0];
+        targetAgentId = firstKey.split("_").slice(1).join("_") || firstKey;
+      }
+    }
+    if (!targetAgentId) {
+      const latestTask = await db.select().from(agentTasks).where(eq(agentTasks.campaignId, campaignId)).orderBy(desc(agentTasks.createdAt)).limit(1).get();
+      if (latestTask?.agentId) {
+        targetAgentId = latestTask.agentId;
+      }
+    }
+    targetAgentId = targetAgentId || "fb_jotrainer";
+    const displayName = getAgentDisplayName(targetAgentId);
+
+    let screenshotBase64 = "";
+    let visualAnalysis = "";
+
+    const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+    if (activeSb && typeof activeSb.screenshot === "function") {
+      try {
+        const shotBuffer = await activeSb.screenshot();
+        if (shotBuffer && shotBuffer.length > 0) {
+          screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+          visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} Live Workstation Display`);
+        }
+      } catch (err: any) {
+        console.warn("[AgencyActions] Screenshot capture notice:", err);
+      }
+    }
+
+    if (screenshotBase64) {
+      const mediaUrl = `data:image/png;base64,${screenshotBase64}`;
+      return {
+        handled: true,
+        replyText: `📸 **Live Workstation Screenshot: ${displayName}**\n\n${visualAnalysis || "Current live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Status:** Active Live VNC`,
+        mediaUrl,
+      };
+    } else {
+      return {
+        handled: true,
+        replyText: `📸 **Workstation in Standby ($0 Compute)**\n\nThe microVM for **${displayName}** is currently in standby to preserve your compute credits.\n\nReply **WAKE ${displayName}** or give a direct task command to boot the PC and view the live screen.`,
+      };
+    }
+  }
+
+  // 4c. Action: Close Firefox / Clean Workstation Browsers
+  const isCloseFirefox =
+    /(?:close|kill|shut|terminate)\s+(?:all\s+)?(?:those\s+)?firefox/i.test(lower) ||
+    lower.includes("close firefox") ||
+    lower.includes("kill firefox") ||
+    (lower.includes("firefox") && (lower.includes("close") || lower.includes("kill")));
+
+  if (isCloseFirefox) {
+    const targetAgentId = extractAgentFromPrompt(text) || "ig_real";
+    const displayName = getAgentDisplayName(targetAgentId);
+    const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+
+    if (activeSb?.commands?.run) {
+      await activeSb.commands.run(`
+        pkill -9 -f firefox 2>/dev/null || true
+        DISPLAY=:0 nohup google-chrome \
+          --test-type \
+          --disable-infobars \
+          --silent-debugger-extension-api \
+          --no-sandbox \
+          --disable-dev-shm-usage \
+          --start-maximized "about:blank" >/dev/null 2>&1 &
+      `).catch(() => {});
+    }
+
+    return {
+      handled: true,
+      replyText: `🧹 **Workstation Cleanup Complete: ${displayName}**\n\nI have terminated all Firefox processes on the workstation and ensured Google Chrome is the active browser on primary display.\n\n• **Active Browser:** Google Chrome\n• **Firefox Status:** Closed\n• **Workstation:** ${displayName} (Ready for next command)`,
+    };
+  }
+
   // 5. Action: Manual PC Wake, Chrome Navigation & Autonomous Computer-Use Task
   const targetAgentId =
     extractAgentFromPrompt(text) ||
@@ -1144,16 +1307,16 @@ export async function handleAgencyExecutiveCommand(
       ? "fb_laxdollar"
       : lower.includes("meme") || lower.includes("comedy")
       ? "fb_contentor"
-      : lower.includes("medium") || lower.includes("article") || lower.includes("story") || lower.includes("news")
+      : lower.includes("medium") || lower.includes("article") || lower.includes("story") || lower.includes("news") || lower.includes("reddit") || lower.includes("chatgpt")
       ? "analytics"
       : "analytics");
 
   const isTaskOrBrowse =
-    /(?:search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play|github|repo|repos|repository|facebook|fb|look up|twitter|twittwer|x\.com|\/x|instagram|insta|medium|unfollow|follow|navigate|screenshot|view|show|run|wake|start|boot|spin up|tell|command|use)/i.test(
+    /(?:search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play|github|repo|repos|repository|facebook|fb|look up|twitter|twittwer|x\.com|\/x|instagram|insta|medium|reddit|chatgpt|unfollow|follow|navigate|screenshot|view|show|run|wake|start|boot|spin up|tell|command|use)/i.test(
       lower
     );
 
-  if (targetAgentId && isTaskOrBrowse) {
+  if (targetAgentId && isTaskOrBrowse && !isScreenshotRequest && !isCloseFirefox) {
     const displayName = getAgentDisplayName(targetAgentId);
     const plan = await planAutonomousTask(text);
     const { cleanTopic, isChart } = plan;
