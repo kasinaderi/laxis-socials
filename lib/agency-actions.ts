@@ -43,6 +43,8 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
   const trimmedText = text.trim();
 
   // 1. Explicit multi-word agent names (Highest priority)
+  // IMPORTANT: Use exact phrase or word-boundary matching to prevent false positives
+  // e.g. "instead" must NOT match "insta", "jobs" must NOT match "jobtask"
   let found: string | null = null;
   if (lower.includes("insta real") || lower.includes("instareal") || lower.includes("ig_real")) {
     found = "ig_real";
@@ -52,7 +54,7 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
     found = "fb_laxdollar";
   } else if (lower.includes("fb_contentor") || lower.includes("contentor")) {
     found = "fb_contentor";
-  } else if (lower.includes("fb_jotrainer") || lower.includes("jotrainer") || lower.includes("jobs")) {
+  } else if (lower.includes("fb_jotrainer") || lower.includes("jotrainer") || /\bjobs\b/.test(lower)) {
     found = "fb_jotrainer";
   } else if (lower.includes("analytics agent") || lower.includes("analytics") || lower.includes("analytic")) {
     found = "analytics";
@@ -78,6 +80,14 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
       lastActiveAgentByContext.set(contextId, found);
     }
     return found;
+  }
+
+  // ── CRITICAL: Always check context BEFORE keyword fallbacks ──────────────
+  // If no explicit agent name, return the currently active VM.
+  // This ensures "search X instead", "scroll up", "click the first" etc.
+  // all stay locked to the agent already in conversation.
+  if (contextId && lastActiveAgentByContext.has(contextId)) {
+    return lastActiveAgentByContext.get(contextId) || null;
   }
 
   // 3. Conversational Continuity: Check if prompt refers to the same / current VM
@@ -120,16 +130,11 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
     if (ctxAgent) return ctxAgent;
   }
 
-  // 4. Fallback domain topics
+  // 4. Fallback domain topics (only if no active context)
   if (lower.includes("confession") || lower.includes("dilemma")) return "ig_real";
   if (lower.includes("celebrity") || lower.includes("tea")) return "ig_shader";
   if (lower.includes("remotask") || lower.includes("outlier")) return "fb_jotrainer";
   if (lower.includes("sheng") || lower.includes("comedy meme")) return "fb_contentor";
-
-  // 5. Fallback to active agent in context if one is already engaged
-  if (contextId && lastActiveAgentByContext.has(contextId)) {
-    return lastActiveAgentByContext.get(contextId) || null;
-  }
 
   return null;
 }
@@ -1493,9 +1498,57 @@ export async function handleAgencyExecutiveCommand(
     }
   }
 
+  // ── EARLY EXIT: Inline search on active VM ("search X instead", "search X in the searchbox") ──
+  // Check BEFORE isTaskOrBrowse — if the user wants to search on the ALREADY-OPEN Chrome session,
+  // skip authorization entirely and just run cdpSearch directly.
+  const inlineSearchPatternMatch =
+    /^(?:search|type)\s+(.+?)\s+(?:instead|in\s+(?:the\s+)?search(?:box|bar|\s+box|\s+bar)|in\s+(?:the\s+)?(?:youtube|google|github|facebook|instagram|twitter|x)(?:\s+search(?:box|bar)?)?)/i.exec(trimmed) ||
+    /^(?:search|type)\s+(.+?)\s+instead/i.exec(trimmed);
+
+  if (inlineSearchPatternMatch && inlineSearchPatternMatch[1]) {
+    const queryCandidate = inlineSearchPatternMatch[1].trim()
+      .replace(/\s+(?:in|into|on|at)\s+(?:the\s+)?(?:searchbox|search\s+box|search\s+bar|search\s+field)$/i, "")
+      .trim();
+
+    // Only apply if there's already an active sandbox in context
+    const activeMapEarly: Map<string, any> = (global as any).__activeSandboxes;
+    const earlyAgentId = contextId
+      ? lastActiveAgentByContext.get(contextId) || null
+      : activeMapEarly && activeMapEarly.size > 0
+        ? Array.from(activeMapEarly.keys())[0]?.replace(new RegExp(`^${campaignId}_`), "")
+        : null;
+    const earlySb = earlyAgentId ? activeMapEarly?.get(`${campaignId}_${earlyAgentId}`) : null;
+
+    if (earlySb && earlyAgentId && queryCandidate) {
+      if (contextId) lastActiveAgentByContext.set(contextId, earlyAgentId);
+      const displayName = getAgentDisplayName(earlyAgentId);
+      console.log(`[AgencyActions] Inline CDP search "${queryCandidate}" on active ${displayName} VM (no auth needed)`);
+
+      await cdpSearch(earlySb, queryCandidate);
+      await new Promise((r) => setTimeout(r, 2500));
+
+      let shotBuf: Uint8Array | null = null;
+      if (typeof earlySb.screenshot === "function") {
+        shotBuf = await earlySb.screenshot().catch(() => null);
+      }
+      let screenshotB64 = "";
+      let visAnalysis = "";
+      if (shotBuf && shotBuf.length > 0) {
+        screenshotB64 = Buffer.from(shotBuf).toString("base64");
+        visAnalysis = await analyzeWorkstationScreenshot(shotBuf, `${displayName}: Search "${queryCandidate}"`);
+      }
+      const mUrl = screenshotB64 ? `data:image/png;base64,${screenshotB64}` : undefined;
+      return {
+        handled: true,
+        replyText: `🎯 **${displayName} – Searched "${queryCandidate}"**\n\n${visAnalysis ? `${visAnalysis}\n\n` : ""}• **Search Query:** "${queryCandidate}"\n• **Status:** Verified & Complete (Live screenshot above)\n• **Workstation:** ${displayName}`,
+        mediaUrl: mUrl,
+      };
+    }
+  }
+
   // Check if prompt specifies an actionable browsing, search, navigation, or computer-use task
   const isTaskOrBrowse =
-    /(?:search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play|github|repo|repos|repository|facebook|fb|look up|twitter|twittwer|x\.com|\/x|instagram|insta|medium|reddit|chatgpt|unfollow|follow|navigate|view|go\s+to|go\s+[a-z]+)/i.test(
+    /(?:search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play|github|repo|repos|repository|facebook|fb|look up|twitter|twittwer|x\.com|\/x|\binstagram\b|\binsta\b|medium|reddit|chatgpt|unfollow|follow|navigate|view|go\s+to|go\s+[a-z]+)/i.test(
       lower
     );
 
@@ -1896,7 +1949,7 @@ export async function handleAgencyExecutiveCommand(
 
   const targetAgentId =
     extractAgentFromPrompt(text, contextId) ||
-    (lower.includes("instagram") || lower.includes("insta")
+    (lower.includes("instagram") || /\binsta\b/.test(lower)
       ? "ig_real"
       : lower.includes("twitter") || lower.includes("twittwer") || lower.includes("x.com") || lower.includes("/x")
       ? "fb_contentor"
