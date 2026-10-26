@@ -180,9 +180,35 @@ class CDPClient:
             }})()"""
             res = self.evaluate(js_modal)
 
-        # Press Enter to execute search
+        # Press Enter to execute search and click search buttons
         time.sleep(0.3)
         self.press_enter()
+
+        # Specifically for YouTube and interactive web apps, click the native search button
+        js_submit = """(() => {
+            const ytBtn = document.querySelector('button#search-icon-legacy, button[aria-label="Search"], button[title="Search"], #search-button-narrow button');
+            if (ytBtn && ytBtn.offsetParent !== null) {
+                ytBtn.click();
+                return { clicked: true };
+            }
+            return { clicked: false };
+        })()"""
+        try:
+            self.evaluate(js_submit)
+        except Exception:
+            pass
+
+        # Verify search results page was reached; if stuck on home/video/shorts, navigate directly
+        time.sleep(1.5)
+        try:
+            curr_url = str(self.evaluate("window.location.href") or "")
+            if "youtube.com" in curr_url and "search_query" not in curr_url:
+                import urllib.parse
+                encoded = urllib.parse.quote(clean_q)
+                self.navigate(f"https://www.youtube.com/results?search_query={encoded}")
+                time.sleep(2.5)
+        except Exception:
+            pass
 
         # If a target category tab was requested (e.g. "repositories", "people", "groups")
         if target_tab and target_tab != "all":
@@ -193,7 +219,13 @@ class CDPClient:
         if not res or not res.get("success"):
             try:
                 current_url = str(self.evaluate("window.location.href") or "")
-                if "github.com" in current_url:
+                if "youtube.com" in current_url:
+                    import urllib.parse
+                    encoded = urllib.parse.quote(clean_q)
+                    self.navigate(f"https://www.youtube.com/results?search_query={encoded}")
+                    time.sleep(3.0)
+                    return {"success": True, "mode": "navigated_search_fallback"}
+                elif "github.com" in current_url:
                     tab_param = f"&type={target_tab}" if target_tab and target_tab != "all" else "&type=repositories"
                     self.navigate(f"https://github.com/search?q={clean_q}{tab_param}")
                     time.sleep(3.0)

@@ -167,6 +167,38 @@ export interface NavigationIntent {
 }
 
 /**
+ * Intelligent Query & Entity Cleaner
+ * Strips conversational noise, typo tails ("the share the screenshot with e"),
+ * instructions ("and report back with screenshot"), and punctuation.
+ */
+export function cleanAutonomousSearchQuery(raw: string): string {
+  if (!raw) return "";
+  let q = raw.trim();
+
+  // 1. Strip common command prefixes
+  q = q.replace(/^(?:search\s+for|search|find|look\s+up|watch|play|google)\s+/i, "");
+
+  // 2. Strip multi-clause conversational tails & typos
+  // Handles: "the share the screenshot with e", "and bring me back the screenshot results", "then report back with screenshot"
+  q = q.replace(/(?:and\s+then|and|then|the)\s+(?:share|send|bring|give|show|take|capture|report|provide|post)\s+(?:me\s+)?(?:back\s+)?(?:with\s+)?(?:the\s+)?(?:screenshot|photo|results?|screen|picture|e|pic|view).*$/i, "");
+  q = q.replace(/(?:and\s+then|and|then|the)\s+(?:take|capture)\s+(?:a\s+)?screenshot.*$/i, "");
+  q = q.replace(/(?:and\s+then|and|then)\s+(?:report\s+back|let\s+me\s+see|show\s+me).*$/i, "");
+  q = q.replace(/\s+(?:and\s+)?take\s+(?:a\s+)?screenshot.*$/i, "");
+  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+(?:back\s+)?(?:the\s+)?(?:first\s+)?(?:video\s+)?(?:search\s+)?result.*$/i, "");
+  q = q.replace(/\s+(?:and\s+)?show\s+(?:me\s+)?(?:the\s+)?results?.*$/i, "");
+  q = q.replace(/\s+(?:in\s+)?(?:the\s+)?(?:searchbox|search\s+box|search\s+bar)(?:\s+instead)?.*$/i, "");
+  q = q.replace(/\s+instead$/i, "");
+  q = q.replace(/\s+(?:in|on)\s+chrome.*$/i, "");
+
+  // 3. Strip platform domains if accidentally captured
+  q = q.replace(/(?:go to\s+)?(?:youtube|github|google|facebook|instagram|twitter|reddit|medium)(?:\.com)?/gi, "");
+
+  // 4. Strip surrounding punctuation and quotes
+  q = q.replace(/^[,“"'\s]+|[,“"'\s]+$/g, "").trim();
+  return q;
+}
+
+/**
  * Intelligent Navigation Target & Asset Resolver
  * Points to the root platform homepage so the agent operates like a real human (typing, clicking search)
  * and never triggers bot detection flags with pre-baked deep URLs.
@@ -175,25 +207,7 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
   const lower = text.toLowerCase();
 
   function cleanQueryText(raw: string): string {
-    let q = raw;
-    q = q.replace(/(?:and\s+)?(?:then\s+)?(?:the\s+)?(?:show|give|bring|send|take)\s+(?:me\s+)?(?:a\s+)?(?:the\s+)?screenshot(?:\s+now)?(?:\s+here)?/gi, "");
-    q = q.replace(/(?:of\s+)?(?:the\s+)?(?:search\s+)?results?/gi, "");
-    q = q.replace(/^the\s+chatgpt\s+chat\s+/i, "");
-    q = q.replace(/^the\s+term\s+/i, "");
-    q = q.replace(/^for\s+me\s+/i, "");
-    q = q.replace(/^for\s+/i, "");
-    q = q.replace(/^me\s+/i, "");
-    q = q.replace(/^search\s+/i, "");
-    q = q.replace(/\s+in\s+public\s+github\s+repos/gi, "");
-    q = q.replace(/\s+in\s+github/gi, "");
-    q = q.replace(/\s+on\s+reddit/gi, "");
-    q = q.replace(/\s+on\s+medium/gi, "");
-    q = q.replace(/\s+on\s+x/gi, "");
-    q = q.replace(/\s+on\s+twitter/gi, "");
-    q = q.replace(/\s+on\s+instagram/gi, "");
-    q = q.replace(/\s+on\s+facebook/gi, "");
-    q = q.replace(/^[,“"'\s]+|[,“"'\s]+$/g, "").trim();
-    return q;
+    return cleanAutonomousSearchQuery(raw);
   }
 
   // 1. Reddit Platform
@@ -375,10 +389,7 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
     if (match && match[1]) {
       ytQuery = match[1];
     }
-    ytQuery = ytQuery.replace(/(?:go to\s+)?youtube(?:\.com)?/gi, "");
-    ytQuery = ytQuery.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+first\s+(?:video\s+)?(?:search\s+)?result(?:\s+screenshot)?/gi, "");
-    ytQuery = ytQuery.replace(/\s+(?:and\s+)?take\s+screenshot/gi, "");
-    ytQuery = ytQuery.replace(/^[,“"'\s]+|[,“"'\s]+$/g, "").trim();
+    ytQuery = cleanAutonomousSearchQuery(ytQuery);
     if (!ytQuery) ytQuery = "laxis music";
 
     return {
@@ -477,18 +488,7 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
   if (match && match[1]) {
     q = match[1];
   }
-  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+first\s+(?:video\s+)?(?:search\s+)?result(?:\s+screenshot)?(?:\s+that\s+chrome\s+shows)?/gi, "");
-  q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+the\s+(?:first\s+)?(?:video\s+)?result/gi, "");
-  q = q.replace(/\s+(?:and\s+)?take\s+screenshot/gi, "");
-  q = q.replace(/\s+(?:and\s+)?show\s+me\s+here/gi, "");
-  q = q.replace(/\s+(?:and\s+)?make\s+sure\s+the\s+screenshot\s+contains/gi, "");
-  q = q.replace(/\s+(?:and\s+)?give\s+me\s+an\s+idea\s+of\s+the\s+trend/gi, "");
-  q = q.replace(/\s+(?:and\s+)?double\s+authorize/gi, "");
-  q = q.replace(/\s+in\s+chrome/gi, "");
-  q = q.replace(/\s+on\s+chrome/gi, "");
-  q = q.replace(/^[,“"'\s]+|[,“"'\s]+$/g, "").trim();
-
-  const cleanQuery = q || "market analysis";
+  const cleanQuery = cleanAutonomousSearchQuery(q) || "market analysis";
   return {
     baseUrl: "https://www.google.com",
     targetUrl: "https://www.google.com",
@@ -528,7 +528,7 @@ Your job is to deconstruct this instruction into human execution parameters in J
   "platform": "medium" | "x" | "instagram" | "github" | "facebook" | "youtube" | "tradingview" | "custom_web" | "google",
   "baseUrl": "Base homepage URL of the service to open in browser (e.g. https://medium.com, https://x.com, https://github.com, https://www.facebook.com, https://www.instagram.com, https://www.youtube.com, https://www.tradingview.com)",
   "cleanTopic": "Clear human-readable title of the task",
-  "searchQuery": "Clean search term or username to be typed into the search box",
+  "searchQuery": "Clean search term or entity ONLY (strip typos, instructions, conversational tails)",
   "intentType": "search" | "unfollow" | "follow" | "post" | "browse" | "chart",
   "targetTab": "people" | "groups" | "repositories" | "all",
   "isChart": boolean,
@@ -536,14 +536,19 @@ Your job is to deconstruct this instruction into human execution parameters in J
 }
 
 CRITICAL RULES:
-1. baseUrl MUST BE the root website homepage (e.g. https://medium.com, https://x.com, https://github.com), NEVER a deep query URL like /search?q=... because real human interaction will type the query into the search box.
-2. Clean search terms of conversational noise ("and screenshot", "and give results").
-3. NEVER substitute Google when a specific platform was requested.
+1. baseUrl MUST BE the root website homepage (e.g. https://www.youtube.com, https://github.com), NEVER a deep query URL. Real human interaction will type the query into the search box.
+2. searchQuery MUST BE ONLY the entity or query itself. Strip ALL instructions, conversation tails, and typos (e.g. "the share the screenshot with e", "and bring me screenshot", "then report back").
+3. Examples of extracting clean search queries:
+   - "open jotrainer use chrome to open youtube and search obinna the share the screenshot with e" -> searchQuery: "obinna", cleanTopic: "Search YouTube for obinna", platform: "youtube"
+   - "use laxdollar fb go github search jev ai and then bring me the screenshot" -> searchQuery: "jev ai", cleanTopic: "Search GitHub for jev ai", platform: "github"
+   - "go to youtube and search sherryboi and bring me back the screenshot" -> searchQuery: "sherryboi", cleanTopic: "Search YouTube for sherryboi", platform: "youtube"
+   - "open jotrainer use chrome to open youtube and search Solomon mkubwa and report back with the screenshot" -> searchQuery: "Solomon mkubwa", cleanTopic: "Search YouTube for Solomon mkubwa", platform: "youtube"
+4. NEVER substitute Google when a specific platform was requested.
 Respond with JSON only.`;
 
     const aiRes = await Promise.race([
       generateWithFallback([{ text: aiPrompt }]),
-      new Promise<string>((_, reject) => setTimeout(() => reject(new Error("AI planner timeout")), 2500)),
+      new Promise<string>((_, reject) => setTimeout(() => reject(new Error("AI planner timeout")), 8000)),
     ]);
 
     if (aiRes) {
@@ -551,16 +556,18 @@ Respond with JSON only.`;
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         if (parsed.baseUrl && parsed.baseUrl.startsWith("http")) {
+          const cleanSearch = cleanAutonomousSearchQuery(parsed.searchQuery || fallback.searchQuery || "");
+          const cleanTopicTitle = cleanAutonomousSearchQuery(parsed.cleanTopic || fallback.cleanTopic) || `Search: "${cleanSearch}"`;
           return {
             targetAgentId: parsed.targetAgentId || detectedAgent,
             baseUrl: parsed.baseUrl,
             targetUrl: parsed.baseUrl,
-            cleanTopic: parsed.cleanTopic || fallback.cleanTopic,
-            searchQuery: parsed.searchQuery || fallback.searchQuery || "",
+            cleanTopic: cleanTopicTitle,
+            searchQuery: cleanSearch,
             intentType: parsed.intentType || fallback.intentType || "search",
             targetTab: parsed.targetTab || fallback.targetTab || "all",
             isChart: Boolean(parsed.isChart),
-            verificationGoal: parsed.verificationGoal || `Verify content for ${parsed.cleanTopic}`,
+            verificationGoal: parsed.verificationGoal || `Verify content for ${cleanTopicTitle}`,
           };
         }
       }
@@ -569,12 +576,13 @@ Respond with JSON only.`;
     // Timeout or transient issue: deterministic fallback executes seamlessly
   }
 
+  const fallbackCleanSearch = cleanAutonomousSearchQuery(fallback.searchQuery || "");
   return {
     targetAgentId: detectedAgent,
     baseUrl: fallback.baseUrl,
     targetUrl: fallback.baseUrl,
     cleanTopic: fallback.cleanTopic,
-    searchQuery: fallback.searchQuery || "",
+    searchQuery: fallbackCleanSearch,
     intentType: fallback.intentType,
     targetTab: fallback.targetTab || "all",
     isChart: fallback.isChart,
