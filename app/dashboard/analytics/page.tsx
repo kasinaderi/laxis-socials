@@ -257,10 +257,47 @@ export default function DerivPatternLabPage() {
         if (d.analysis) {
           setAnalysis(d.analysis);
           if (d.analysis.status === "done") {
+            // Parse raw output for digit stats
             if (d.analysis.rawOutput) {
-              const raw = JSON.parse(d.analysis.rawOutput);
-              setRawData(raw);
-              setStrategies(raw.top_strategies || []);
+              try {
+                const raw = JSON.parse(d.analysis.rawOutput);
+                setRawData(raw);
+                // Prefer strategies from DB rows, fall back to rawOutput
+                if (d.strategies && d.strategies.length > 0) {
+                  // Map DB rows back to Strategy shape
+                  setStrategies(d.strategies.map((s: any) => ({
+                    pattern:          JSON.parse(s.pattern),
+                    window:           s.windowSize,
+                    trade_type:       s.tradeType,
+                    total_trades:     s.totalTrades,
+                    wins:             s.wins,
+                    losses:           s.losses,
+                    win_rate:         parseFloat(s.winRate),
+                    baseline_rate:    parseFloat(s.baselineRate),
+                    edge:             parseFloat(s.edge),
+                    confidence_lower: parseFloat(s.confidenceLower),
+                    signal:           s.signal,
+                    rank:             s.rank,
+                  })));
+                } else {
+                  setStrategies(raw.top_strategies || []);
+                }
+              } catch {}
+            } else if (d.strategies) {
+              setStrategies(d.strategies.map((s: any) => ({
+                pattern:          JSON.parse(s.pattern),
+                window:           s.windowSize,
+                trade_type:       s.tradeType,
+                total_trades:     s.totalTrades,
+                wins:             s.wins,
+                losses:           s.losses,
+                win_rate:         parseFloat(s.winRate),
+                baseline_rate:    parseFloat(s.baselineRate),
+                edge:             parseFloat(s.edge),
+                confidence_lower: parseFloat(s.confidenceLower),
+                signal:           s.signal,
+                rank:             s.rank,
+              })));
             }
             setRunning(false);
             setProgress("");
@@ -298,7 +335,36 @@ export default function DerivPatternLabPage() {
         body: JSON.stringify(body),
       });
       const d = await r.json();
-      if (d.analysisId) { pollJob(d.analysisId); } else { setRunning(false); setProgress(""); alert(d.error || "Failed"); }
+
+      // Mode A: JS fallback returned inline results immediately
+      if (d.status === "done" && d.data) {
+        const raw = d.data;
+        setRawData(raw);
+        setStrategies(raw.top_strategies || []);
+        setAnalysis({
+          id: d.analysisId, status: "done", symbol,
+          tickCount: raw.tick_count, summary: raw.summary,
+          rawOutput: JSON.stringify(raw), error: null,
+          createdAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+        });
+        setRunning(false);
+        setProgress("");
+        setTab("strategies");
+        fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); });
+        return;
+      }
+
+      // Mode A error (no digits provided)
+      if (d.status === "error") {
+        setRunning(false);
+        setProgress("");
+        alert(d.data?.summary || "No digits provided. Paste digits in Manual Analysis tab.");
+        return;
+      }
+
+      // Mode B: E2B running — poll for results
+      if (d.analysisId) { pollJob(d.analysisId); }
+      else { setRunning(false); setProgress(""); alert(d.error || "Failed to start"); }
     } catch (e: any) { setRunning(false); setProgress(""); alert(e.message); }
   }
 
