@@ -258,7 +258,7 @@ export default function DerivPatternLabPage() {
 
   const pollJob = useCallback((id: string) => {
     if (pollRef.current) clearInterval(pollRef.current);
-    const steps = ["🔗 Connecting to Deriv API…", "📥 Downloading ticks…", "🔍 Finding all patterns…", "📊 Backtesting strategies…", "🏆 Ranking by win rate…"];
+    const steps = ["🔍 Scanning all patterns…", "📊 Backtesting every strategy…", "⚡ Evaluating edge vs baseline…", "🏆 Ranking by confidence…", "✅ Finalising results…"];
     let step = 0;
     pollRef.current = setInterval(async () => {
       setProgress(steps[step % steps.length]);
@@ -327,19 +327,86 @@ export default function DerivPatternLabPage() {
     }, 2500);
   }, []);
 
+  /** Fetch tick history from Deriv WebSocket API directly in the browser. */
+  function fetchDerivTicks(sym: string, count: number): Promise<number[]> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const ws = new WebSocket("wss://ws.binaryws.com/websockets/v3?app_id=1089");
+
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        try { ws.close(); } catch {}
+        fn();
+      };
+
+      const timer = setTimeout(() => {
+        finish(() => reject(new Error("Deriv API timed out after 30s")));
+      }, 30_000);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          ticks_history: sym,
+          count,
+          end:   "latest",
+          style: "ticks",
+        }));
+      };
+
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data as string);
+          if (msg.error) {
+            clearTimeout(timer);
+            finish(() => reject(new Error(msg.error.message || "Deriv API error")));
+            return;
+          }
+          if (msg.history?.prices) {
+            clearTimeout(timer);
+            const digits = (msg.history.prices as number[]).map(p => {
+              const s = Math.abs(p).toFixed(2);
+              return parseInt(s[s.length - 1]);
+            }).filter(d => d >= 0 && d <= 9);
+            finish(() => resolve(digits));
+          }
+        } catch {}
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timer);
+        finish(() => reject(new Error("Could not connect to Deriv API")));
+      };
+    });
+  }
+
   async function runAnalysis(useManual = false) {
     setRunning(true);
     setAnalysis(null);
     setStrategies([]);
     setRawData(null);
-    setProgress("🚀 Starting analysis engine…");
 
     const body: any = { symbol, tickCount, minOccurrences: minOccur, maxWindow, topN };
 
     if (useManual) {
+      // Manual tab: use pasted digits
       const digits = manualTicks.split(/[\s,\n]+/).map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n >= 0 && n <= 9);
       if (digits.length < 20) { alert("Paste at least 20 digits (0–9)."); setRunning(false); setProgress(""); return; }
       body.manualTicks = digits;
+      body.fetchSource = "manual_paste";
+    } else {
+      // Always fetch live ticks from Deriv — no E2B needed for data
+      try {
+        setProgress(`🔗 Connecting to Deriv API…`);
+        const digits = await fetchDerivTicks(symbol, tickCount);
+        setProgress(`📥 Got ${digits.length.toLocaleString()} ticks from Deriv ✓  Now analysing…`);
+        body.manualTicks = digits;       // pass pre-fetched digits to the engine
+        body.fetchSource = "deriv_live"; // tag the source
+      } catch (fetchErr: any) {
+        setRunning(false);
+        setProgress("");
+        alert(`❌ Could not fetch ticks from Deriv: ${fetchErr.message}\n\nCheck your internet connection or try the Manual Analysis tab to paste your own digits.`);
+        return;
+      }
     }
 
     try {
@@ -349,7 +416,7 @@ export default function DerivPatternLabPage() {
       });
       const d = await r.json();
 
-      // Mode A: JS fallback returned inline results immediately
+      // Mode A: JS fallback — results returned inline immediately
       if (d.status === "done" && d.data) {
         const raw = d.data;
         setRawData(raw);
@@ -367,17 +434,17 @@ export default function DerivPatternLabPage() {
         return;
       }
 
-      // Mode A error (no digits provided)
+      // Mode A error
       if (d.status === "error") {
         setRunning(false);
         setProgress("");
-        alert(d.data?.summary || "No digits provided. Paste digits in Manual Analysis tab.");
+        alert(d.data?.summary || "Analysis failed.");
         return;
       }
 
-      // Mode B: E2B running — poll for results
+      // Mode B: E2B Python engine running — poll until done
       if (d.analysisId) { checkSbStatus(); pollJob(d.analysisId); }
-      else { setRunning(false); setProgress(""); alert(d.error || "Failed to start"); }
+      else { setRunning(false); setProgress(""); alert(d.error || "Failed to start analysis"); }
     } catch (e: any) { setRunning(false); setProgress(""); alert(e.message); }
   }
 
@@ -875,11 +942,17 @@ export default function DerivPatternLabPage() {
             <div className="max-w-3xl mx-auto space-y-5">
               <h2 className="font-bold text-slate-800 dark:text-white text-lg flex items-center gap-2">
                 <Activity className="w-5 h-5 text-blue-500" />
-                Manual Digit Analysis
+                Offline / Custom Digit Analysis
               </h2>
+              <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-2xl p-4 flex gap-3">
+                <Info className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+                  <strong>Note:</strong> The main <em>Run Analysis</em> button at the top automatically fetches live ticks from Deriv — you don't need to paste anything.
+                  Use this tab only if you want to analyse a <strong>custom set of digits</strong> you copied from somewhere else, or if you are offline.
+                </div>
+              </div>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                Paste digits you copied from Deriv (0–9 only, separated by commas, spaces or newlines).
-                The engine will run the full backtest on your exact dataset.
+                Paste last digits (0–9) separated by commas, spaces or newlines.
               </p>
 
               <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5 space-y-4">
