@@ -16,6 +16,7 @@ import {
   cdpScroll,
   cdpClickOrdinal,
 } from "./cdp";
+import { checkHermesStatus, runHermesTask } from "./hermes";
 
 const apiKey = process.env.E2B_API_KEY || "";
 
@@ -548,7 +549,7 @@ Respond with JSON only.`;
 
     const aiRes = await Promise.race([
       generateWithFallback([{ text: aiPrompt }]),
-      new Promise<string>((_, reject) => setTimeout(() => reject(new Error("AI planner timeout")), 8000)),
+      new Promise<string>((_, reject) => setTimeout(() => reject(new Error("AI planner timeout")), 20000)),
     ]);
 
     if (aiRes) {
@@ -909,7 +910,7 @@ Return ONLY a valid JSON object:
 
     const aiPromise = generateWithFallback(contents);
     const timeoutPromise = new Promise<string>((_, reject) =>
-      setTimeout(() => reject(new Error("Vision reasoning timeout")), 6000)
+      setTimeout(() => reject(new Error("Vision reasoning timeout")), 20000)
     );
 
     const aiRes = await Promise.race([aiPromise, timeoutPromise]);
@@ -969,7 +970,7 @@ export async function executeAgentChromeTask(
   if (activeSb) {
     try {
       // Step A: Initialize Sandbox OS environment for strict Google Chrome only & CDP
-      await initSandboxBrowserAndCdp(activeSb);
+      await initSandboxBrowserAndCdp(activeSb, agentId);
 
       // Step B: Launch Google Chrome at the BASE PLATFORM URL with CDP enabled
       await launchChromeWithCdp(activeSb, baseUrl);
@@ -982,6 +983,33 @@ export async function executeAgentChromeTask(
         `).catch(() => {});
       }
       await new Promise((r) => setTimeout(r, 1000));
+
+      // Step C2: Check if Hermes Agent is configured inside this VM for autonomous full PC control
+      const hermesStatus = await checkHermesStatus(activeSb).catch(() => ({ installed: false, configured: false, version: "" }));
+      if (hermesStatus.configured) {
+        console.log(`[Hermes] Active on ${displayName} VM. Handing off full PC control to in-VM Hermes agent...`);
+        const hermesResult = await runHermesTask(activeSb, rawPrompt);
+        if (hermesResult.mode === "hermes" && hermesResult.success) {
+          const mediaUrl = hermesResult.screenshotB64 ? `data:image/png;base64,${hermesResult.screenshotB64}` : undefined;
+          await db.update(agents).set({ status: "idle", currentTask: null }).where(eq(agents.id, agentId)).run();
+          const deliverableId = `deliv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+          await db.insert(agentDeliverables).values({
+            id: deliverableId,
+            agentId,
+            campaignId,
+            type: "screenshot",
+            name: `${displayName}: ${cleanTopic}`,
+            url: mediaUrl || null,
+            content: hermesResult.summary,
+            createdAt: nowIso,
+          }).run();
+
+          return {
+            replyText: `🎯 **Task Verified: ${displayName} Live Workstation Execution (Hermes Control)**\n\n${hermesResult.summary}\n\n• **Active Platform:** \`${baseUrl}\`\n• **Subject:** ${cleanTopic}\n• **Status:** Verified & Complete\n• **Controller:** Hermes In-VM Autonomous Agent`,
+            mediaUrl,
+          };
+        }
+      }
 
       // Step D: Execute in-page intelligent typing & button clicks via CDP
       const promptLower = rawPrompt.toLowerCase();
@@ -1794,7 +1822,7 @@ export async function handleAgencyExecutiveCommand(
     }
 
     if (activeSb) {
-      await initSandboxBrowserAndCdp(activeSb);
+      await initSandboxBrowserAndCdp(activeSb, targetAgentId);
     }
 
     if (activeSb && typeof activeSb.screenshot === "function") {
@@ -1841,7 +1869,7 @@ export async function handleAgencyExecutiveCommand(
     const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
 
     if (activeSb?.commands?.run) {
-      await initSandboxBrowserAndCdp(activeSb);
+      await initSandboxBrowserAndCdp(activeSb, targetAgentId);
       await launchChromeWithCdp(activeSb, "about:blank");
     }
 

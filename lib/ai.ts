@@ -6,17 +6,21 @@ import { db } from "@/db";
 import { agents, posts } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-const primaryApiKey = process.env.GEMINI_API_KEY || "";
-const fallbackApiKey = process.env.GEMINI_API_KEY_FALLBACK || "";
+const key1 = process.env.GEMINI_HERMES_KEY_1 || process.env.GEMINI_API_KEY || "";
+const key2 = process.env.GEMINI_HERMES_KEY_2 || process.env.GEMINI_API_KEY_FALLBACK || "";
+const key3 = process.env.GEMINI_HERMES_KEY_3 || "";
 
-// Dual API keys pool for 2x daily quota and instant zero-downtime failover
-const API_KEYS = [primaryApiKey, fallbackApiKey].filter(Boolean);
+// Triple API keys pool for 3x daily quota (4,500 requests/day) and multi-project failover
+const API_KEYS = [key1, key2, key3].filter(Boolean);
 
-// Validated fast Gemini models (tested for low latency, high intelligence, and availability)
+// Validated fast Gemini models — ordered by reliability (updated 2026-10-26)
+// gemini-2.0/1.5-flash are deprecated; gemini-3.5-flash is the primary working model
 export const VALID_FAST_MODELS = [
-  "gemini-flash-lite-latest",
-  "gemini-3-flash-preview",
-  "gemini-flash-latest",
+  "gemini-3.5-flash",          // Primary — fastest confirmed working model
+  "gemini-3.8-flash",          // Secondary — may have high demand, retry
+  "gemini-3.1-flash-lite",     // Tertiary — lighter, fast fallback
+  "gemini-flash-latest",       // Alias fallback (may resolve to 3.5)
+  "gemini-flash-lite-latest",  // Last resort alias
 ];
 
 async function parseImageToInlineData(imageSource: string): Promise<{ mimeType: string; data: string } | null> {
@@ -59,15 +63,25 @@ export async function generateWithFallback(contents: any): Promise<string> {
 
     for (const model of VALID_FAST_MODELS) {
       try {
-        const response = await client.models.generateContent({
-          model,
-          contents,
-        });
+        // Per-model timeout: 15s for primary, 12s for others
+        // Prevents a single slow/hanging model from stalling the whole chain
+        const timeoutMs = model === "gemini-3.5-flash" ? 15000 : 12000;
+        const response = await Promise.race([
+          client.models.generateContent({ model, contents }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Model ${model} per-model timeout (${timeoutMs}ms)`)), timeoutMs)
+          ),
+        ]);
         if (response && response.text) {
           return response.text;
         }
       } catch (err: any) {
         const msg = err.message || "";
+        // Skip deprecated models immediately — no point retrying
+        if (msg.includes("no longer available") || msg.includes("NOT_FOUND")) {
+          console.warn(`[Gemini Key ${k + 1}] Model ${model} deprecated — skipping: ${msg.slice(0, 100)}`);
+          continue;
+        }
         console.warn(`[Gemini Key ${k + 1}] Model ${model} notice: ${msg.slice(0, 80)}`);
         lastError = err;
         // Continue to the next model / key seamlessly

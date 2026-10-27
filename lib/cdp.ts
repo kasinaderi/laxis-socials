@@ -1,4 +1,5 @@
 import { Sandbox } from "@e2b/desktop";
+import { installHermesInSandbox } from "./hermes";
 
 /**
  * Universal Chrome DevTools Protocol (CDP) Controller for E2B Agent Sandboxes
@@ -198,52 +199,63 @@ class CDPClient:
         except Exception:
             pass
 
-        # Verify search results page was reached; if stuck on home/video/shorts, navigate directly
-        time.sleep(1.5)
-        try:
-            curr_url = str(self.evaluate("window.location.href") or "")
-            if "youtube.com" in curr_url and "search_query" not in curr_url:
-                import urllib.parse
-                encoded = urllib.parse.quote(clean_q)
-                self.navigate(f"https://www.youtube.com/results?search_query={encoded}")
-                time.sleep(2.5)
-        except Exception:
-            pass
+        # Wait for page to process the search submission
+        time.sleep(2.0)
 
         # If a target category tab was requested (e.g. "repositories", "people", "groups")
         if target_tab and target_tab != "all":
-            time.sleep(2.5)
+            time.sleep(1.5)
             self.click_text(target_tab)
 
-        # Resilient Fallback: If no search input was found or modal didn't open, navigate directly to platform search URL
+        # Human-Like Recovery: If search input was not found initially, retry by pressing
+        # the keyboard shortcut "/" (universal search hotkey on YouTube, GitHub, Reddit, etc.)
+        # then re-type the query — NO direct URL navigation ever.
         if not res or not res.get("success"):
             try:
-                current_url = str(self.evaluate("window.location.href") or "")
-                if "youtube.com" in current_url:
-                    import urllib.parse
-                    encoded = urllib.parse.quote(clean_q)
-                    self.navigate(f"https://www.youtube.com/results?search_query={encoded}")
-                    time.sleep(3.0)
-                    return {"success": True, "mode": "navigated_search_fallback"}
-                elif "github.com" in current_url:
-                    tab_param = f"&type={target_tab}" if target_tab and target_tab != "all" else "&type=repositories"
-                    self.navigate(f"https://github.com/search?q={clean_q}{tab_param}")
-                    time.sleep(3.0)
-                    return {"success": True, "mode": "navigated_search_fallback"}
-                elif "reddit.com" in current_url:
-                    self.navigate(f"https://www.reddit.com/search/?q={clean_q}")
-                    time.sleep(3.0)
-                    return {"success": True, "mode": "navigated_search_fallback"}
-                elif "medium.com" in current_url:
-                    self.navigate(f"https://medium.com/search?q={clean_q}")
-                    time.sleep(3.0)
-                    return {"success": True, "mode": "navigated_search_fallback"}
-                elif "x.com" in current_url or "twitter.com" in current_url:
-                    tab_param = "&f=user" if target_tab == "people" else ""
-                    self.navigate(f"https://x.com/search?q={clean_q}{tab_param}")
-                    time.sleep(3.0)
-                    return {"success": True, "mode": "navigated_search_fallback"}
-            except Exception as e:
+                # Press "/" to open search on most platforms
+                self.send("Input.dispatchKeyEvent", {
+                    "type": "char",
+                    "text": "/",
+                    "key": "/",
+                    "code": "Slash",
+                    "windowsVirtualKeyCode": 191
+                })
+                time.sleep(0.8)
+                # Try typing again into whatever input is now focused
+                js_retry = f"""(() => {{
+                    const q = "{clean_q}";
+                    const focused = document.activeElement;
+                    if (focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')) {{
+                        focused.value = q;
+                        focused.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        focused.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        return {{ success: true, mode: 'slash_hotkey_retry' }};
+                    }}
+                    // Also try common search selectors again
+                    const sels = [
+                        'input[name="search_query"]', 'input[type="search"]',
+                        'input[name="q"]', 'input[placeholder*="search" i]',
+                        'input[aria-label*="search" i]', 'input#search'
+                    ];
+                    for (const s of sels) {{
+                        const el = document.querySelector(s);
+                        if (el && el.offsetParent !== null) {{
+                            el.focus();
+                            el.value = q;
+                            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            return {{ success: true, mode: 'retry_selector', selector: s }};
+                        }}
+                    }}
+                    return {{ success: false }};
+                }})()"""
+                retry_res = self.evaluate(js_retry)
+                if isinstance(retry_res, dict) and retry_res.get("success"):
+                    time.sleep(0.3)
+                    self.press_enter()
+                    time.sleep(2.0)
+                    res = retry_res
+            except Exception:
                 pass
 
         return res
@@ -441,7 +453,7 @@ if __name__ == "__main__":
 /**
  * Configure OS environment to strictly use Google Chrome and prepare CDP tools
  */
-export async function initSandboxBrowserAndCdp(sb: any): Promise<void> {
+export async function initSandboxBrowserAndCdp(sb: any, agentId?: string): Promise<void> {
   if (!sb?.commands?.run) return;
 
   try {
@@ -479,6 +491,17 @@ export async function initSandboxBrowserAndCdp(sb: any): Promise<void> {
 
     // 3. Write CDP controller script into sandbox
     await sb.commands.run(`cat << 'EOF' > /home/user/cdp_controller.py\n${CDP_PYTHON_RUNNER}\nEOF`).catch(() => {});
+
+    // 4. Install & configure in-VM Hermes Agent for this specific agent
+    //    Sets up Hermes with the agent's dedicated Gemini API key and failover pool
+    installHermesInSandbox(sb, agentId).then((result) => {
+      if (result.success) {
+        console.log(`[Hermes] ✓ Configured in-VM Hermes for ${agentId || "workstation"} (gemini-3.5-flash)`);
+      } else {
+        console.warn("[Hermes] Setup notice:", result.message);
+      }
+    }).catch(() => {});
+
   } catch (err: any) {
     console.warn("[CDP] Notice initializing sandbox browser environment:", err.message);
   }
