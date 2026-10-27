@@ -1,5 +1,6 @@
 import { Sandbox } from "@e2b/desktop";
 import { installHermesInSandbox } from "./hermes";
+import { installDerivEngineInSandbox } from "./deriv-engine";
 
 /**
  * Universal Chrome DevTools Protocol (CDP) Controller for E2B Agent Sandboxes
@@ -501,6 +502,17 @@ export async function initSandboxBrowserAndCdp(sb: any, agentId?: string): Promi
         console.warn("[Hermes] Setup notice:", result.message);
       }
     }).catch(() => {});
+
+    // 5. If this is the analytics agent — also install the Deriv Pattern Engine
+    if (agentId === "analytics") {
+      installDerivEngineInSandbox(sb).then((result) => {
+        if (result.success) {
+          console.log("[DerivLab] ✓ Pattern engine (STUMPY + SciPy + ruptures) installed in analytics VM");
+        } else {
+          console.warn("[DerivLab] Engine setup notice:", result.message);
+        }
+      }).catch(() => {});
+    }
 
   } catch (err: any) {
     console.warn("[CDP] Notice initializing sandbox browser environment:", err.message);

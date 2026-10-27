@@ -57,7 +57,11 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
     found = "fb_contentor";
   } else if (lower.includes("fb_jotrainer") || lower.includes("jotrainer") || /\bjobs\b/.test(lower)) {
     found = "fb_jotrainer";
-  } else if (lower.includes("analytics agent") || lower.includes("analytics") || lower.includes("analytic")) {
+  } else if (
+    lower.includes("analytics agent") || lower.includes("analytics") || lower.includes("analytic") ||
+    lower.includes("deriv") || lower.includes("pattern lab") || lower.includes("deriv lab") ||
+    lower.includes("tick") || lower.includes("pattern engine")
+  ) {
     found = "analytics";
   }
 

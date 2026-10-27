@@ -41,7 +41,7 @@ export function Sidebar({
     { label: "AI Agent", href: "/dashboard/ai-agent", icon: Bot, color: "text-purple-500" },
     { label: "Posts", href: "/dashboard/posts", icon: FileText, color: "text-pink-500" },
     { label: "Calendar", href: "/dashboard/calendar", icon: CalendarDays, color: "text-amber-500" },
-    { label: "Analytics", href: "/dashboard/analytics", icon: BarChart3, color: "text-emerald-500" },
+    { label: "Deriv Lab", href: "/dashboard/analytics", icon: BarChart3, color: "text-emerald-500" },
     { label: "Accounts", href: "/dashboard/accounts", icon: Users2, color: "text-cyan-500" },
   ];
 

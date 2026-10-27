@@ -591,7 +591,7 @@ export const AGENT_NAMES: Record<string, string> = {
   fb_contentor: "CONTENTOR",
   ig_real: "INSTA REAL",
   ig_shader: "INSTA SHADER",
-  analytics: "ANALYTICS AGENT",
+  analytics: "DERIV PATTERN LAB",
 };
 
 export const ALL_AGENT_IDS = [

@@ -138,3 +138,45 @@ export const officeLayouts = sqliteTable("office_layouts", {
   layoutData: text("layout_data").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+// ── Deriv Pattern Lab ─────────────────────────────────────────────────────────
+
+/**
+ * One analysis job = one batch of ticks submitted for pattern discovery.
+ */
+export const derivAnalyses = sqliteTable("deriv_analyses", {
+  id: text("id").primaryKey(),
+  status: text("status").notNull().default("pending"), // 'pending', 'running', 'done', 'error'
+  inputTicks: text("input_ticks").notNull(),           // raw comma-separated tick string
+  tickCount: integer("tick_count").notNull().default(0),
+  windowSize: integer("window_size").notNull().default(5),
+  similarityThreshold: text("similarity_threshold").notNull().default("0.85"),
+  maxPatterns: integer("max_patterns").notNull().default(10),
+  summary: text("summary"),                            // AI summary of all findings
+  rawOutput: text("raw_output"),                       // full JSON from Python engine
+  error: text("error"),
+  startedAt: text("started_at"),
+  completedAt: text("completed_at"),
+  createdAt: text("created_at").notNull(),
+});
+
+/**
+ * One row per discovered pattern from an analysis run.
+ */
+export const derivPatterns = sqliteTable("deriv_patterns", {
+  id: text("id").primaryKey(),
+  analysisId: text("analysis_id").notNull(),
+  patternId: text("pattern_id").notNull(),             // e.g. "P1", "P2"
+  type: text("type").notNull(),                        // 'motif', 'anomaly', 'regime_change'
+  sequence: text("sequence").notNull(),                // e.g. "2,7,4"
+  locations: text("locations").notNull().default("[]"),// JSON array of tick start indices
+  occurrenceCount: integer("occurrence_count").notNull().default(0),
+  intervalAvg: text("interval_avg"),                   // avg ticks between occurrences
+  intervalStddev: text("interval_stddev"),
+  nextPredictedTick: integer("next_predicted_tick"),
+  confidence: text("confidence"),                      // 0.0–1.0 as string
+  walkForwardHitRate: text("walk_forward_hit_rate"),   // e.g. "0.67"
+  baselineRate: text("baseline_rate"),
+  summary: text("summary"),
+  createdAt: text("created_at").notNull(),
+});
