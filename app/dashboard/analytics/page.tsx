@@ -4,394 +4,437 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
 import {
-  FlaskConical,
-  Zap,
-  Brain,
-  History,
-  Play,
-  Loader2,
-  TrendingUp,
-  TrendingDown,
-  Repeat2,
-  AlertTriangle,
-  ChevronRight,
-  RefreshCw,
-  CheckCircle2,
-  XCircle,
-  BarChart2,
-  MessageCircle,
-  Send,
-  Clock,
-  Activity,
-  Target,
-  Layers,
+  Trophy, Zap, BarChart2, Hash, Brain, Play, Loader2,
+  TrendingUp, TrendingDown, RefreshCw, ChevronDown,
+  CheckCircle2, XCircle, Send, Activity, Target,
+  Repeat2, Clock, ArrowUpRight, AlertTriangle, Info,
+  Download, Filter, SortAsc, ChevronRight,
 } from "lucide-react";
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-interface Pattern {
-  id: string;
-  analysisId: string;
-  patternId: string;
-  type: string;
-  sequence: string;       // JSON array string
-  locations: string;      // JSON array string
-  occurrenceCount: number;
-  intervalAvg: string | null;
-  intervalStddev: string | null;
-  nextPredictedTick: number | null;
-  confidence: string | null;
-  walkForwardHitRate: string | null;
-  baselineRate: string | null;
-  summary: string | null;
-  createdAt: string;
+interface Strategy {
+  pattern: number[];
+  window: number;
+  trade_type: string;
+  total_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  baseline_rate: number;
+  edge: number;
+  confidence_lower: number;
+  signal: string;
+  rank: number;
 }
 
 interface Analysis {
   id: string;
   status: "pending" | "running" | "done" | "error";
-  inputTicks: string;
+  symbol: string;
   tickCount: number;
-  windowSize: number;
-  similarityThreshold: string;
-  maxPatterns: number;
   summary: string | null;
   rawOutput: string | null;
   error: string | null;
-  startedAt: string | null;
-  completedAt: string | null;
   createdAt: string;
+  completedAt: string | null;
 }
 
-type Tab = "lab" | "signals" | "agent" | "history";
+type Tab = "strategies" | "backtest" | "digits" | "manual" | "agent";
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-function parseArr(s: string): number[] {
-  try { return JSON.parse(s); } catch { return []; }
+const SYMBOLS = [
+  { value: "R_10",    label: "Volatility 10 Index" },
+  { value: "R_25",    label: "Volatility 25 Index" },
+  { value: "R_50",    label: "Volatility 50 Index" },
+  { value: "R_75",    label: "Volatility 75 Index" },
+  { value: "R_100",   label: "Volatility 100 Index" },
+  { value: "R_10_1S", label: "Volatility 10 (1s)" },
+  { value: "R_25_1S", label: "Volatility 25 (1s)" },
+  { value: "R_50_1S", label: "Volatility 50 (1s)" },
+  { value: "R_75_1S", label: "Volatility 75 (1s)" },
+  { value: "R_100_1S",label: "Volatility 100 (1s)" },
+];
+
+const TRADE_TYPE_COLORS: Record<string, string> = {
+  EVEN:    "bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800",
+  ODD:     "bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800",
+  OVER:    "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800",
+  UNDER:   "bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800",
+  MATCHES: "bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800",
+  DIFFERS: "bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800",
+};
+
+function ttColor(tt: string) {
+  const kind = tt.split("_")[0];
+  return TRADE_TYPE_COLORS[kind] || "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700";
 }
 
-function confColor(conf: number) {
-  if (conf >= 0.75) return "text-emerald-600 dark:text-emerald-400";
-  if (conf >= 0.5)  return "text-amber-500 dark:text-amber-400";
+function ttLabel(tt: string) {
+  if (tt === "EVEN") return "Even";
+  if (tt === "ODD")  return "Odd";
+  const [k, x] = tt.split("_");
+  if (k === "OVER")    return `Over ${x}`;
+  if (k === "UNDER")   return `Under ${x}`;
+  if (k === "MATCHES") return `Matches ${x}`;
+  if (k === "DIFFERS") return `Differs ${x}`;
+  return tt;
+}
+
+function winColor(wr: number) {
+  if (wr >= 0.65) return "text-emerald-600 dark:text-emerald-400";
+  if (wr >= 0.55) return "text-amber-500 dark:text-amber-400";
+  if (wr >= 0.50) return "text-blue-500 dark:text-blue-400";
   return "text-rose-500 dark:text-rose-400";
 }
 
-function confBg(conf: number) {
-  if (conf >= 0.75) return "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800";
-  if (conf >= 0.5)  return "bg-amber-50  dark:bg-amber-950/60  border-amber-200  dark:border-amber-800";
-  return "bg-rose-50 dark:bg-rose-950/60 border-rose-200 dark:border-rose-800";
+function edgeBar(edge: number) {
+  const pct = Math.min(Math.abs(edge) * 400, 100);
+  const col = edge > 0 ? "bg-emerald-500" : "bg-rose-500";
+  return { pct, col };
 }
 
-// Mini inline bar chart for tick sequence
-function TickBar({ values }: { values: number[] }) {
-  if (!values.length) return null;
-  const mn = Math.min(...values);
-  const mx = Math.max(...values);
-  const range = mx - mn || 1;
+// ── Strategy Card ─────────────────────────────────────────────────────────────
+
+function StrategyCard({ s, rank }: { s: Strategy; rank: number }) {
+  const wr      = s.win_rate;
+  const edge    = s.edge;
+  const { pct, col } = edgeBar(edge);
+  const kind    = s.trade_type.split("_")[0];
+
+  const rankBg =
+    rank === 1 ? "from-amber-400 to-yellow-500" :
+    rank === 2 ? "from-slate-300 to-slate-400" :
+    rank === 3 ? "from-orange-400 to-amber-500" :
+    "from-slate-600 to-slate-700";
+
   return (
-    <div className="flex items-end gap-0.5 h-8 mt-1">
-      {values.map((v, i) => {
-        const h = Math.round(((v - mn) / range) * 28) + 4;
-        return (
+    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 overflow-hidden hover:shadow-lg transition-all">
+      {/* Rank stripe + win rate */}
+      <div className="flex items-stretch">
+        <div className={`bg-gradient-to-b ${rankBg} w-12 flex items-center justify-center flex-shrink-0`}>
+          <span className="text-white font-black text-lg">#{rank}</span>
+        </div>
+        <div className="flex-1 px-4 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-xs font-bold px-2 py-1 rounded-lg ${ttColor(s.trade_type)}`}>
+                {ttLabel(s.trade_type)}
+              </span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                Window {s.window} · {s.total_trades} trades
+              </span>
+            </div>
+            <span className={`text-2xl font-black tabular-nums ${winColor(wr)}`}>
+              {(wr * 100).toFixed(1)}%
+            </span>
+          </div>
+
+          {/* Pattern sequence */}
+          <div className="flex items-center gap-1 mt-2 flex-wrap">
+            <span className="text-[10px] text-slate-400 mr-1 font-semibold uppercase">After:</span>
+            {s.pattern.map((d, i) => (
+              <span key={i} className="flex items-center gap-0.5">
+                <span className="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center font-mono font-bold text-sm text-slate-800 dark:text-white">
+                  {d}
+                </span>
+                {i < s.pattern.length - 1 && <ChevronRight className="w-3 h-3 text-slate-300 dark:text-slate-600" />}
+              </span>
+            ))}
+            <ChevronRight className="w-3.5 h-3.5 text-blue-400 mx-1" />
+            <span className={`text-xs font-bold px-2 py-1 rounded-lg ${ttColor(s.trade_type)}`}>
+              BET {ttLabel(s.trade_type).toUpperCase()}
+            </span>
+          </div>
+
+          {/* Edge bar */}
+          <div className="mt-3">
+            <div className="flex items-center justify-between text-[10px] mb-1">
+              <span className="text-slate-500 font-semibold">Edge over baseline</span>
+              <span className={edge > 0 ? "text-emerald-600 dark:text-emerald-400 font-bold" : "text-rose-500 font-bold"}>
+                {edge > 0 ? "+" : ""}{(edge * 100).toFixed(2)}%
+              </span>
+            </div>
+            <div className="h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+              <div className={`h-full rounded-full ${col} transition-all`} style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+
+          {/* Stats row */}
+          <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+            {[
+              { label: "Wins",     value: s.wins,     color: "text-emerald-600 dark:text-emerald-400" },
+              { label: "Losses",   value: s.losses,   color: "text-rose-500" },
+              { label: "Baseline", value: `${(s.baseline_rate * 100).toFixed(1)}%`, color: "text-slate-500" },
+              { label: "CI Lower", value: `${(s.confidence_lower * 100).toFixed(1)}%`, color: "text-blue-500" },
+            ].map(st => (
+              <div key={st.label} className="bg-slate-50 dark:bg-slate-800/60 rounded-lg p-1.5">
+                <div className={`text-sm font-bold ${st.color}`}>{st.value}</div>
+                <div className="text-[9px] text-slate-400 font-semibold uppercase">{st.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Signal */}
+          <div className="mt-3 flex items-start gap-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/60 rounded-xl p-2.5">
+            <Zap className="w-3.5 h-3.5 text-blue-500 flex-shrink-0 mt-0.5" />
+            <p className="text-[11px] text-blue-700 dark:text-blue-300 font-semibold leading-relaxed">{s.signal}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Digit Distribution Bar ────────────────────────────────────────────────────
+
+function DigitBar({ digit, freq, expected }: { digit: number; freq: number; expected: number }) {
+  const pct = Math.round(freq * 100 * 10) / 10;
+  const exp = Math.round(expected * 100 * 10) / 10;
+  const bias = pct - exp;
+  return (
+    <div className="flex items-center gap-3">
+      <span className="w-6 h-6 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center font-mono font-bold text-sm text-slate-700 dark:text-slate-200 flex-shrink-0">{digit}</span>
+      <div className="flex-1">
+        <div className="h-4 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden relative">
           <div
-            key={i}
-            style={{ height: h }}
-            className="w-2 rounded-sm bg-blue-500/70 flex-shrink-0"
-            title={String(v)}
+            className={`h-full rounded-full transition-all ${bias > 1.5 ? "bg-emerald-500" : bias < -1.5 ? "bg-rose-500" : "bg-blue-500"}`}
+            style={{ width: `${Math.min(pct * 5, 100)}%` }}
           />
-        );
-      })}
+          <div className="absolute inset-y-0 flex items-center pl-2">
+            <span className="text-[9px] font-bold text-white">{pct}%</span>
+          </div>
+        </div>
+      </div>
+      <span className={`text-xs font-bold w-16 text-right ${bias > 1.5 ? "text-emerald-500" : bias < -1.5 ? "text-rose-500" : "text-slate-400"}`}>
+        {bias > 0 ? "+" : ""}{bias.toFixed(1)}%
+      </span>
     </div>
   );
 }
 
-// ── Pattern Signal Card ────────────────────────────────────────────────────────
-
-function PatternCard({ p }: { p: Pattern }) {
-  const seq   = parseArr(p.sequence);
-  const locs  = parseArr(p.locations);
-  const conf  = parseFloat(p.confidence || "0");
-  const hitR  = parseFloat(p.walkForwardHitRate || "0");
-  const baseR = parseFloat(p.baselineRate || "0");
-  const edge  = hitR && baseR ? ((hitR - baseR) * 100).toFixed(1) : null;
-
-  return (
-    <div className={`rounded-2xl border p-4 ${confBg(conf)} transition-all hover:shadow-md`}>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-            {p.patternId}
-          </span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-700/60 text-slate-600 dark:text-slate-300 font-semibold capitalize">
-            {p.type}
-          </span>
-        </div>
-        <span className={`text-sm font-bold ${confColor(conf)}`}>
-          {(conf * 100).toFixed(1)}% conf
-        </span>
-      </div>
-
-      {/* Sequence visualisation */}
-      <div className="flex items-center gap-1 flex-wrap mb-1">
-        {seq.map((v, i) => (
-          <span key={i} className="flex items-center">
-            <span className="text-sm font-mono font-bold text-slate-800 dark:text-white bg-white/60 dark:bg-slate-800/60 px-1.5 py-0.5 rounded">
-              {v}
-            </span>
-            {i < seq.length - 1 && <ChevronRight className="w-3 h-3 text-slate-400 mx-0.5" />}
-          </span>
-        ))}
-      </div>
-      <TickBar values={seq} />
-
-      {/* Stats grid */}
-      <div className="grid grid-cols-3 gap-2 mt-3 text-center">
-        <div className="bg-white/50 dark:bg-slate-800/50 rounded-lg p-2">
-          <Repeat2 className="w-3.5 h-3.5 mx-auto text-blue-500 mb-0.5" />
-          <div className="text-sm font-bold text-slate-800 dark:text-white">{p.occurrenceCount}×</div>
-          <div className="text-[10px] text-slate-500">Occurrences</div>
-        </div>
-        <div className="bg-white/50 dark:bg-slate-800/50 rounded-lg p-2">
-          <Clock className="w-3.5 h-3.5 mx-auto text-purple-500 mb-0.5" />
-          <div className="text-sm font-bold text-slate-800 dark:text-white">
-            {p.intervalAvg ? `${p.intervalAvg}t` : "—"}
-          </div>
-          <div className="text-[10px] text-slate-500">Avg Interval</div>
-        </div>
-        <div className="bg-white/50 dark:bg-slate-800/50 rounded-lg p-2">
-          <Target className="w-3.5 h-3.5 mx-auto text-emerald-500 mb-0.5" />
-          <div className="text-sm font-bold text-slate-800 dark:text-white">
-            {p.nextPredictedTick != null ? `t${p.nextPredictedTick}` : "—"}
-          </div>
-          <div className="text-[10px] text-slate-500">Next Pred.</div>
-        </div>
-      </div>
-
-      {/* Walk-forward vs baseline */}
-      {hitR > 0 && baseR > 0 && (
-        <div className="mt-3 flex items-center gap-2 text-xs">
-          <Activity className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-          <span className="text-slate-500">Hit rate:</span>
-          <span className={`font-bold ${hitR > baseR ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"}`}>
-            {(hitR * 100).toFixed(1)}%
-          </span>
-          <span className="text-slate-400">vs</span>
-          <span className="text-slate-500">{(baseR * 100).toFixed(1)}% baseline</span>
-          {edge && (
-            <span className={`ml-auto font-bold text-[11px] px-1.5 py-0.5 rounded ${parseFloat(edge) > 0 ? "bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300" : "bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300"}`}>
-              {parseFloat(edge) > 0 ? "+" : ""}{edge}% edge
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Occurrence locations */}
-      <div className="mt-2">
-        <div className="text-[10px] text-slate-500 mb-1">Locations (tick index):</div>
-        <div className="flex flex-wrap gap-1">
-          {locs.slice(0, 12).map((l) => (
-            <span key={l} className="text-[10px] font-mono bg-white/70 dark:bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-700 dark:text-slate-300">
-              t{l}
-            </span>
-          ))}
-          {locs.length > 12 && (
-            <span className="text-[10px] text-slate-400">+{locs.length - 12} more</span>
-          )}
-        </div>
-      </div>
-
-      {/* Summary */}
-      {p.summary && (
-        <p className="mt-2 text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed border-t border-black/5 dark:border-white/5 pt-2">
-          {p.summary}
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ── Main Page ────────────────────────────────────────────────────────────────
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function DerivPatternLabPage() {
-  const [tab, setTab]                     = useState<Tab>("lab");
-  const [tickInput, setTickInput]         = useState("");
-  const [windowSize, setWindowSize]       = useState(5);
-  const [simThreshold, setSimThreshold]   = useState(0.82);
-  const [maxPatterns, setMaxPatterns]     = useState(10);
-  const [running, setRunning]             = useState(false);
-  const [currentId, setCurrentId]         = useState<string | null>(null);
-  const [analysis, setAnalysis]           = useState<Analysis | null>(null);
-  const [patterns, setPatterns]           = useState<Pattern[]>([]);
-  const [history, setHistory]             = useState<Analysis[]>([]);
-  const [chatMessages, setChatMessages]   = useState<{role:"user"|"ai"; text:string}[]>([]);
-  const [chatInput, setChatInput]         = useState("");
-  const [chatLoading, setChatLoading]     = useState(false);
-  const [regimes, setRegimes]             = useState<number[]>([]);
-  const [periodPeak, setPeriodPeak]       = useState<number | null>(null);
-  const pollRef                           = useRef<ReturnType<typeof setInterval> | null>(null);
-  const chatEndRef                        = useRef<HTMLDivElement>(null);
+  const [tab, setTab]                   = useState<Tab>("strategies");
+  const [symbol, setSymbol]             = useState("R_10");
+  const [tickCount, setTickCount]       = useState(5000);
+  const [maxWindow, setMaxWindow]       = useState(7);
+  const [minOccur, setMinOccur]         = useState(30);
+  const [topN, setTopN]                 = useState(30);
+  const [running, setRunning]           = useState(false);
+  const [progress, setProgress]         = useState("");
+  const [analysis, setAnalysis]         = useState<Analysis | null>(null);
+  const [strategies, setStrategies]     = useState<Strategy[]>([]);
+  const [rawData, setRawData]           = useState<any>(null);
+  const [history, setHistory]           = useState<Analysis[]>([]);
+  const [filterTT, setFilterTT]         = useState("ALL");
+  const [sortBy, setSortBy]             = useState<"win_rate"|"edge"|"total_trades"|"confidence_lower">("confidence_lower");
+  const [chatMessages, setChatMessages] = useState<{ role: "user"|"ai"; text: string }[]>([]);
+  const [chatInput, setChatInput]       = useState("");
+  const [chatLoading, setChatLoading]   = useState(false);
+  const [manualTicks, setManualTicks]   = useState("");
+  const pollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chatEnd   = useRef<HTMLDivElement>(null);
 
-  // Load history on mount
   useEffect(() => {
-    fetch("/api/deriv/status")
-      .then(r => r.json())
-      .then(d => { if (d.analyses) setHistory(d.analyses); })
-      .catch(() => {});
+    fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); }).catch(() => {});
   }, []);
 
-  // Scroll chat to bottom
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
+  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
-  // Poll for job completion
-  const startPolling = useCallback((id: string) => {
+  const pollJob = useCallback((id: string) => {
     if (pollRef.current) clearInterval(pollRef.current);
+    const steps = ["🔗 Connecting to Deriv API…", "📥 Downloading ticks…", "🔍 Finding all patterns…", "📊 Backtesting strategies…", "🏆 Ranking by win rate…"];
+    let step = 0;
     pollRef.current = setInterval(async () => {
+      setProgress(steps[step % steps.length]);
+      step++;
       try {
         const r = await fetch(`/api/deriv/status?id=${id}`);
         const d = await r.json();
         if (d.analysis) {
           setAnalysis(d.analysis);
           if (d.analysis.status === "done") {
-            setPatterns(d.patterns || []);
             if (d.analysis.rawOutput) {
-              try {
-                const raw = JSON.parse(d.analysis.rawOutput);
-                setRegimes(raw.regime_changes || []);
-                setPeriodPeak(raw.autocorrelation_peak ?? null);
-              } catch {}
+              const raw = JSON.parse(d.analysis.rawOutput);
+              setRawData(raw);
+              setStrategies(raw.top_strategies || []);
             }
             setRunning(false);
-            if (pollRef.current) clearInterval(pollRef.current);
-            setTab("signals");
-            // Refresh history
+            setProgress("");
+            clearInterval(pollRef.current!);
+            setTab("strategies");
             fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); });
           } else if (d.analysis.status === "error") {
             setRunning(false);
-            if (pollRef.current) clearInterval(pollRef.current);
+            setProgress("");
+            clearInterval(pollRef.current!);
           }
         }
       } catch {}
-    }, 2000);
+    }, 2500);
   }, []);
 
-  async function handleRunAnalysis() {
-    const raw = tickInput.trim();
-    if (!raw) return;
-
-    const ticks = raw
-      .split(/[\s,\n]+/)
-      .map(s => parseFloat(s.trim()))
-      .filter(n => !isNaN(n));
-
-    if (ticks.length < 10) {
-      alert("Paste at least 10 tick values separated by commas or newlines.");
-      return;
-    }
-
+  async function runAnalysis(useManual = false) {
     setRunning(true);
     setAnalysis(null);
-    setPatterns([]);
-    setRegimes([]);
-    setPeriodPeak(null);
+    setStrategies([]);
+    setRawData(null);
+    setProgress("🚀 Starting analysis engine…");
+
+    const body: any = { symbol, tickCount, minOccurrences: minOccur, maxWindow, topN };
+
+    if (useManual) {
+      const digits = manualTicks.split(/[\s,\n]+/).map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n >= 0 && n <= 9);
+      if (digits.length < 20) { alert("Paste at least 20 digits (0–9)."); setRunning(false); setProgress(""); return; }
+      body.manualTicks = digits;
+    }
 
     try {
       const r = await fetch("/api/deriv/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticks, windowSize, similarityThreshold: simThreshold, maxPatterns }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
       const d = await r.json();
-      if (d.analysisId) {
-        setCurrentId(d.analysisId);
-        startPolling(d.analysisId);
-      } else {
-        setRunning(false);
-        alert(d.error || "Failed to start analysis");
-      }
-    } catch (e: any) {
-      setRunning(false);
-      alert(e.message);
-    }
-  }
-
-  async function loadHistoryItem(a: Analysis) {
-    setAnalysis(a);
-    setCurrentId(a.id);
-    if (a.status === "done") {
-      const r = await fetch(`/api/deriv/status?id=${a.id}`);
-      const d = await r.json();
-      setPatterns(d.patterns || []);
-      if (a.rawOutput) {
-        try {
-          const raw = JSON.parse(a.rawOutput);
-          setRegimes(raw.regime_changes || []);
-          setPeriodPeak(raw.autocorrelation_peak ?? null);
-        } catch {}
-      }
-      setTab("signals");
-    }
+      if (d.analysisId) { pollJob(d.analysisId); } else { setRunning(false); setProgress(""); alert(d.error || "Failed"); }
+    } catch (e: any) { setRunning(false); setProgress(""); alert(e.message); }
   }
 
   async function handleChat() {
     if (!chatInput.trim()) return;
-    const userMsg = chatInput.trim();
+    const msg = chatInput.trim();
     setChatInput("");
-    setChatMessages(prev => [...prev, { role: "user", text: userMsg }]);
+    setChatMessages(p => [...p, { role: "user", text: msg }]);
     setChatLoading(true);
 
-    // Build context from current patterns
-    const context = patterns.length
-      ? `Current analysis: ${analysis?.summary || ""}. Patterns found: ${patterns.map(p => `${p.patternId} seq=${p.sequence} conf=${p.confidence} hitRate=${p.walkForwardHitRate}`).join("; ")}.`
-      : "No analysis results loaded yet.";
+    const ctx = rawData
+      ? `Symbol: ${rawData.symbol}. Ticks: ${rawData.tick_count}. Evaluated ${rawData.total_evaluated?.toLocaleString()} strategies. ` +
+        `Top strategies: ${(rawData.top_strategies || []).slice(0, 5).map((s: Strategy) => `${s.signal} (win: ${(s.win_rate*100).toFixed(1)}%, edge: +${(s.edge*100).toFixed(2)}%)`).join("; ")}.`
+      : "No analysis loaded yet.";
 
     try {
       const r = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: `[Deriv Pattern Lab Context]\n${context}\n\nUser question: ${userMsg}`,
-          agentId: "analytics",
-        }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: `[Deriv Pattern Lab]\n${ctx}\n\nUser: ${msg}`, agentId: "analytics" }),
       });
       const d = await r.json();
-      setChatMessages(prev => [...prev, { role: "ai", text: d.reply || d.response || "No response" }]);
+      setChatMessages(p => [...p, { role: "ai", text: d.reply || d.response || "No response" }]);
     } catch (e: any) {
-      setChatMessages(prev => [...prev, { role: "ai", text: `Error: ${e.message}` }]);
-    } finally {
-      setChatLoading(false);
-    }
+      setChatMessages(p => [...p, { role: "ai", text: `Error: ${e.message}` }]);
+    } finally { setChatLoading(false); }
   }
 
-  // ── Tick input preview ──────────────────────────────────────────────────────
-  const previewTicks = tickInput
-    .split(/[\s,\n]+/)
-    .map(s => parseFloat(s.trim()))
-    .filter(n => !isNaN(n))
-    .slice(0, 60);
+  const displayStrategies = strategies
+    .filter(s => filterTT === "ALL" || s.trade_type.startsWith(filterTT))
+    .sort((a, b) => b[sortBy] - a[sortBy]);
 
-  const tabs: { id: Tab; label: string; icon: any }[] = [
-    { id: "lab",     label: "Pattern Lab",   icon: FlaskConical },
-    { id: "signals", label: "Signal Feed",   icon: Zap },
-    { id: "agent",   label: "AI Agent",      icon: Brain },
-    { id: "history", label: "Experiments",   icon: History },
+  const tabs: { id: Tab; label: string; icon: any; badge?: number }[] = [
+    { id: "strategies", label: "Best Strategies", icon: Trophy, badge: strategies.length },
+    { id: "backtest",   label: "Full Backtest",   icon: BarChart2 },
+    { id: "digits",     label: "Digit Stats",     icon: Hash },
+    { id: "manual",     label: "Manual Analysis", icon: Activity },
+    { id: "agent",      label: "AI Agent",        icon: Brain },
   ];
 
+  const tradeKinds = ["ALL", "OVER", "UNDER", "EVEN", "ODD", "MATCHES", "DIFFERS"];
+
   return (
-    <div className="flex h-screen bg-slate-100/60 dark:bg-slate-950 overflow-hidden font-sans transition-colors">
+    <div className="flex h-screen bg-slate-100/60 dark:bg-slate-950 overflow-hidden font-sans">
       <Sidebar />
-
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <Header
-          title="Deriv Pattern Lab"
-          subtitle="Tick-by-tick mathematical pattern discovery · STUMPY · SciPy · ruptures · Walk-forward validation"
-        />
+        <Header title="Deriv Pattern Lab" subtitle="Real tick data · All trade types · Walk-forward backtested · Ranked entry signals" />
 
-        {/* Tab bar */}
-        <div className="flex gap-1 px-4 sm:px-6 pt-4 pb-0 border-b border-slate-200 dark:border-slate-800 overflow-x-auto flex-shrink-0">
+        {/* ── Controls Bar ───────────────────────────────────────────────── */}
+        <div className="flex-shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 sm:px-6 py-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Symbol */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-500 whitespace-nowrap">Symbol:</label>
+              <select
+                value={symbol}
+                onChange={e => setSymbol(e.target.value)}
+                className="text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                {SYMBOLS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
+            </div>
+
+            {/* Ticks */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-500 whitespace-nowrap">Ticks:</label>
+              <select
+                value={tickCount}
+                onChange={e => setTickCount(Number(e.target.value))}
+                className="text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                {[1000, 2000, 3000, 5000, 8000, 10000].map(n => <option key={n} value={n}>{n.toLocaleString()} ticks</option>)}
+              </select>
+            </div>
+
+            {/* Window */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-500 whitespace-nowrap">Window:</label>
+              <select
+                value={maxWindow}
+                onChange={e => setMaxWindow(Number(e.target.value))}
+                className="text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                {[3,4,5,6,7,8].map(n => <option key={n} value={n}>Max {n} digits</option>)}
+              </select>
+            </div>
+
+            {/* Min occurrences */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-500 whitespace-nowrap">Min occ:</label>
+              <select
+                value={minOccur}
+                onChange={e => setMinOccur(Number(e.target.value))}
+                className="text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                {[10, 20, 30, 50, 100].map(n => <option key={n} value={n}>{n}+ occurrences</option>)}
+              </select>
+            </div>
+
+            {/* Run button */}
+            <button
+              onClick={() => runAnalysis(false)}
+              disabled={running}
+              className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-blue-500/20 cursor-pointer ml-auto"
+            >
+              {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+              {running ? "Analysing…" : "Run Analysis"}
+            </button>
+          </div>
+
+          {/* Progress */}
+          {running && (
+            <div className="mt-2 flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
+              <div className="w-full bg-blue-100 dark:bg-blue-950/40 rounded-full h-1.5 overflow-hidden">
+                <div className="h-full bg-blue-500 rounded-full animate-pulse w-3/4" />
+              </div>
+              <span className="whitespace-nowrap text-xs font-semibold">{progress}</span>
+            </div>
+          )}
+
+          {/* Analysis summary */}
+          {analysis?.status === "done" && !running && (
+            <div className="mt-2 flex items-center gap-2">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">{analysis.summary}</p>
+            </div>
+          )}
+          {analysis?.status === "error" && (
+            <div className="mt-2 flex items-center gap-2">
+              <XCircle className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
+              <p className="text-xs text-rose-600 dark:text-rose-400">{analysis.error}</p>
+            </div>
+          )}
+        </div>
+
+        {/* ── Tab Bar ────────────────────────────────────────────────────── */}
+        <div className="flex gap-1 px-4 sm:px-6 pt-3 border-b border-slate-200 dark:border-slate-800 overflow-x-auto flex-shrink-0 bg-white dark:bg-slate-900">
           {tabs.map(t => {
             const Icon = t.icon;
             const active = tab === t.id;
@@ -399,17 +442,17 @@ export default function DerivPatternLabPage() {
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-t-xl border-b-2 transition-all whitespace-nowrap cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-2.5 text-sm font-semibold rounded-t-xl border-b-2 transition-all whitespace-nowrap cursor-pointer ${
                   active
                     ? "border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50/70 dark:bg-blue-950/40"
                     : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/40"
                 }`}
               >
-                <Icon className="w-4 h-4" />
+                <Icon className="w-3.5 h-3.5" />
                 {t.label}
-                {t.id === "signals" && patterns.length > 0 && (
-                  <span className="text-[10px] font-bold bg-blue-600 text-white px-1.5 py-0.5 rounded-full ml-1">
-                    {patterns.length}
+                {t.badge !== undefined && t.badge > 0 && (
+                  <span className="text-[9px] font-black bg-blue-600 text-white px-1.5 py-0.5 rounded-full">
+                    {t.badge}
                   </span>
                 )}
               </button>
@@ -417,303 +460,390 @@ export default function DerivPatternLabPage() {
           })}
         </div>
 
+        {/* ── Content ────────────────────────────────────────────────────── */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 lg:pb-6">
 
-          {/* ── TAB: Pattern Lab ──────────────────────────────────────────── */}
-          {tab === "lab" && (
-            <div className="space-y-5 max-w-4xl mx-auto">
+          {/* ────────────────────────────────────── TAB: Best Strategies */}
+          {tab === "strategies" && (
+            <div className="space-y-4 max-w-5xl mx-auto">
 
-              {/* Header card */}
-              <div className="bg-gradient-to-r from-blue-700 to-indigo-700 p-5 rounded-2xl text-white">
-                <div className="flex items-center gap-3 mb-2">
-                  <FlaskConical className="w-6 h-6 text-blue-200" />
-                  <h2 className="font-bold text-lg">Deriv Tick Pattern Discovery</h2>
-                </div>
-                <p className="text-sm text-blue-100 leading-relaxed">
-                  Paste tick data from Deriv (digits 0–9 or decimal prices). The analytics agent's
-                  Python engine will find every recurring sequence, measure exactly where and when
-                  they occur, and validate whether each pattern has a statistical trading edge.
-                </p>
-              </div>
-
-              {/* Tick input */}
-              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5">
-                <label className="text-sm font-bold text-slate-700 dark:text-slate-200 block mb-2">
-                  Tick Data
-                  <span className="ml-2 text-[11px] font-normal text-slate-400">
-                    comma, space, or newline separated — e.g. 3,7,2,5,8,1,7,2,5...
-                  </span>
-                </label>
-                <textarea
-                  value={tickInput}
-                  onChange={e => setTickInput(e.target.value)}
-                  placeholder="Paste your Deriv ticks here, e.g:&#10;3,7,2,5,8,1,7,2,5,9,4,3,7,2,5,8,1..."
-                  rows={7}
-                  className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-slate-800 dark:text-slate-200 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-400"
-                />
-
-                {/* Preview bar */}
-                {previewTicks.length > 0 && (
-                  <div className="mt-3">
-                    <div className="text-[11px] text-slate-500 mb-1">
-                      Preview — {previewTicks.length} tick{previewTicks.length > 1 ? "s" : ""} detected:
-                    </div>
-                    <div className="flex items-end gap-0.5 h-10 bg-slate-50 dark:bg-slate-800/50 rounded-lg p-2 overflow-hidden">
-                      {previewTicks.map((v, i) => {
-                        const mn = Math.min(...previewTicks);
-                        const mx = Math.max(...previewTicks);
-                        const h = Math.round(((v - mn) / (mx - mn || 1)) * 28) + 4;
-                        return (
-                          <div
-                            key={i}
-                            style={{ height: h }}
-                            className="w-1.5 rounded-sm bg-blue-500/70 flex-shrink-0"
-                            title={String(v)}
-                          />
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Settings */}
-              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5">
-                <h3 className="font-bold text-sm text-slate-700 dark:text-slate-200 mb-4 flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-purple-500" />
-                  Analysis Settings
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div>
-                    <label className="text-xs font-semibold text-slate-500 block mb-1.5">
-                      Pattern Window Size
-                      <span className="ml-1 text-[10px] text-slate-400">(3–20 ticks)</span>
-                    </label>
-                    <input
-                      type="number"
-                      min={3} max={20} value={windowSize}
-                      onChange={e => setWindowSize(Number(e.target.value))}
-                      className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-1">How many ticks form one pattern</p>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-slate-500 block mb-1.5">
-                      Similarity Threshold
-                      <span className="ml-1 text-[10px] text-slate-400">(0.5–0.99)</span>
-                    </label>
-                    <input
-                      type="number"
-                      step={0.01} min={0.5} max={0.99} value={simThreshold}
-                      onChange={e => setSimThreshold(Number(e.target.value))}
-                      className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-1">Higher = stricter match required</p>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-slate-500 block mb-1.5">
-                      Max Patterns
-                    </label>
-                    <input
-                      type="number"
-                      min={1} max={50} value={maxPatterns}
-                      onChange={e => setMaxPatterns(Number(e.target.value))}
-                      className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-1">Top N patterns to return</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Run button + status */}
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={handleRunAnalysis}
-                  disabled={running || !tickInput.trim()}
-                  className="flex items-center gap-2.5 px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-blue-500/20 cursor-pointer"
-                >
-                  {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                  {running ? "Running Analysis…" : "Run Pattern Analysis"}
-                </button>
-
-                {running && (
-                  <div className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400 animate-pulse">
-                    <Activity className="w-4 h-4" />
-                    Python engine running inside analytics VM…
-                  </div>
-                )}
-              </div>
-
-              {/* Status card */}
-              {analysis && (
-                <div className={`rounded-2xl border p-4 ${analysis.status === "done" ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800" : analysis.status === "error" ? "bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800" : "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800"}`}>
-                  <div className="flex items-center gap-2 mb-1">
-                    {analysis.status === "done" ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : analysis.status === "error" ? <XCircle className="w-4 h-4 text-rose-500" /> : <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />}
-                    <span className="text-sm font-bold text-slate-800 dark:text-white capitalize">{analysis.status}</span>
-                    <span className="text-xs text-slate-500">· {analysis.tickCount} ticks · window {analysis.windowSize}</span>
-                  </div>
-                  {analysis.summary && <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">{analysis.summary}</p>}
-                  {analysis.error && <p className="text-xs text-rose-600 dark:text-rose-400">{analysis.error}</p>}
-                  {analysis.status === "done" && (
-                    <button onClick={() => setTab("signals")} className="mt-2 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer">
-                      View Signal Feed <ChevronRight className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Engine info */}
-              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5">
-                <h3 className="font-bold text-sm text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
-                  <BarChart2 className="w-4 h-4 text-indigo-500" />
-                  What the Engine Discovers
-                </h3>
+              {/* Summary KPI bar */}
+              {rawData && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {[
-                    { label: "STUMPY", desc: "Repeated subsequences + exact tick positions", color: "bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300" },
-                    { label: "SciPy FFT", desc: "Dominant periods + autocorrelation cycles", color: "bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300" },
-                    { label: "ruptures", desc: "Regime change-points — where behavior shifts", color: "bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300" },
-                    { label: "Walk-Forward", desc: "Predictive edge vs baseline — real validation", color: "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300" },
-                  ].map(e => (
-                    <div key={e.label} className={`rounded-xl p-3 ${e.color}`}>
-                      <div className="text-xs font-bold mb-1">{e.label}</div>
-                      <div className="text-[11px] opacity-80 leading-snug">{e.desc}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── TAB: Signal Feed ──────────────────────────────────────────── */}
-          {tab === "signals" && (
-            <div className="space-y-5 max-w-5xl mx-auto">
-
-              {/* Summary bar */}
-              {analysis?.status === "done" && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  {[
-                    { label: "Patterns Found", value: String(patterns.length), icon: Repeat2, color: "text-blue-500" },
-                    { label: "Regime Changes", value: String(regimes.length), icon: AlertTriangle, color: "text-amber-500" },
-                    { label: "Dominant Period", value: periodPeak ? `${periodPeak} ticks` : "—", icon: Activity, color: "text-purple-500" },
-                    {
-                      label: "Best Confidence",
-                      value: patterns.length ? `${(Math.max(...patterns.map(p => parseFloat(p.confidence || "0"))) * 100).toFixed(1)}%` : "—",
-                      icon: Target,
-                      color: "text-emerald-500",
-                    },
+                    { label: "Ticks Analysed",   value: (rawData.tick_count || 0).toLocaleString(), icon: Activity, color: "text-blue-500" },
+                    { label: "Strategies Found",  value: (rawData.total_evaluated || 0).toLocaleString(), icon: Target, color: "text-purple-500" },
+                    { label: "Top Win Rate",      value: strategies.length ? `${(strategies[0].win_rate * 100).toFixed(1)}%` : "—", icon: Trophy, color: "text-amber-500" },
+                    { label: "Max Edge",          value: strategies.length ? `+${(strategies[0].edge * 100).toFixed(2)}%` : "—", icon: TrendingUp, color: "text-emerald-500" },
                   ].map(s => {
                     const Icon = s.icon;
                     return (
                       <div key={s.label} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-4">
-                        <div className="flex items-center justify-between text-slate-500 mb-1.5">
-                          <span className="text-xs font-semibold">{s.label}</span>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-semibold text-slate-500">{s.label}</span>
                           <Icon className={`w-4 h-4 ${s.color}`} />
                         </div>
-                        <div className="text-xl font-bold text-slate-800 dark:text-white">{s.value}</div>
+                        <div className="text-xl font-black text-slate-800 dark:text-white">{s.value}</div>
                       </div>
                     );
                   })}
                 </div>
               )}
 
-              {/* Analysis summary */}
-              {analysis?.summary && (
-                <div className="bg-gradient-to-r from-indigo-600 to-blue-700 p-4 rounded-2xl text-white">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Brain className="w-4 h-4 text-indigo-200" />
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-200">Engine Report</span>
-                  </div>
-                  <p className="text-sm leading-relaxed">{analysis.summary}</p>
+              {/* Filter bar */}
+              {strategies.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-500">Filter:</span>
+                  {tradeKinds.map(k => (
+                    <button
+                      key={k}
+                      onClick={() => setFilterTT(k)}
+                      className={`text-xs px-3 py-1.5 rounded-lg font-bold border transition-all cursor-pointer ${
+                        filterTT === k
+                          ? "bg-blue-600 text-white border-blue-600"
+                          : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-blue-400"
+                      }`}
+                    >
+                      {k === "ALL" ? "All Types" : k}
+                    </button>
+                  ))}
+                  <span className="ml-auto text-xs text-slate-400">{displayStrategies.length} shown</span>
                 </div>
               )}
 
-              {/* Regime changes */}
-              {regimes.length > 0 && (
-                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-amber-200 dark:border-amber-800/60 p-4">
-                  <h3 className="font-bold text-sm text-slate-700 dark:text-slate-200 flex items-center gap-2 mb-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-500" />
-                    Regime Change-Points
-                  </h3>
-                  <p className="text-xs text-slate-500 mb-2">Tick positions where the data's statistical behavior shifts (ruptures algorithm):</p>
-                  <div className="flex flex-wrap gap-2">
-                    {regimes.map(r => (
-                      <span key={r} className="font-mono text-xs bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 px-2.5 py-1 rounded-lg font-semibold">
-                        t{r}
-                      </span>
+              {/* Cards */}
+              {displayStrategies.length === 0 && !running ? (
+                <div className="text-center py-20 text-slate-400">
+                  <Trophy className="w-14 h-14 mx-auto mb-4 opacity-20" />
+                  <p className="font-bold text-lg">No strategies yet</p>
+                  <p className="text-sm mt-2">Click "Run Analysis" above to fetch Deriv data and discover patterns</p>
+                  <div className="mt-6 flex flex-wrap justify-center gap-3 text-xs">
+                    {["Over/Under 0–9", "Even / Odd", "Matches 0–9", "Differs 0–9"].map(t => (
+                      <span key={t} className="bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full text-slate-600 dark:text-slate-300 font-semibold">{t}</span>
                     ))}
                   </div>
                 </div>
-              )}
-
-              {/* Pattern cards */}
-              {patterns.length === 0 && !running ? (
-                <div className="text-center py-16 text-slate-400">
-                  <FlaskConical className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                  <p className="font-semibold">No patterns yet</p>
-                  <p className="text-sm mt-1">Run an analysis in the Pattern Lab tab</p>
-                  <button
-                    onClick={() => setTab("lab")}
-                    className="mt-4 text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
-                  >
-                    Go to Pattern Lab →
-                  </button>
-                </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {patterns
-                    .sort((a, b) => parseFloat(b.confidence || "0") - parseFloat(a.confidence || "0"))
-                    .map(p => <PatternCard key={p.id} p={p} />)
-                  }
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {displayStrategies.map((s, i) => (
+                    <StrategyCard key={`${s.pattern.join(",")}_${s.trade_type}`} s={s} rank={i + 1} />
+                  ))}
                 </div>
               )}
             </div>
           )}
 
-          {/* ── TAB: AI Agent ──────────────────────────────────────────────── */}
+          {/* ────────────────────────────────────── TAB: Full Backtest */}
+          {tab === "backtest" && (
+            <div className="max-w-6xl mx-auto space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h2 className="font-bold text-slate-800 dark:text-white text-lg flex items-center gap-2">
+                  <BarChart2 className="w-5 h-5 text-blue-500" />
+                  Full Backtest Results
+                </h2>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-semibold text-slate-500">Sort by:</label>
+                  <select
+                    value={sortBy}
+                    onChange={e => setSortBy(e.target.value as any)}
+                    className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                  >
+                    <option value="confidence_lower">Reliability (CI Lower)</option>
+                    <option value="win_rate">Win Rate</option>
+                    <option value="edge">Edge %</option>
+                    <option value="total_trades">Total Trades</option>
+                  </select>
+                </div>
+              </div>
+
+              {strategies.length === 0 ? (
+                <div className="text-center py-16 text-slate-400">
+                  <BarChart2 className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                  <p className="font-semibold">Run an analysis to see full backtest table</p>
+                </div>
+              ) : (
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 font-semibold uppercase text-[10px] tracking-wider sticky top-0">
+                        <tr>
+                          <th className="py-3 px-3 text-left">#</th>
+                          <th className="py-3 px-3 text-left">Pattern</th>
+                          <th className="py-3 px-3 text-left">Trade Type</th>
+                          <th className="py-3 px-3 text-right">Win Rate</th>
+                          <th className="py-3 px-3 text-right">Baseline</th>
+                          <th className="py-3 px-3 text-right">Edge</th>
+                          <th className="py-3 px-3 text-right">Wins</th>
+                          <th className="py-3 px-3 text-right">Losses</th>
+                          <th className="py-3 px-3 text-right">Total</th>
+                          <th className="py-3 px-3 text-right">CI Lower</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {displayStrategies.map((s, i) => (
+                          <tr key={`${s.pattern.join(",")}_${s.trade_type}`} className={`hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors ${i === 0 ? "bg-amber-50/60 dark:bg-amber-950/20" : ""}`}>
+                            <td className="py-2.5 px-3">
+                              <span className={`font-black text-[11px] ${i === 0 ? "text-amber-600" : "text-slate-400"}`}>#{i + 1}</span>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="flex items-center gap-0.5">
+                                {s.pattern.map((d, pi) => (
+                                  <span key={pi} className="flex items-center">
+                                    <span className="w-5 h-5 rounded bg-slate-100 dark:bg-slate-700 flex items-center justify-center font-mono font-bold text-[11px] text-slate-700 dark:text-slate-200">{d}</span>
+                                    {pi < s.pattern.length - 1 && <span className="text-slate-300 dark:text-slate-600 text-[10px] mx-0.5">›</span>}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${ttColor(s.trade_type)}`}>
+                                {ttLabel(s.trade_type)}
+                              </span>
+                            </td>
+                            <td className={`py-2.5 px-3 text-right font-black text-sm tabular-nums ${winColor(s.win_rate)}`}>
+                              {(s.win_rate * 100).toFixed(2)}%
+                            </td>
+                            <td className="py-2.5 px-3 text-right text-slate-400 tabular-nums">
+                              {(s.baseline_rate * 100).toFixed(1)}%
+                            </td>
+                            <td className={`py-2.5 px-3 text-right font-bold tabular-nums ${s.edge > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"}`}>
+                              {s.edge > 0 ? "+" : ""}{(s.edge * 100).toFixed(2)}%
+                            </td>
+                            <td className="py-2.5 px-3 text-right text-emerald-600 dark:text-emerald-400 font-semibold tabular-nums">{s.wins}</td>
+                            <td className="py-2.5 px-3 text-right text-rose-500 font-semibold tabular-nums">{s.losses}</td>
+                            <td className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-300 font-semibold tabular-nums">{s.total_trades}</td>
+                            <td className="py-2.5 px-3 text-right text-blue-500 font-semibold tabular-nums">{(s.confidence_lower * 100).toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="p-3 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between">
+                    <span className="text-xs text-slate-500">
+                      Showing {displayStrategies.length} of {rawData?.total_evaluated?.toLocaleString() || 0} strategies evaluated
+                    </span>
+                    <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                      <Info className="w-3.5 h-3.5" />
+                      <span>CI Lower = 90% confidence interval lower bound — higher = more reliable</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ────────────────────────────────────── TAB: Digit Stats */}
+          {tab === "digits" && (
+            <div className="max-w-3xl mx-auto space-y-5">
+              <h2 className="font-bold text-slate-800 dark:text-white text-lg flex items-center gap-2">
+                <Hash className="w-5 h-5 text-purple-500" />
+                Digit Distribution & Trade Baselines
+              </h2>
+
+              {!rawData ? (
+                <div className="text-center py-16 text-slate-400">
+                  <Hash className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                  <p className="font-semibold">Run an analysis to see digit statistics</p>
+                </div>
+              ) : (
+                <>
+                  {/* Digit frequency */}
+                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5">
+                    <h3 className="font-bold text-sm text-slate-700 dark:text-slate-200 mb-1">Digit Frequency Distribution</h3>
+                    <p className="text-xs text-slate-400 mb-4">Expected ~10% each. Green = biased high, Red = biased low.</p>
+                    <div className="space-y-2">
+                      {Array.from({ length: 10 }, (_, d) => (
+                        <DigitBar
+                          key={d}
+                          digit={d}
+                          freq={rawData.digit_distribution?.[String(d)] || 0}
+                          expected={0.1}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Over/Under baseline table */}
+                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5">
+                    <h3 className="font-bold text-sm text-slate-700 dark:text-slate-200 mb-1">Over / Under Baseline Win Rates</h3>
+                    <p className="text-xs text-slate-400 mb-4">Unconditional win rates across all ticks (no pattern condition).</p>
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400 mb-2 uppercase tracking-wider">OVER (digit &gt; X)</div>
+                        {Array.from({ length: 9 }, (_, i) => {
+                          const key = `OVER_${i}`;
+                          const bl  = rawData.baseline_rates?.[key] ?? 0;
+                          return (
+                            <div key={i} className="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
+                              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">Over {i}</span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-24 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                  <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${bl * 100}%` }} />
+                                </div>
+                                <span className="text-xs font-bold text-slate-700 dark:text-slate-200 tabular-nums w-12 text-right">
+                                  {(bl * 100).toFixed(1)}%
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-2 uppercase tracking-wider">UNDER (digit &lt; X)</div>
+                        {Array.from({ length: 9 }, (_, i) => {
+                          const key = `UNDER_${i + 1}`;
+                          const bl  = rawData.baseline_rates?.[key] ?? 0;
+                          return (
+                            <div key={i} className="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
+                              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">Under {i + 1}</span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-24 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                  <div className="h-full bg-blue-500 rounded-full" style={{ width: `${bl * 100}%` }} />
+                                </div>
+                                <span className="text-xs font-bold text-slate-700 dark:text-slate-200 tabular-nums w-12 text-right">
+                                  {(bl * 100).toFixed(1)}%
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Even/Odd + Max streaks */}
+                  <div className="grid grid-cols-2 gap-4">
+                    {[
+                      { label: "Even baseline",  value: rawData.baseline_rates?.["EVEN"], color: "text-purple-600" },
+                      { label: "Odd baseline",   value: rawData.baseline_rates?.["ODD"],  color: "text-purple-500" },
+                    ].map(s => (
+                      <div key={s.label} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5 text-center">
+                        <div className={`text-3xl font-black ${s.color}`}>{s.value != null ? `${(s.value * 100).toFixed(1)}%` : "—"}</div>
+                        <div className="text-xs text-slate-500 mt-1 font-semibold uppercase">{s.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {rawData.max_streaks && Object.keys(rawData.max_streaks).length > 0 && (
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5">
+                      <h3 className="font-bold text-sm text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+                        <Repeat2 className="w-4 h-4 text-amber-500" /> Max Consecutive Streaks
+                      </h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {Object.entries(rawData.max_streaks).map(([k, v]) => (
+                          <div key={k} className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl p-3 text-center">
+                            <div className="text-2xl font-black text-amber-600 dark:text-amber-400">{String(v)}</div>
+                            <div className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold uppercase mt-0.5">{k.replace("over5", "Over 5").replace("under4", "Under 4")}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ────────────────────────────────────── TAB: Manual Analysis */}
+          {tab === "manual" && (
+            <div className="max-w-3xl mx-auto space-y-5">
+              <h2 className="font-bold text-slate-800 dark:text-white text-lg flex items-center gap-2">
+                <Activity className="w-5 h-5 text-blue-500" />
+                Manual Digit Analysis
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Paste digits you copied from Deriv (0–9 only, separated by commas, spaces or newlines).
+                The engine will run the full backtest on your exact dataset.
+              </p>
+
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5 space-y-4">
+                <div>
+                  <label className="text-sm font-bold text-slate-700 dark:text-slate-200 block mb-2">
+                    Paste Digits
+                    <span className="ml-2 text-[11px] font-normal text-slate-400">e.g: 3,7,2,5,8,1,7,2,5,9,4,3...</span>
+                  </label>
+                  <textarea
+                    value={manualTicks}
+                    onChange={e => setManualTicks(e.target.value)}
+                    placeholder="3,7,2,5,8,1,7,2,5,9,4,3,7,2,5,8,1,0,6,4..."
+                    rows={8}
+                    className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-slate-800 dark:text-slate-200 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-400"
+                  />
+                  {/* Preview */}
+                  {manualTicks.trim() && (() => {
+                    const digs = manualTicks.split(/[\s,\n]+/).map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n >= 0 && n <= 9);
+                    return (
+                      <div className="mt-2 flex items-center gap-2 text-xs">
+                        <span className={`font-bold ${digs.length >= 20 ? "text-emerald-600" : "text-amber-500"}`}>
+                          {digs.length} valid digits detected
+                        </span>
+                        {digs.length < 20 && <span className="text-rose-500">· Need at least 20</span>}
+                        {digs.length >= 20 && (
+                          <span className="text-slate-400">
+                            · Preview: {digs.slice(0, 15).join(", ")}…
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                <button
+                  onClick={() => runAnalysis(true)}
+                  disabled={running}
+                  className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-blue-500/20 cursor-pointer"
+                >
+                  {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                  {running ? "Analysing your digits…" : "Analyse My Digits"}
+                </button>
+              </div>
+
+              <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-2xl p-4 flex gap-3">
+                <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+                  <strong>Statistical note:</strong> Past patterns don't guarantee future results. The engine measures historical edge — use strategies with high CI Lower values (statistically reliable) and many occurrences. Always backtest on fresh data before trading real money.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ────────────────────────────────────── TAB: AI Agent */}
           {tab === "agent" && (
-            <div className="max-w-3xl mx-auto h-[calc(100vh-16rem)] flex flex-col">
-              {/* Intro */}
+            <div className="max-w-3xl mx-auto h-[calc(100vh-22rem)] flex flex-col">
               {chatMessages.length === 0 && (
                 <div className="bg-gradient-to-r from-violet-600 to-purple-700 p-5 rounded-2xl text-white mb-4 flex-shrink-0">
                   <div className="flex items-center gap-3 mb-2">
                     <Brain className="w-6 h-6 text-purple-200" />
-                    <h2 className="font-bold text-lg">Hermes — Pattern Analysis Agent</h2>
+                    <h2 className="font-bold text-lg">Hermes — Deriv Pattern Analyst</h2>
                   </div>
-                  <p className="text-sm text-purple-100 leading-relaxed">
-                    Ask about your discovered patterns. Examples:
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <p className="text-sm text-purple-100 mb-3">Ask about the backtest results. Examples:</p>
+                  <div className="flex flex-wrap gap-2">
                     {[
-                      "Which pattern has the strongest edge?",
-                      "When is P1 next predicted to occur?",
-                      "Is there a dominant cycle in the data?",
-                      "Which patterns to watch most closely?",
+                      "Which strategy has the strongest edge?",
+                      "What pattern should I watch for next?",
+                      "Which Even/Odd pattern is most reliable?",
+                      "Explain the top Over strategy to me",
+                      "How many trades does the best pattern need to confirm?",
                     ].map(q => (
-                      <button
-                        key={q}
-                        onClick={() => { setChatInput(q); }}
-                        className="text-xs bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
-                      >
+                      <button key={q} onClick={() => setChatInput(q)}
+                        className="text-xs bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg cursor-pointer transition-colors text-left">
                         {q}
                       </button>
                     ))}
                   </div>
                 </div>
               )}
-
-              {/* Messages */}
               <div className="flex-1 overflow-y-auto space-y-3 mb-4">
                 {chatMessages.map((m, i) => (
                   <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                    <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                       m.role === "user"
                         ? "bg-blue-600 text-white rounded-br-sm"
                         : "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-bl-sm"
                     }`}>
                       {m.role === "ai" && (
                         <div className="flex items-center gap-1.5 mb-1.5">
-                          <Brain className="w-3.5 h-3.5 text-purple-500" />
+                          <Brain className="w-3 h-3 text-purple-500" />
                           <span className="text-[10px] font-bold text-purple-500 uppercase">Hermes Analytics</span>
                         </div>
                       )}
@@ -725,103 +855,31 @@ export default function DerivPatternLabPage() {
                   <div className="flex justify-start">
                     <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl rounded-bl-sm px-4 py-3">
                       <div className="flex items-center gap-1.5">
-                        <div className="w-2 h-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: "0ms" }} />
-                        <div className="w-2 h-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: "150ms" }} />
-                        <div className="w-2 h-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: "300ms" }} />
+                        {[0, 150, 300].map(d => (
+                          <div key={d} className="w-2 h-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: `${d}ms` }} />
+                        ))}
                       </div>
                     </div>
                   </div>
                 )}
-                <div ref={chatEndRef} />
+                <div ref={chatEnd} />
               </div>
-
-              {/* Input */}
               <div className="flex gap-2 flex-shrink-0">
                 <input
                   value={chatInput}
                   onChange={e => setChatInput(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChat(); } }}
-                  placeholder="Ask about your patterns…"
+                  placeholder="Ask about your pattern results…"
                   className="flex-1 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-purple-500 placeholder-slate-400"
                 />
                 <button
                   onClick={handleChat}
                   disabled={chatLoading || !chatInput.trim()}
-                  className="p-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-colors cursor-pointer"
+                  className="p-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-xl transition-colors cursor-pointer"
                 >
                   {chatLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </button>
               </div>
-            </div>
-          )}
-
-          {/* ── TAB: Experiment History ────────────────────────────────────── */}
-          {tab === "history" && (
-            <div className="max-w-4xl mx-auto space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="font-bold text-slate-800 dark:text-white">Experiment Log</h2>
-                <button
-                  onClick={() => fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); })}
-                  className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white cursor-pointer"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" /> Refresh
-                </button>
-              </div>
-
-              {history.length === 0 ? (
-                <div className="text-center py-16 text-slate-400">
-                  <History className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                  <p className="font-semibold">No experiments yet</p>
-                  <p className="text-sm mt-1">Run your first analysis in the Pattern Lab</p>
-                </div>
-              ) : (
-                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 overflow-hidden">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 font-semibold uppercase text-[10px] tracking-wider">
-                      <tr>
-                        <th className="py-2.5 px-4 text-left">Time</th>
-                        <th className="py-2.5 px-4 text-left">Ticks</th>
-                        <th className="py-2.5 px-4 text-left">Window</th>
-                        <th className="py-2.5 px-4 text-left">Status</th>
-                        <th className="py-2.5 px-4 text-left">Summary</th>
-                        <th className="py-2.5 px-4"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {history.map(a => (
-                        <tr key={a.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors">
-                          <td className="py-3 px-4 text-slate-500 whitespace-nowrap">
-                            {new Date(a.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                          </td>
-                          <td className="py-3 px-4 font-mono font-semibold text-slate-700 dark:text-slate-300">{a.tickCount}</td>
-                          <td className="py-3 px-4 font-mono text-slate-500">{a.windowSize}</td>
-                          <td className="py-3 px-4">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${
-                              a.status === "done"    ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400" :
-                              a.status === "error"   ? "bg-rose-50 dark:bg-rose-950/60 text-rose-500"                                :
-                              a.status === "running" ? "bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400"             :
-                              "bg-slate-100 dark:bg-slate-800 text-slate-500"
-                            }`}>
-                              ● {a.status}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-slate-500 max-w-[300px] truncate">{a.summary || a.error || "—"}</td>
-                          <td className="py-3 px-4">
-                            {a.status === "done" && (
-                              <button
-                                onClick={() => loadHistoryItem(a)}
-                                className="text-blue-600 dark:text-blue-400 hover:underline text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
-                              >
-                                Load <ChevronRight className="w-3 h-3" />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
             </div>
           )}
 

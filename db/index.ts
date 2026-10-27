@@ -153,6 +153,59 @@ export async function initDb() {
       layout_data TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS deriv_analyses (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'pending',
+      symbol TEXT NOT NULL DEFAULT 'R_10',
+      tick_count INTEGER NOT NULL DEFAULT 0,
+      window_size INTEGER NOT NULL DEFAULT 5,
+      similarity_threshold TEXT NOT NULL DEFAULT '0.85',
+      max_patterns INTEGER NOT NULL DEFAULT 10,
+      input_ticks TEXT NOT NULL DEFAULT '',
+      summary TEXT,
+      raw_output TEXT,
+      error TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS deriv_patterns (
+      id TEXT PRIMARY KEY,
+      analysis_id TEXT NOT NULL,
+      pattern_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      sequence TEXT NOT NULL,
+      locations TEXT NOT NULL DEFAULT '[]',
+      occurrence_count INTEGER NOT NULL DEFAULT 0,
+      interval_avg TEXT,
+      interval_stddev TEXT,
+      next_predicted_tick INTEGER,
+      confidence TEXT,
+      walk_forward_hit_rate TEXT,
+      baseline_rate TEXT,
+      summary TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS deriv_strategies (
+      id TEXT PRIMARY KEY,
+      analysis_id TEXT NOT NULL,
+      pattern TEXT NOT NULL,
+      window_size INTEGER NOT NULL,
+      trade_type TEXT NOT NULL,
+      total_trades INTEGER NOT NULL DEFAULT 0,
+      wins INTEGER NOT NULL DEFAULT 0,
+      losses INTEGER NOT NULL DEFAULT 0,
+      win_rate TEXT NOT NULL,
+      baseline_rate TEXT NOT NULL,
+      edge TEXT NOT NULL,
+      confidence_lower TEXT NOT NULL,
+      signal TEXT NOT NULL,
+      rank INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
   `);
 }
 

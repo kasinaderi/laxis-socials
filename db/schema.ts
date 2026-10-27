@@ -145,19 +145,20 @@ export const officeLayouts = sqliteTable("office_layouts", {
  * One analysis job = one batch of ticks submitted for pattern discovery.
  */
 export const derivAnalyses = sqliteTable("deriv_analyses", {
-  id: text("id").primaryKey(),
-  status: text("status").notNull().default("pending"), // 'pending', 'running', 'done', 'error'
-  inputTicks: text("input_ticks").notNull(),           // raw comma-separated tick string
-  tickCount: integer("tick_count").notNull().default(0),
-  windowSize: integer("window_size").notNull().default(5),
-  similarityThreshold: text("similarity_threshold").notNull().default("0.85"),
-  maxPatterns: integer("max_patterns").notNull().default(10),
-  summary: text("summary"),                            // AI summary of all findings
-  rawOutput: text("raw_output"),                       // full JSON from Python engine
-  error: text("error"),
-  startedAt: text("started_at"),
-  completedAt: text("completed_at"),
-  createdAt: text("created_at").notNull(),
+  id:                  text("id").primaryKey(),
+  status:              text("status").notNull().default("pending"),
+  symbol:              text("symbol").notNull().default("R_10"),
+  inputTicks:          text("input_ticks").notNull().default(""),
+  tickCount:           integer("tick_count").notNull().default(0),
+  windowSize:          integer("window_size").notNull().default(7),
+  similarityThreshold: text("similarity_threshold").notNull().default("30"),
+  maxPatterns:         integer("max_patterns").notNull().default(30),
+  summary:             text("summary"),
+  rawOutput:           text("raw_output"),
+  error:               text("error"),
+  startedAt:           text("started_at"),
+  completedAt:         text("completed_at"),
+  createdAt:           text("created_at").notNull(),
 });
 
 /**
@@ -178,5 +179,26 @@ export const derivPatterns = sqliteTable("deriv_patterns", {
   walkForwardHitRate: text("walk_forward_hit_rate"),   // e.g. "0.67"
   baselineRate: text("baseline_rate"),
   summary: text("summary"),
+  createdAt: text("created_at").notNull(),
+});
+
+/**
+ * One row per pattern+trade_type combination (the backtest results).
+ */
+export const derivStrategies = sqliteTable("deriv_strategies", {
+  id: text("id").primaryKey(),
+  analysisId: text("analysis_id").notNull(),
+  pattern: text("pattern").notNull(),                  // JSON array string e.g. "[3,7,2]"
+  windowSize: integer("window_size").notNull(),
+  tradeType: text("trade_type").notNull(),             // "OVER_5", "EVEN", "MATCHES_3", etc.
+  totalTrades: integer("total_trades").notNull().default(0),
+  wins: integer("wins").notNull().default(0),
+  losses: integer("losses").notNull().default(0),
+  winRate: text("win_rate").notNull(),                 // "0.7200"
+  baselineRate: text("baseline_rate").notNull(),
+  edge: text("edge").notNull(),                        // winRate - baselineRate
+  confidenceLower: text("confidence_lower").notNull(), // Wilson CI lower bound
+  signal: text("signal").notNull(),                    // human-readable entry signal
+  rank: integer("rank").notNull().default(0),
   createdAt: text("created_at").notNull(),
 });
