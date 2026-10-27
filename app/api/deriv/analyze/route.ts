@@ -44,9 +44,9 @@ async function setPausedSandboxId(id: string | null) {
  * Get the analytics E2B sandbox.
  * Priority:
  *   1. Already running in this process (activeSandboxes)
- *   2. Previously paused — resume it from DB-stored ID
- *   3. Create fresh (only if E2B key available)
- * NEVER destroys a sandbox.
+ *   2. Previously paused — reconnect via Sandbox.connect(sandboxId)
+ *   3. NO auto-create — user must start sandbox from the AI Agent page.
+ * NEVER destroys a sandbox. NEVER creates one without user authorization.
  */
 async function getAnalyticsSandbox(): Promise<any> {
   // 1. Live in-process sandbox
@@ -63,31 +63,22 @@ async function getAnalyticsSandbox(): Promise<any> {
   if (pausedId) {
     try {
       console.log(`[DerivLab] Reconnecting to paused sandbox ${pausedId}…`);
-      // Sandbox.connect works for both paused and running sandboxes
       const sb = await (Sandbox as any).connect(pausedId, { apiKey, timeoutMs: 3_600_000 });
       activeSandboxes.set("deriv_analytics", sb);
       await setPausedSandboxId(null); // clear — it's live again
       console.log(`[DerivLab] Sandbox reconnected ✓`);
       return sb;
     } catch (e: any) {
-      console.warn(`[DerivLab] Reconnect failed (${e.message}), creating fresh sandbox`);
-      await setPausedSandboxId(null); // stale ID — clear it
+      // Reconnect failed — do NOT auto-create. User must restart from AI Agent page.
+      console.warn(`[DerivLab] Reconnect failed: ${e.message}. User must restart sandbox from AI Agent page.`);
+      await setPausedSandboxId(null); // clear stale ID
+      return null;
     }
   }
 
-  // 3. Create a brand-new sandbox
-  try {
-    console.log("[DerivLab] Creating new analytics sandbox…");
-    const sb = await Sandbox.create({ apiKey, timeoutMs: 3_600_000 });
-    activeSandboxes.set("deriv_analytics", sb);
-    await installHermesInSandbox(sb, "analytics");
-    await installDerivEngineInSandbox(sb);
-    console.log(`[DerivLab] New sandbox ready: ${sb.sandboxId}`);
-    return sb;
-  } catch (e: any) {
-    console.warn("[DerivLab] Sandbox create error:", e.message);
-    return null;
-  }
+  // 3. No sandbox found — return null. JS fallback will run instead.
+  // User must start the analytics sandbox from the AI Agent page to use live Deriv data.
+  return null;
 }
 
 // ── POST /api/deriv/analyze ────────────────────────────────────────────────────

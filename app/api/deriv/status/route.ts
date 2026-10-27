@@ -10,9 +10,6 @@ const runningJobs: Map<string, string> =
 const activeSandboxes: Map<string, any> =
   (global as any).__activeSandboxes ?? new Map();
 
-// Config key for paused sandbox ID (imported lazily to avoid circular dep)
-const PAUSED_ID_KEY = "analytics_deriv_paused_sandbox_id";
-
 // ── Helper: get the live analytics sandbox from cache ────────────────────────
 async function getSandbox(): Promise<any> {
   for (const [key, sb] of activeSandboxes.entries()) {
@@ -21,41 +18,6 @@ async function getSandbox(): Promise<any> {
     }
   }
   return null;
-}
-
-// ── Helper: pause sandbox after analysis and store its sandboxId in DB ───────
-async function pauseAnalyticsSandbox() {
-  const sb = await getSandbox().catch(() => null);
-  if (!sb) return;
-
-  try {
-    // Grab the sandboxId BEFORE pausing — it's the handle we need to reconnect later
-    const sandboxId: string = sb.sandboxId;
-    if (!sandboxId) {
-      console.warn("[DerivLab] Sandbox has no sandboxId — cannot store for reconnect");
-      return;
-    }
-
-    console.log(`[DerivLab] Analysis done — pausing sandbox ${sandboxId} to save E2B credits…`);
-    await sb.pause(); // returns true/false — we don't need the return value
-
-    // Store sandboxId in the DB so the next analysis can Sandbox.connect() to it
-    const { appConfig } = await import("@/db/schema");
-    const now = new Date().toISOString();
-    await db.insert(appConfig)
-      .values({ key: PAUSED_ID_KEY, value: sandboxId, updatedAt: now })
-      .onConflictDoUpdate({ target: appConfig.key, set: { value: sandboxId, updatedAt: now } })
-      .run();
-
-    // Remove from in-process live cache
-    for (const [k] of activeSandboxes.entries()) {
-      if (k.includes("analytics") || k.includes("deriv")) activeSandboxes.delete(k);
-    }
-
-    console.log(`[DerivLab] Sandbox paused ✓  (sandboxId: ${sandboxId}) — will reconnect on next Run Analysis`);
-  } catch (e: any) {
-    console.warn("[DerivLab] Could not pause sandbox:", e.message);
-  }
 }
 
 // ── GET /api/deriv/status?id=da_xxx ──────────────────────────────────────────
@@ -128,15 +90,11 @@ export async function GET(req: NextRequest) {
                   }).run().catch(() => {});
                 }
 
-                // Clean up temp files on VM (keep sandbox alive until we pause)
+                // Clean up temp files on VM — sandbox stays ALIVE until user manually pauses it
                 sb.commands.run(
                   `rm -f ${resultFile} /tmp/deriv_pid_${id}.txt /tmp/deriv_done_${id}.flag /tmp/manual_ticks_${id}.json 2>/dev/null`
                 ).catch(() => {});
                 runningJobs.delete(id);
-
-                // ── PAUSE the sandbox now that analysis is complete ───────────
-                // Fire-and-forget (don't block the response)
-                pauseAnalyticsSandbox().catch(() => {});
 
                 // Return fresh results from DB
                 const updated = await db.select().from(derivAnalyses)
@@ -166,9 +124,6 @@ export async function GET(req: NextRequest) {
               }).where(eq(derivAnalyses.id, id)).run();
 
               runningJobs.delete(id);
-
-              // Pause even on error — sandbox files are preserved
-              pauseAnalyticsSandbox().catch(() => {});
             }
           }
         } catch (vmErr: any) {

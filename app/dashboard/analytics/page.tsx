@@ -8,7 +8,7 @@ import {
   TrendingUp, TrendingDown, RefreshCw, ChevronDown,
   CheckCircle2, XCircle, Send, Activity, Target,
   Repeat2, Clock, ArrowUpRight, AlertTriangle, Info,
-  Download, Filter, SortAsc, ChevronRight,
+  Download, Filter, SortAsc, ChevronRight, PauseCircle, Wifi, WifiOff,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -235,12 +235,24 @@ export default function DerivPatternLabPage() {
   const [chatInput, setChatInput]       = useState("");
   const [chatLoading, setChatLoading]   = useState(false);
   const [manualTicks, setManualTicks]   = useState("");
+  // Sandbox status
+  const [sbActive, setSbActive]         = useState(false);
+  const [sbPausing, setSbPausing]       = useState(false);
   const pollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const chatEnd   = useRef<HTMLDivElement>(null);
 
+  const checkSbStatus = useCallback(async () => {
+    try {
+      const r = await fetch("/api/deriv/pause");
+      const d = await r.json();
+      setSbActive(d.sandboxActive === true);
+    } catch {}
+  }, []);
+
   useEffect(() => {
     fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); }).catch(() => {});
-  }, []);
+    checkSbStatus();
+  }, [checkSbStatus]);
 
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
@@ -303,6 +315,7 @@ export default function DerivPatternLabPage() {
             setProgress("");
             clearInterval(pollRef.current!);
             setTab("strategies");
+            checkSbStatus();  // refresh sandbox status pill
             fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); });
           } else if (d.analysis.status === "error") {
             setRunning(false);
@@ -363,9 +376,27 @@ export default function DerivPatternLabPage() {
       }
 
       // Mode B: E2B running — poll for results
-      if (d.analysisId) { pollJob(d.analysisId); }
+      if (d.analysisId) { checkSbStatus(); pollJob(d.analysisId); }
       else { setRunning(false); setProgress(""); alert(d.error || "Failed to start"); }
     } catch (e: any) { setRunning(false); setProgress(""); alert(e.message); }
+  }
+
+  async function handlePauseSandbox() {
+    setSbPausing(true);
+    try {
+      const r = await fetch("/api/deriv/pause", { method: "POST" });
+      const d = await r.json();
+      if (d.success) {
+        setSbActive(false);
+        alert(d.already ? "Sandbox was already paused. Files are safe." : "✓ Sandbox paused. All your files and sessions are preserved. It will reconnect automatically on next analysis.");
+      } else {
+        alert(d.message || "Could not pause sandbox.");
+      }
+    } catch (e: any) {
+      alert(`Pause error: ${e.message}`);
+    } finally {
+      setSbPausing(false);
+    }
   }
 
   async function handleChat() {
@@ -472,6 +503,35 @@ export default function DerivPatternLabPage() {
               {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
               {running ? "Analysing…" : "Run Analysis"}
             </button>
+
+            {/* Sandbox status pill + Pause button */}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {/* Status pill */}
+              <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                sbActive
+                  ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+                  : "bg-slate-100 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700"
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${sbActive ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
+                {sbActive ? "VM Live" : "VM Paused"}
+              </div>
+
+              {/* Pause button — only show when sandbox is active and no analysis running */}
+              {sbActive && !running && (
+                <button
+                  onClick={handlePauseSandbox}
+                  disabled={sbPausing}
+                  title="Pause the E2B sandbox to save credits. All files and sessions are preserved."
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-xs rounded-lg transition-all cursor-pointer shadow-sm"
+                >
+                  {sbPausing
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <span className="text-base leading-none">⏸</span>
+                  }
+                  {sbPausing ? "Pausing…" : "Pause VM"}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Progress */}
