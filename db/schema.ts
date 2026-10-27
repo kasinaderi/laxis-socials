@@ -139,6 +139,14 @@ export const officeLayouts = sqliteTable("office_layouts", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// ── App Config (key-value store for persistent state like paused sandbox IDs) ─
+
+export const appConfig = sqliteTable("app_config", {
+  key:       text("key").primaryKey(),
+  value:     text("value").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 // ── Deriv Pattern Lab ─────────────────────────────────────────────────────────
 
 /**

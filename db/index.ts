@@ -154,6 +154,12 @@ export async function initDb() {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS app_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS deriv_analyses (
       id TEXT PRIMARY KEY,
       status TEXT NOT NULL DEFAULT 'pending',

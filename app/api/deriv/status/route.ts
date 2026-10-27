@@ -3,50 +3,86 @@ import { db } from "@/db";
 import { derivAnalyses, derivStrategies } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 
-// Shared job registry — which result file to read per analysisId
+// ── Shared state from analyze route (same Node.js process) ───────────────────
 const runningJobs: Map<string, string> =
   (global as any).__derivRunningJobs ?? ((global as any).__derivRunningJobs = new Map());
 
-// Shared sandbox cache
 const activeSandboxes: Map<string, any> =
   (global as any).__activeSandboxes ?? new Map();
 
+// Config key for paused sandbox ID (imported lazily to avoid circular dep)
+const PAUSED_ID_KEY = "analytics_deriv_paused_sandbox_id";
+
+// ── Helper: get the live analytics sandbox from cache ────────────────────────
 async function getSandbox(): Promise<any> {
   for (const [key, sb] of activeSandboxes.entries()) {
-    if (key.includes("analytics")) {
+    if (key.includes("analytics") || key.includes("deriv")) {
       try { if (await sb.isRunning()) return sb; } catch {}
     }
   }
   return null;
 }
 
-/** GET /api/deriv/status?id=da_xxx  — poll job status */
+// ── Helper: pause sandbox after analysis and store its sandboxId in DB ───────
+async function pauseAnalyticsSandbox() {
+  const sb = await getSandbox().catch(() => null);
+  if (!sb) return;
+
+  try {
+    // Grab the sandboxId BEFORE pausing — it's the handle we need to reconnect later
+    const sandboxId: string = sb.sandboxId;
+    if (!sandboxId) {
+      console.warn("[DerivLab] Sandbox has no sandboxId — cannot store for reconnect");
+      return;
+    }
+
+    console.log(`[DerivLab] Analysis done — pausing sandbox ${sandboxId} to save E2B credits…`);
+    await sb.pause(); // returns true/false — we don't need the return value
+
+    // Store sandboxId in the DB so the next analysis can Sandbox.connect() to it
+    const { appConfig } = await import("@/db/schema");
+    const now = new Date().toISOString();
+    await db.insert(appConfig)
+      .values({ key: PAUSED_ID_KEY, value: sandboxId, updatedAt: now })
+      .onConflictDoUpdate({ target: appConfig.key, set: { value: sandboxId, updatedAt: now } })
+      .run();
+
+    // Remove from in-process live cache
+    for (const [k] of activeSandboxes.entries()) {
+      if (k.includes("analytics") || k.includes("deriv")) activeSandboxes.delete(k);
+    }
+
+    console.log(`[DerivLab] Sandbox paused ✓  (sandboxId: ${sandboxId}) — will reconnect on next Run Analysis`);
+  } catch (e: any) {
+    console.warn("[DerivLab] Could not pause sandbox:", e.message);
+  }
+}
+
+// ── GET /api/deriv/status?id=da_xxx ──────────────────────────────────────────
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
 
-  // ── Single job poll ────────────────────────────────────────────────────────
+  // ── Single job poll ──────────────────────────────────────────────────────
   if (id) {
     const analysis = await db.select().from(derivAnalyses)
       .where(eq(derivAnalyses.id, id)).get();
 
     if (!analysis) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    // If still running, try to read result from VM result file
     if (analysis.status === "running") {
       const resultFile = runningJobs.get(id) || `/tmp/deriv_result_${id}.json`;
       const sb = await getSandbox();
 
       if (sb) {
         try {
-          // Check if the result file exists and has content
+          // Check if result file exists and has content
           const checkResult = await sb.commands.run(
             `[ -s ${resultFile} ] && echo "READY" || echo "WAIT"`,
             { timeout: 5_000 }
           ).catch(() => ({ stdout: "WAIT" }));
 
           if ((checkResult?.stdout || "").includes("READY")) {
-            // Read the result
             const catResult = await sb.commands.run(
               `cat ${resultFile}`,
               { timeout: 5_000 }
@@ -92,30 +128,33 @@ export async function GET(req: NextRequest) {
                   }).run().catch(() => {});
                 }
 
-                // Clean up temp files
-                sb.commands.run(`rm -f ${resultFile} /tmp/deriv_pid_${id}.txt /tmp/manual_ticks_${id}.json 2>/dev/null`).catch(() => {});
+                // Clean up temp files on VM (keep sandbox alive until we pause)
+                sb.commands.run(
+                  `rm -f ${resultFile} /tmp/deriv_pid_${id}.txt /tmp/deriv_done_${id}.flag /tmp/manual_ticks_${id}.json 2>/dev/null`
+                ).catch(() => {});
                 runningJobs.delete(id);
 
-                // Re-read fresh analysis from DB
+                // ── PAUSE the sandbox now that analysis is complete ───────────
+                // Fire-and-forget (don't block the response)
+                pauseAnalyticsSandbox().catch(() => {});
+
+                // Return fresh results from DB
                 const updated = await db.select().from(derivAnalyses)
                   .where(eq(derivAnalyses.id, id)).get();
-                const strats = await db.select().from(derivStrategies)
+                const strats  = await db.select().from(derivStrategies)
                   .where(eq(derivStrategies.analysisId, id)).all();
 
                 return NextResponse.json({ analysis: updated, strategies: strats });
-              } catch (parseErr) {
-                // JSON parse failed — still running or errored
-              }
+              } catch { /* JSON parse error — still running */ }
             }
 
-            // Check if process is still running via pidfile
+            // Check if process died without results
             const pidCheck = await sb.commands.run(
               `PID=$(cat /tmp/deriv_pid_${id}.txt 2>/dev/null); [ -n "$PID" ] && kill -0 $PID 2>/dev/null && echo "ALIVE" || echo "DEAD"`,
               { timeout: 3_000 }
             ).catch(() => ({ stdout: "UNKNOWN" }));
 
             if ((pidCheck?.stdout || "").includes("DEAD")) {
-              // Process died without producing valid output — mark error
               const errContent = await sb.commands.run(
                 `cat /tmp/deriv_err_${id}.log 2>/dev/null | tail -5`
               ).catch(() => ({ stdout: "" }));
@@ -127,6 +166,9 @@ export async function GET(req: NextRequest) {
               }).where(eq(derivAnalyses.id, id)).run();
 
               runningJobs.delete(id);
+
+              // Pause even on error — sandbox files are preserved
+              pauseAnalyticsSandbox().catch(() => {});
             }
           }
         } catch (vmErr: any) {
@@ -140,7 +182,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ analysis: refreshed, strategies: [] });
     }
 
-    // Job is done or errored — read from DB
+    // Job done or errored — read from DB
     const strategies = analysis.status === "done"
       ? await db.select().from(derivStrategies)
           .where(eq(derivStrategies.analysisId, id)).all()
@@ -149,7 +191,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ analysis, strategies });
   }
 
-  // ── Recent jobs list ───────────────────────────────────────────────────────
+  // ── Recent jobs list ─────────────────────────────────────────────────────
   const recent = await db.select().from(derivAnalyses)
     .orderBy(desc(derivAnalyses.createdAt))
     .limit(20)
