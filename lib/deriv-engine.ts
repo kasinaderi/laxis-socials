@@ -45,42 +45,65 @@ raw_prices = []
 fetch_source = "api"
 
 def fetch_deriv_ticks():
+    # Try clusters in priority order — red.derivws.com is the most reliable
+    endpoints = [
+        f"wss://red.derivws.com/websockets/v3?app_id={APP_ID}",
+        f"wss://blue.derivws.com/websockets/v3?app_id={APP_ID}",
+        f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}",
+        f"wss://ws.binaryws.com/websockets/v3?app_id={APP_ID}",
+    ]
     try:
         import websocket
-        result = {"prices": [], "done": False, "error": None}
-        def on_message(ws, msg):
-            try:
-                d = json.loads(msg)
-                if "history" in d:
-                    result["prices"] = d["history"].get("prices", [])
+        for endpoint in endpoints:
+            result = {"prices": [], "done": False, "error": None}
+            def on_message(ws, msg):
+                try:
+                    d = json.loads(msg)
+                    if "history" in d:
+                        result["prices"] = d["history"].get("prices", [])
+                        result["done"] = True
+                        ws.close()
+                    elif "error" in d:
+                        result["error"] = d["error"].get("message", "API error")
+                        result["done"] = True
+                        ws.close()
+                except:
                     result["done"] = True
                     ws.close()
-                elif "error" in d:
-                    result["error"] = d["error"].get("message", "API error")
-                    result["done"] = True
-                    ws.close()
-            except:
+            def on_error(ws, err):
+                result["error"] = str(err)
                 result["done"] = True
-                ws.close()
-        def on_error(ws, err):
-            result["error"] = str(err)
-            result["done"] = True
-        def on_open(ws):
-            ws.send(json.dumps({
-                "ticks_history": SYMBOL,
-                "count": TICK_COUNT,
-                "end": "latest",
-                "style": "ticks",
-                "adjust_start_time": 1
-            }))
-        ws = websocket.WebSocketApp(
-            f"wss://ws.binaryws.com/websockets/v3?app_id={APP_ID}",
-            on_message=on_message, on_error=on_error, on_open=on_open
-        )
-        ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE}, ping_timeout=15)
-        return result["prices"], result["error"]
+            def on_open(ws):
+                ws.send(json.dumps({
+                    "ticks_history": SYMBOL,
+                    "count": TICK_COUNT,
+                    "end": "latest",
+                    "style": "ticks",
+                    "adjust_start_time": 1
+                }))
+            ws_app = websocket.WebSocketApp(
+                endpoint,
+                on_message=on_message, on_error=on_error, on_open=on_open
+            )
+            ws_app.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE}, ping_timeout=15)
+            if result["prices"]:
+                return result["prices"], result["error"]
+        return [], "All Deriv clusters unreachable"
     except Exception as e:
         return [], str(e)
+
+# Symbol → decimal precision mapping (matches deriv-fetcher.ts)
+SYMBOL_PRECISION = {
+    "R_10": 3, "R_25": 3, "R_50": 4, "R_75": 4, "R_100": 2,
+    "1HZ10V": 2, "1HZ25V": 2, "1HZ50V": 2, "1HZ75V": 2, "1HZ100V": 2,
+}
+# Map 1S variants to 1HZ names for precision lookup
+SYMBOL_MAP = {
+    "R_10_1S": "1HZ10V", "R_25_1S": "1HZ25V", "R_50_1S": "1HZ50V",
+    "R_75_1S": "1HZ75V", "R_100_1S": "1HZ100V",
+}
+_mapped = SYMBOL_MAP.get(SYMBOL, SYMBOL)
+PRECISION = SYMBOL_PRECISION.get(_mapped, 2)
 
 prices, api_error = fetch_deriv_ticks()
 raw_prices = prices
@@ -88,7 +111,7 @@ raw_prices = prices
 if prices:
     for p in prices:
         try:
-            s = f"{float(p):.2f}"
+            s = f"{float(p):.{PRECISION}f}"
             digits.append(int(s[-1]))
         except:
             pass

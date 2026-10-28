@@ -327,58 +327,6 @@ export default function DerivPatternLabPage() {
     }, 2500);
   }, []);
 
-  /** Fetch tick history from Deriv WebSocket API directly in the browser. */
-  function fetchDerivTicks(sym: string, count: number): Promise<number[]> {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const ws = new WebSocket("wss://ws.binaryws.com/websockets/v3?app_id=1089");
-
-      const finish = (fn: () => void) => {
-        if (settled) return;
-        settled = true;
-        try { ws.close(); } catch {}
-        fn();
-      };
-
-      const timer = setTimeout(() => {
-        finish(() => reject(new Error("Deriv API timed out after 30s")));
-      }, 30_000);
-
-      ws.onopen = () => {
-        ws.send(JSON.stringify({
-          ticks_history: sym,
-          count,
-          end:   "latest",
-          style: "ticks",
-        }));
-      };
-
-      ws.onmessage = (evt) => {
-        try {
-          const msg = JSON.parse(evt.data as string);
-          if (msg.error) {
-            clearTimeout(timer);
-            finish(() => reject(new Error(msg.error.message || "Deriv API error")));
-            return;
-          }
-          if (msg.history?.prices) {
-            clearTimeout(timer);
-            const digits = (msg.history.prices as number[]).map(p => {
-              const s = Math.abs(p).toFixed(2);
-              return parseInt(s[s.length - 1]);
-            }).filter(d => d >= 0 && d <= 9);
-            finish(() => resolve(digits));
-          }
-        } catch {}
-      };
-
-      ws.onerror = () => {
-        clearTimeout(timer);
-        finish(() => reject(new Error("Could not connect to Deriv API")));
-      };
-    });
-  }
-
   async function runAnalysis(useManual = false) {
     setRunning(true);
     setAnalysis(null);
@@ -394,17 +342,27 @@ export default function DerivPatternLabPage() {
       body.manualTicks = digits;
       body.fetchSource = "manual_paste";
     } else {
-      // Always fetch live ticks from Deriv — no E2B needed for data
+      // Server-side tick fetch — avoids browser WebSocket restrictions on Vercel
       try {
-        setProgress(`🔗 Connecting to Deriv API…`);
-        const digits = await fetchDerivTicks(symbol, tickCount);
-        setProgress(`📥 Got ${digits.length.toLocaleString()} ticks from Deriv ✓  Now analysing…`);
-        body.manualTicks = digits;       // pass pre-fetched digits to the engine
-        body.fetchSource = "deriv_live"; // tag the source
+        setProgress(`🔗 Fetching ${tickCount.toLocaleString()} ticks from Deriv…`);
+        const tickRes = await fetch(`/api/deriv/ticks?symbol=${encodeURIComponent(symbol)}&count=${tickCount}`);
+        const tickData = await tickRes.json();
+
+        if (!tickRes.ok || !tickData.digits || tickData.digits.length < 20) {
+          setRunning(false);
+          setProgress("");
+          alert(`❌ Could not fetch ticks from Deriv: ${tickData.error || "No data returned"}`);
+          return;
+        }
+
+        const digits: number[] = tickData.digits;
+        setProgress(`📥 Got ${digits.length.toLocaleString()} ticks ✓  Precision: ${tickData.precision}dp · Source: ${tickData.source}  — Analysing…`);
+        body.manualTicks = digits;
+        body.fetchSource = tickData.source || "deriv_live";
       } catch (fetchErr: any) {
         setRunning(false);
         setProgress("");
-        alert(`❌ Could not fetch ticks from Deriv: ${fetchErr.message}\n\nCheck your internet connection or try the Manual Analysis tab to paste your own digits.`);
+        alert(`❌ Could not fetch ticks from Deriv: ${fetchErr.message}`);
         return;
       }
     }
