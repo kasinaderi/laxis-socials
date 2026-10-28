@@ -116,6 +116,9 @@ function fetchFromEndpoint(
             finished = true;
             clearTimeout(timer);
             cleanup();
+            // Deriv ticks_history returns prices in chronological order:
+            // index 0 = oldest tick, last index = newest tick.
+            // We preserve this order — do NOT reverse.
             resolve({
               prices: msg.history.prices,
               times: msg.history.times,
@@ -149,6 +152,16 @@ function fetchFromEndpoint(
 /**
  * Fetch real historical ticks from Deriv API.
  * Connects to Deriv clusters (red, blue, ws) with auto-fallback.
+ *
+ * ORDER GUARANTEE: Deriv returns ticks_history with index 0 = OLDEST, last = NEWEST.
+ * We preserve this chronological order — digits array is always oldest→newest.
+ *
+ * PRECISION GUARANTEE: Each symbol uses a fixed number of decimal places.
+ * We use Number.toFixed(precision) which preserves trailing zeros.
+ * Example: R_10 (3dp), price 5674.210 → toFixed(3) = "5674.210" → last char "0" → digit 0
+ *
+ * ZERO GUARANTEE: parseInt("0", 10) = 0 which passes the d >= 0 && d <= 9 check.
+ * Digit 0 is always correctly extracted and included.
  */
 export async function fetchDerivTicksLive(
   rawSymbol = "R_10",
@@ -199,16 +212,21 @@ export async function fetchDerivTicksLive(
   }
 
   // Extract last digit accurately
+  // ORDER: prices are in chronological order from Deriv (index 0 = oldest, last = newest).
+  // We iterate in this order — digits array is always oldest→newest.
   const digits: number[] = [];
   for (const p of prices) {
     try {
+      // toFixed(decimals) formats with trailing zeros preserved, e.g.:
+      //   price=5674.210, decimals=3 → "5674.210" → last char "0" → digit 0  ✓
+      //   price=5674.217, decimals=3 → "5674.217" → last char "7" → digit 7  ✓
       const s = Number(p).toFixed(decimals);
-      const d = parseInt(s[s.length - 1], 10);
+      const d = parseInt(s.charAt(s.length - 1), 10); // explicit radix 10, handles "0" correctly
       if (!isNaN(d) && d >= 0 && d <= 9) {
         digits.push(d);
       }
     } catch {
-      // skip malformed
+      // skip malformed price
     }
   }
 

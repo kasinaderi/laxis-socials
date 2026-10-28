@@ -39,65 +39,23 @@ MAX_WINDOW  = int(os.environ.get("MAX_WINDOW", "7"))
 TOP_N       = int(os.environ.get("TOP_N", "30"))
 APP_ID      = "1089"
 
-# ── Step 1: Fetch ticks from Deriv WebSocket API ──────────────────────────────
+# ── Step 1: Fetch or load ticks ───────────────────────────────────────────────
 digits = []
 raw_prices = []
 fetch_source = "api"
+api_error = None
 
-def fetch_deriv_ticks():
-    # Try clusters in priority order — red.derivws.com is the most reliable
-    endpoints = [
-        f"wss://red.derivws.com/websockets/v3?app_id={APP_ID}",
-        f"wss://blue.derivws.com/websockets/v3?app_id={APP_ID}",
-        f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}",
-        f"wss://ws.binaryws.com/websockets/v3?app_id={APP_ID}",
-    ]
-    try:
-        import websocket
-        for endpoint in endpoints:
-            result = {"prices": [], "done": False, "error": None}
-            def on_message(ws, msg):
-                try:
-                    d = json.loads(msg)
-                    if "history" in d:
-                        result["prices"] = d["history"].get("prices", [])
-                        result["done"] = True
-                        ws.close()
-                    elif "error" in d:
-                        result["error"] = d["error"].get("message", "API error")
-                        result["done"] = True
-                        ws.close()
-                except:
-                    result["done"] = True
-                    ws.close()
-            def on_error(ws, err):
-                result["error"] = str(err)
-                result["done"] = True
-            def on_open(ws):
-                ws.send(json.dumps({
-                    "ticks_history": SYMBOL,
-                    "count": TICK_COUNT,
-                    "end": "latest",
-                    "style": "ticks",
-                    "adjust_start_time": 1
-                }))
-            ws_app = websocket.WebSocketApp(
-                endpoint,
-                on_message=on_message, on_error=on_error, on_open=on_open
-            )
-            ws_app.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE}, ping_timeout=15)
-            if result["prices"]:
-                return result["prices"], result["error"]
-        return [], "All Deriv clusters unreachable"
-    except Exception as e:
-        return [], str(e)
-
-# Symbol → decimal precision mapping (matches deriv-fetcher.ts)
+# ── Symbol → decimal precision (must match deriv-fetcher.ts exactly) ──────────
+# Deriv prices for each symbol have a fixed number of decimal places.
+# The LAST digit of the price at that precision is the "digit" for the trade.
+# Example: R_10 (3dp)  price=5674.217 → "5674.217" → last char "7" → digit 7
+#          R_10 (3dp)  price=5674.210 → "5674.210" → last char "0" → digit 0
+#          R_50 (4dp)  price=1234.5670→ "1234.5670"→ last char "0" → digit 0
+# CRITICAL: format with the EXACT precision so trailing zeros are preserved.
 SYMBOL_PRECISION = {
     "R_10": 3, "R_25": 3, "R_50": 4, "R_75": 4, "R_100": 2,
     "1HZ10V": 2, "1HZ25V": 2, "1HZ50V": 2, "1HZ75V": 2, "1HZ100V": 2,
 }
-# Map 1S variants to 1HZ names for precision lookup
 SYMBOL_MAP = {
     "R_10_1S": "1HZ10V", "R_25_1S": "1HZ25V", "R_50_1S": "1HZ50V",
     "R_75_1S": "1HZ75V", "R_100_1S": "1HZ100V",
@@ -105,18 +63,103 @@ SYMBOL_MAP = {
 _mapped = SYMBOL_MAP.get(SYMBOL, SYMBOL)
 PRECISION = SYMBOL_PRECISION.get(_mapped, 2)
 
-prices, api_error = fetch_deriv_ticks()
-raw_prices = prices
+def extract_digit(price, precision):
+    """
+    Extract the last digit from a price using the symbol's fixed decimal precision.
+    Uses Python's format string to ensure trailing zeros are preserved.
+    e.g. extract_digit(5674.210, 3) → "5674.210"[-1] → "0" → 0
+         extract_digit(5674.217, 3) → "5674.217"[-1] → "7" → 7
+    """
+    try:
+        s = format(float(price), f".{precision}f")  # e.g. "5674.210" preserves trailing zero
+        d = int(s[-1])                               # last character → always the digit
+        if 0 <= d <= 9:
+            return d
+        return None
+    except Exception:
+        return None
 
-if prices:
-    for p in prices:
+# ── Check for pre-extracted digits (passed from Node.js server-side fetcher) ──
+# When MANUAL_TICKS_FILE is set, digits were already extracted with correct
+# precision by deriv-fetcher.ts (Node.js) and are in chronological order
+# (oldest → newest). Load directly — do NOT re-extract from prices.
+_manual_file = os.environ.get("MANUAL_TICKS_FILE", "")
+if _manual_file and os.path.exists(_manual_file):
+    try:
+        with open(_manual_file) as _f:
+            _raw = json.load(_f)
+        # Validate: must be integers 0-9. Preserve original order (oldest→newest).
+        digits = [int(d) for d in _raw if isinstance(d, (int, float)) and 0 <= int(d) <= 9]
+        fetch_source = "deriv_live"
+        api_error = None
+    except Exception as e:
+        api_error = f"Failed to load manual ticks: {e}"
+
+# ── If no pre-loaded digits, fetch from Deriv WebSocket API ───────────────────
+if not digits:
+    def fetch_deriv_ticks():
+        # Try clusters in priority order — red.derivws.com is the most reliable
+        endpoints = [
+            f"wss://red.derivws.com/websockets/v3?app_id={APP_ID}",
+            f"wss://blue.derivws.com/websockets/v3?app_id={APP_ID}",
+            f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}",
+            f"wss://ws.binaryws.com/websockets/v3?app_id={APP_ID}",
+        ]
         try:
-            s = f"{float(p):.{PRECISION}f}"
-            digits.append(int(s[-1]))
-        except:
-            pass
-else:
-    fetch_source = "unavailable"
+            import websocket
+            for endpoint in endpoints:
+                result = {"prices": [], "done": False, "error": None}
+                def on_message(ws, msg):
+                    try:
+                        d = json.loads(msg)
+                        if "history" in d:
+                            # Deriv returns prices in chronological order: index 0 = oldest.
+                            # Do NOT reverse — keep oldest→newest for correct backtest ordering.
+                            result["prices"] = d["history"].get("prices", [])
+                            result["done"] = True
+                            ws.close()
+                        elif "error" in d:
+                            result["error"] = d["error"].get("message", "API error")
+                            result["done"] = True
+                            ws.close()
+                    except:
+                        result["done"] = True
+                        ws.close()
+                def on_error(ws, err):
+                    result["error"] = str(err)
+                    result["done"] = True
+                def on_open(ws):
+                    ws.send(json.dumps({
+                        "ticks_history": SYMBOL,
+                        "count": TICK_COUNT,
+                        "end": "latest",
+                        "style": "ticks",
+                        "adjust_start_time": 1
+                    }))
+                ws_app = websocket.WebSocketApp(
+                    endpoint,
+                    on_message=on_message, on_error=on_error, on_open=on_open
+                )
+                ws_app.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE}, ping_timeout=15)
+                if result["prices"]:
+                    return result["prices"], result["error"]
+            return [], "All Deriv clusters unreachable"
+        except Exception as e:
+            return [], str(e)
+
+    prices, api_error = fetch_deriv_ticks()
+    raw_prices = prices
+
+    if prices:
+        # Prices arrive oldest→newest from Deriv — preserve this order.
+        # Extract last digit using the exact precision for this symbol.
+        # IMPORTANT: format() preserves trailing zeros, so digit 0 is correctly extracted.
+        for p in prices:
+            d = extract_digit(p, PRECISION)
+            if d is not None:
+                digits.append(d)
+    else:
+        fetch_source = "unavailable"
 
 N = len(digits)
 
@@ -348,29 +391,44 @@ export async function runDerivAnalysis(
     // If manual ticks provided, inject them via TICKS env var using a wrapper
     let cmd: string;
     if (manualTicks && manualTicks.length > 0) {
-      const tickStr = manualTicks.join(",");
-      // Override the fetch step by monkey-patching via wrapper
+      // Digits from deriv-fetcher are already correctly extracted 0-9 integers
+      // in chronological order (oldest → newest). Validate and pass as-is.
+      const safeDigits = manualTicks
+        .slice(0, 10_000)
+        .filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 9);
+
+      // Write digits to JSON file on the VM, then use a minimal wrapper that
+      // loads them directly — bypassing the price-fetch + extraction steps entirely.
+      const digitsJson = JSON.stringify(safeDigits);
+      await sb.commands.run(
+        `printf '%s' '${digitsJson.replace(/'/g, "'\\''")}' > /tmp/deriv_digits.json`
+      ).catch(() => {});
+
       const wrapper = `#!/usr/bin/env python3
+"""
+Wrapper: loads pre-extracted digits from deriv-fetcher (correct precision,
+chronological order oldest→newest) and runs the full analysis engine.
+"""
 import os, json, sys
-# Pre-load manual digits so fetch step is skipped
-os.environ["DERIV_SYMBOL"]   = "${symbol}"
-os.environ["TICK_COUNT"]     = "${tickCount}"
-os.environ["MIN_OCCURRENCES"]= "${minOccurrences}"
-os.environ["MAX_WINDOW"]     = "${maxWindow}"
-os.environ["TOP_N"]          = "${topN}"
+os.environ["DERIV_SYMBOL"]    = "${symbol}"
+os.environ["TICK_COUNT"]      = "${tickCount}"
+os.environ["MIN_OCCURRENCES"] = "${minOccurrences}"
+os.environ["MAX_WINDOW"]      = "${maxWindow}"
+os.environ["TOP_N"]           = "${topN}"
 
-# Inject digits directly by patching the fetch result
-import types, builtins
-_orig_exec = builtins.__import__
+# Load pre-extracted digits (0-9 integers, oldest→newest, correct precision)
+with open("/tmp/deriv_digits.json") as f:
+    _injected = json.load(f)
 
-digits_override = [int(str(abs(round(float(x), 2)))[-1]) for x in [${manualTicks.slice(0, 5000).join(",")}]]
-
-# Exec the main script but intercept the websocket call
+# Patch the main script: replace fetch+extraction block with injected digits
 src = open("/home/user/deriv_analyze.py").read()
-# Replace the fetch section with direct data
+# We inject digits by replacing the global list initialisation line
+src = "digits = " + json.dumps(_injected) + "\\nraw_prices = []\\nfetch_source = 'deriv_live'\\napi_error = None\\n" + src
+# Remove the original fetch call so it doesn't overwrite our data
+src = src.replace("prices, api_error = fetch_deriv_ticks()", "prices = []  # skipped — digits pre-loaded")
 src = src.replace(
-    "prices, api_error = fetch_deriv_ticks()",
-    "prices = []; api_error = None; digits[:] = ${JSON.stringify(manualTicks.slice(0, 5000))}[:${Math.min(manualTicks.length, 5000)}]; fetch_source = 'manual'"
+    "if prices:\\n    for p in prices:\\n        try:\\n            s = f\\"{float(p):.{PRECISION}f}\\"\\n            digits.append(int(s[-1]))\\n        except:\\n            pass\\nelse:\\n    fetch_source = \\"unavailable\\"",
+    "# digit extraction skipped — already loaded"
 )
 exec(compile(src, "deriv_analyze.py", "exec"), {"__name__": "__main__"})
 `;

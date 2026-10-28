@@ -157,9 +157,15 @@ export async function POST(req: NextRequest) {
     ].join(" ");
 
     if (manualTicks && manualTicks.length > 0) {
-      const ticksJson = JSON.stringify(manualTicks.slice(0, 10_000));
+      // Digits from deriv-fetcher are already clean 0-9 integers in
+      // chronological order (oldest→newest). Validate and write to JSON file.
+      const safeDigits = manualTicks
+        .slice(0, 10_000)
+        .filter((d: any) => Number.isInteger(d) && d >= 0 && d <= 9);
+      const digitsJson = JSON.stringify(safeDigits);
+      // Use printf to avoid shell echo mangling of special chars in large arrays
       await sb.commands.run(
-        `echo '${ticksJson}' > /tmp/manual_ticks_${analysisId}.json`
+        `printf '%s' '${digitsJson.replace(/'/g, "'\\''")}' > /tmp/manual_ticks_${analysisId}.json`
       ).catch(() => {});
     }
 
@@ -167,6 +173,8 @@ export async function POST(req: NextRequest) {
     const pidFile    = `/tmp/deriv_pid_${analysisId}.txt`;
     const doneFlag   = `/tmp/deriv_done_${analysisId}.flag`;  // written by script on completion
 
+    // MANUAL_TICKS_FILE: Python engine reads this first, skips WebSocket fetch entirely.
+    // Digits in that file are already extracted 0-9 integers with correct precision.
     const launchCmd = manualTicks && manualTicks.length > 0
       ? `nohup bash -c 'MANUAL_TICKS_FILE=/tmp/manual_ticks_${analysisId}.json ${envStr} python3 /home/user/deriv_analyze.py > ${resultFile} 2>/tmp/deriv_err_${analysisId}.log && touch ${doneFlag}' & echo $! > ${pidFile}`
       : `nohup bash -c '${envStr} python3 /home/user/deriv_analyze.py > ${resultFile} 2>/tmp/deriv_err_${analysisId}.log && touch ${doneFlag}' & echo $! > ${pidFile}`;
@@ -215,14 +223,12 @@ function runStatFallback(
   topN: number,
   symbol: string
 ): any {
+  // Digits arriving here are already extracted 0-9 integers from deriv-fetcher.ts
+  // (which uses the correct per-symbol decimal precision). Do NOT re-extract —
+  // just validate they are clean integers in range [0,9].
   const digits = inputDigits
-    .map(v => {
-      const n = typeof v === "number" ? v : parseInt(String(v));
-      if (n >= 0 && n <= 9) return n;
-      const s = Math.abs(v).toFixed(2);
-      return parseInt(s[s.length - 1]);
-    })
-    .filter(d => d >= 0 && d <= 9);
+    .map(v => (typeof v === "number" ? v : parseInt(String(v), 10)))
+    .filter(d => Number.isInteger(d) && d >= 0 && d <= 9);
 
   const N = digits.length;
 
