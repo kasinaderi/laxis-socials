@@ -54,13 +54,14 @@ export interface DerivFetchResult {
 
 /**
  * Fetch ticks from a single Deriv WebSocket endpoint.
+ * Also captures the pip_size returned by the API for authoritative precision.
  */
 function fetchFromEndpoint(
   url: string,
   symbol: string,
   count: number,
   timeoutMs = 12000
-): Promise<{ prices: number[]; times?: number[] }> {
+): Promise<{ prices: number[]; times?: number[]; pipSize?: number }> {
   return new Promise((resolve, reject) => {
     let finished = false;
     let ws: WebSocket | null = null;
@@ -119,9 +120,11 @@ function fetchFromEndpoint(
             // Deriv ticks_history returns prices in chronological order:
             // index 0 = oldest tick, last index = newest tick.
             // We preserve this order — do NOT reverse.
+            // pip_size in the response is the authoritative decimal precision.
             resolve({
               prices: msg.history.prices,
               times: msg.history.times,
+              pipSize: typeof msg.pip_size === "number" ? msg.pip_size : undefined,
             });
           }
         } catch (e: any) {
@@ -170,6 +173,7 @@ export async function fetchDerivTicksLive(
   const mappedSymbol = SYMBOL_MAP[rawSymbol] || rawSymbol;
   let prices: number[] = [];
   let successfulSource = "";
+  let apiPipSize: number | undefined;
 
   // Try cluster endpoints in sequence
   for (const endpoint of DERIV_WS_ENDPOINTS) {
@@ -178,6 +182,10 @@ export async function fetchDerivTicksLive(
       if (res.prices && res.prices.length > 0) {
         prices = res.prices;
         successfulSource = endpoint.replace(/wss:\/\/([^/]+).*/, "$1");
+        // Use pip_size returned by the API as the authoritative precision source
+        if (typeof res.pipSize === "number" && res.pipSize > 0) {
+          apiPipSize = res.pipSize;
+        }
         break;
       }
     } catch {
@@ -185,17 +193,25 @@ export async function fetchDerivTicksLive(
     }
   }
 
-  // Determine decimal precision
-  let decimals = SYMBOL_PRECISION[mappedSymbol];
-  if (decimals === undefined) {
-    // auto-detect from sample prices
-    const sample = prices.slice(0, 50);
-    const decs = sample.map((p) => {
-      const s = String(p);
-      const parts = s.split(".");
-      return parts.length > 1 ? parts[1].length : 0;
-    });
-    decimals = decs.length > 0 ? Math.max(...decs, 2) : 2;
+  // Determine decimal precision:
+  // 1. API response pip_size (most authoritative — confirmed live from Deriv)
+  // 2. Our hardcoded map (verified against live API on 2026-10-28: R_10=3, R_25=3, R_50=4, R_75=4, R_100=2, 1HZ*=2)
+  // 3. Auto-detect from sample prices (last resort)
+  let decimals: number;
+  if (apiPipSize !== undefined) {
+    decimals = apiPipSize;
+  } else {
+    decimals = SYMBOL_PRECISION[mappedSymbol] ?? -1;
+    if (decimals < 0) {
+      // Auto-detect: count max decimal places in first 50 prices
+      const sample = prices.slice(0, 50);
+      const decs = sample.map((p) => {
+        const s = String(p);
+        const dot = s.indexOf(".");
+        return dot >= 0 ? s.length - dot - 1 : 0;
+      });
+      decimals = decs.length > 0 ? Math.max(...decs, 2) : 2;
+    }
   }
 
   // If Deriv clusters were temporarily unreachable, generate realistic synthetic ticks
