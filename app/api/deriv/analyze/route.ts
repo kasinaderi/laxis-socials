@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { derivAnalyses, derivStrategies, appConfig } from "@/db/schema";
+import { derivAnalyses, derivStrategies, derivPatternMemory, appConfig } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { Sandbox } from "@e2b/desktop";
 import { installDerivEngineInSandbox } from "@/lib/deriv-engine";
@@ -105,6 +105,10 @@ export async function POST(req: NextRequest) {
       const digits = manualTicks && manualTicks.length > 0 ? manualTicks : [];
       const data   = runStatFallback(digits, maxWindow, minOccurrences, topN, symbol, targetContract);
 
+      // Continuous Learning Memory: Update cumulative historical pattern performance
+      const enrichedStrategies = await updatePatternLearningMemory(symbol, data.top_strategies || []);
+      data.top_strategies = enrichedStrategies;
+
       await db.insert(derivAnalyses).values({
         id:                  analysisId,
         status:              data.tick_count > 0 ? "done" : "error",
@@ -124,7 +128,7 @@ export async function POST(req: NextRequest) {
         createdAt:   now,
       }).run();
 
-      await persistStrategies(analysisId, data.top_strategies || []);
+      await persistStrategies(analysisId, enrichedStrategies);
 
       return NextResponse.json({
         analysisId,
@@ -214,6 +218,92 @@ async function persistStrategies(analysisId: string, strategies: any[]) {
       createdAt:       now,
     }).run().catch(() => {});
   }
+}
+
+// ── Continuous Learning: Cumulative Pattern Memory ────────────────────────────
+async function updatePatternLearningMemory(symbol: string, strategies: any[]): Promise<any[]> {
+  const now = new Date().toISOString();
+  const enriched: any[] = [];
+
+  for (const s of strategies) {
+    const memoryId = `${symbol}:${s.pattern.join(",")}:${s.trade_type}`;
+    try {
+      const existing = await db
+        .select()
+        .from(derivPatternMemory)
+        .where(eq(derivPatternMemory.id, memoryId))
+        .get();
+
+      if (existing) {
+        const newSessions = existing.sessionsObserved + 1;
+        const newTrades = existing.lifetimeTrades + s.total_trades;
+        const newWins = existing.lifetimeWins + s.wins;
+        const newLifetimeWr = Math.round((newWins / Math.max(1, newTrades)) * 10000) / 10000;
+
+        let grade = "ROBUST";
+        if (newSessions >= 3 && newLifetimeWr >= s.baseline_rate + 0.05 && (s.consistency_pct ?? 0) >= 80) {
+          grade = "ELITE";
+        } else if (s.win_rate < s.baseline_rate) {
+          grade = "DECAYING";
+        }
+
+        await db
+          .update(derivPatternMemory)
+          .set({
+            sessionsObserved: newSessions,
+            lifetimeTrades: newTrades,
+            lifetimeWins: newWins,
+            lifetimeWinRate: String(newLifetimeWr),
+            lastSeenWinRate: String(s.win_rate),
+            lastSeenEdge: String(s.edge),
+            stabilityGrade: grade,
+            bestMarketArea: s.best_area_label || existing.bestMarketArea,
+            lastSeenAt: now,
+          })
+          .where(eq(derivPatternMemory.id, memoryId))
+          .run();
+
+        enriched.push({
+          ...s,
+          sessions_observed: newSessions,
+          lifetime_win_rate: newLifetimeWr,
+          stability_grade: grade,
+        });
+      } else {
+        const initialGrade = (s.consistency_pct ?? 0) >= 80 ? "ROBUST" : "LEARNING";
+        await db
+          .insert(derivPatternMemory)
+          .values({
+            id: memoryId,
+            symbol,
+            pattern: JSON.stringify(s.pattern),
+            tradeType: s.trade_type,
+            sessionsObserved: 1,
+            lifetimeTrades: s.total_trades,
+            lifetimeWins: s.wins,
+            lifetimeWinRate: String(s.win_rate),
+            lastSeenWinRate: String(s.win_rate),
+            lastSeenEdge: String(s.edge),
+            stabilityGrade: initialGrade,
+            bestMarketArea: s.best_area_label || null,
+            lastSeenAt: now,
+            createdAt: now,
+          })
+          .run();
+
+        enriched.push({
+          ...s,
+          sessions_observed: 1,
+          lifetime_win_rate: s.win_rate,
+          stability_grade: initialGrade,
+        });
+      }
+    } catch {
+      enriched.push(s);
+    }
+  }
+
+  return enriched;
 }
 
 // ── In-process JS stat fallback (no E2B) ─────────────────────────────────────

@@ -44,6 +44,10 @@ interface Strategy {
     winRate: number;
     profitable: boolean;
   }>;
+  // Continuous Learning Memory
+  sessions_observed?: number;
+  lifetime_win_rate?: number;
+  stability_grade?: "ELITE" | "ROBUST" | "LEARNING" | "DECAYING" | string;
 }
 
 interface Analysis {
@@ -213,6 +217,23 @@ function StrategyCard({ s, rank }: { s: Strategy; rank: number }) {
                 Peak: {s.best_area_label.split(":")[0]}
               </span>
             )}
+            {s.stability_grade && (
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                s.stability_grade === "ELITE"
+                  ? "bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800"
+                  : s.stability_grade === "ROBUST"
+                    ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
+                    : s.stability_grade === "DECAYING"
+                      ? "bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800"
+                      : "bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800"
+              }`}>
+                <span>{s.stability_grade === "ELITE" ? "💎" : s.stability_grade === "ROBUST" ? "🧠" : s.stability_grade === "DECAYING" ? "⚠️" : "🌱"}</span>
+                <span>
+                  {s.stability_grade} · {s.sessions_observed} {s.sessions_observed === 1 ? "Session" : "Sessions"}
+                  {s.lifetime_win_rate ? ` (${(s.lifetime_win_rate * 100).toFixed(1)}% Lifetime)` : ""}
+                </span>
+              </span>
+            )}
           </div>
 
           {/* Signal */}
@@ -315,8 +336,10 @@ export default function DerivPatternLabPage() {
               try {
                 const raw = JSON.parse(d.analysis.rawOutput);
                 setRawData(raw);
-                // Prefer strategies from DB rows, fall back to rawOutput
-                if (d.strategies && d.strategies.length > 0) {
+                // Prefer rich raw.top_strategies (with cross-val & memory), fall back to DB rows
+                if (raw.top_strategies && raw.top_strategies.length > 0) {
+                  setStrategies(raw.top_strategies);
+                } else if (d.strategies && d.strategies.length > 0) {
                   // Map DB rows back to Strategy shape
                   setStrategies(d.strategies.map((s: any) => ({
                     pattern:          JSON.parse(s.pattern),
@@ -332,8 +355,6 @@ export default function DerivPatternLabPage() {
                     signal:           s.signal,
                     rank:             s.rank,
                   })));
-                } else {
-                  setStrategies(raw.top_strategies || []);
                 }
               } catch {}
             } else if (d.strategies) {
@@ -922,7 +943,7 @@ export default function DerivPatternLabPage() {
                               #{idx + 1}
                             </span>
                             <div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <span className={`text-xs font-black px-3 py-1 rounded-lg ${ttColor(s.trade_type)}`}>
                                   BET {ttLabel(s.trade_type).toUpperCase()}
                                 </span>
@@ -934,6 +955,20 @@ export default function DerivPatternLabPage() {
                                   <span>{isRobust ? "⭐" : "🛡️"}</span>
                                   <span>{s.folds_profitable ?? 10}/10 Folds Passed ({s.consistency_pct ?? 100}% Stable)</span>
                                 </span>
+                                {s.stability_grade && (
+                                  <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1 ${
+                                    s.stability_grade === "ELITE"
+                                      ? "bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800"
+                                      : s.stability_grade === "ROBUST"
+                                        ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
+                                        : s.stability_grade === "DECAYING"
+                                          ? "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800"
+                                          : "bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800"
+                                  }`}>
+                                    <span>{s.stability_grade === "ELITE" ? "💎" : s.stability_grade === "ROBUST" ? "🧠" : s.stability_grade === "DECAYING" ? "⚠️" : "🌱"}</span>
+                                    <span>Memory: {s.stability_grade} ({s.sessions_observed ?? 1} sess · {((s.lifetime_win_rate ?? s.win_rate) * 100).toFixed(1)}% lifetime)</span>
+                                  </span>
+                                )}
                               </div>
                               <div className="text-[11px] text-slate-400 mt-0.5">
                                 Window {s.window} digits · {s.total_trades} historical occurrences

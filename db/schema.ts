@@ -210,3 +210,25 @@ export const derivStrategies = sqliteTable("deriv_strategies", {
   rank: integer("rank").notNull().default(0),
   createdAt: text("created_at").notNull(),
 });
+
+/**
+ * Continuous Learning Ledger: Persists pattern performance across multiple
+ * analysis sessions and days to identify robust, all-weather market edges.
+ */
+export const derivPatternMemory = sqliteTable("deriv_pattern_memory", {
+  id: text("id").primaryKey(),                       // e.g. "R_10:2,8:DIFFERS_4"
+  symbol: text("symbol").notNull(),
+  pattern: text("pattern").notNull(),                // "[2,8]"
+  tradeType: text("trade_type").notNull(),           // "DIFFERS_4"
+  sessionsObserved: integer("sessions_observed").notNull().default(1),
+  lifetimeTrades: integer("lifetime_trades").notNull().default(0),
+  lifetimeWins: integer("lifetime_wins").notNull().default(0),
+  lifetimeWinRate: text("lifetime_win_rate").notNull().default("0"),
+  lastSeenWinRate: text("last_seen_win_rate").notNull().default("0"),
+  lastSeenEdge: text("last_seen_edge").notNull().default("0"),
+  stabilityGrade: text("stability_grade").notNull().default("LEARNING"), // "ELITE", "ROBUST", "LEARNING", "DECAYING"
+  bestMarketArea: text("best_market_area"),
+  notes: text("notes"),
+  lastSeenAt: text("last_seen_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});

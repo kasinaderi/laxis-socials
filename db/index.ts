@@ -212,6 +212,24 @@ export async function initDb() {
       rank INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS deriv_pattern_memory (
+      id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      pattern TEXT NOT NULL,
+      trade_type TEXT NOT NULL,
+      sessions_observed INTEGER NOT NULL DEFAULT 1,
+      lifetime_trades INTEGER NOT NULL DEFAULT 0,
+      lifetime_wins INTEGER NOT NULL DEFAULT 0,
+      lifetime_win_rate TEXT NOT NULL DEFAULT '0',
+      last_seen_win_rate TEXT NOT NULL DEFAULT '0',
+      last_seen_edge TEXT NOT NULL DEFAULT '0',
+      stability_grade TEXT NOT NULL DEFAULT 'LEARNING',
+      best_market_area TEXT,
+      notes TEXT,
+      last_seen_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 }
 
