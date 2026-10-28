@@ -44,7 +44,11 @@ interface Strategy {
     wins: number;
     winRate: number;
     profitable: boolean;
+    maxConsecutiveLosses?: number;
   }>;
+  // Martingale Safety: Least Consecutive Losses
+  max_consecutive_losses?: number;
+  max_fold_consecutive_losses?: number;
   // Continuous Learning Memory
   sessions_observed?: number;
   lifetime_win_rate?: number;
@@ -277,6 +281,18 @@ function StrategyCard({ s, rank }: { s: Strategy; rank: number }) {
                 </span>
               </span>
             )}
+            {s.max_consecutive_losses !== undefined && (
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                s.max_consecutive_losses <= 1
+                  ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800"
+                  : s.max_consecutive_losses === 2
+                    ? "bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-800"
+                    : "bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800"
+              }`} title="Maximum consecutive losses encountered in backtest (Crucial for Martingale sizing)">
+                <span>{s.max_consecutive_losses <= 1 ? "🛡️" : s.max_consecutive_losses === 2 ? "⚡" : "⚠️"}</span>
+                <span>Max {s.max_consecutive_losses} L-Streak (Martingale Safe)</span>
+              </span>
+            )}
           </div>
 
           {/* Signal */}
@@ -334,7 +350,7 @@ export default function DerivPatternLabPage() {
   const [rawData, setRawData]           = useState<any>(null);
   const [history, setHistory]           = useState<Analysis[]>([]);
   const [filterTT, setFilterTT]         = useState("ALL");
-  const [sortBy, setSortBy]             = useState<"win_rate"|"edge"|"total_trades"|"confidence_lower">("confidence_lower");
+  const [sortBy, setSortBy]             = useState<"win_rate"|"edge"|"total_trades"|"confidence_lower"|"least_consecutive_losses">("least_consecutive_losses");
   const [chatMessages, setChatMessages] = useState<{ role: "user"|"ai"; text: string }[]>([]);
   const [chatInput, setChatInput]       = useState("");
   const [chatLoading, setChatLoading]   = useState(false);
@@ -614,7 +630,15 @@ export default function DerivPatternLabPage() {
 
   const displayStrategies = strategies
     .filter(s => filterTT === "ALL" || s.trade_type.startsWith(filterTT))
-    .sort((a, b) => b[sortBy] - a[sortBy]);
+    .sort((a, b) => {
+      if (sortBy === "least_consecutive_losses") {
+        const aLoss = a.max_consecutive_losses ?? 999;
+        const bLoss = b.max_consecutive_losses ?? 999;
+        if (aLoss !== bLoss) return aLoss - bLoss; // Ascending: least consecutive losses first (0, 1, 2...)
+        return (b.confidence_lower || 0) - (a.confidence_lower || 0); // Tie breaker: highest reliability
+      }
+      return ((b as any)[sortBy] ?? 0) - ((a as any)[sortBy] ?? 0);
+    });
 
   // For the focused contract type, compute a dedicated best-entry insight
   const focusedBest = contractFocus !== "ALL"
@@ -932,7 +956,21 @@ export default function DerivPatternLabPage() {
                       {k === "ALL" ? "All Types" : k}
                     </button>
                   ))}
-                  <span className="ml-auto text-xs text-slate-400">{displayStrategies.length} shown</span>
+                  <div className="flex items-center gap-1.5 ml-auto">
+                    <label className="text-xs font-semibold text-slate-500 whitespace-nowrap">Sort:</label>
+                    <select
+                      value={sortBy}
+                      onChange={e => setSortBy(e.target.value as any)}
+                      className="text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1 text-slate-800 dark:text-slate-200 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                    >
+                      <option value="least_consecutive_losses">🛡️ Least Consecutive Losses (Martingale)</option>
+                      <option value="confidence_lower">Reliability (CI Lower)</option>
+                      <option value="win_rate">Win Rate</option>
+                      <option value="edge">Edge %</option>
+                      <option value="total_trades">Total Trades</option>
+                    </select>
+                    <span className="text-xs text-slate-400 ml-1">({displayStrategies.length})</span>
+                  </div>
                 </div>
               )}
 
@@ -994,8 +1032,12 @@ export default function DerivPatternLabPage() {
                         <div>
                           <div className="text-2xl font-black text-white">{rawData.recommended_market.label}</div>
                           <div className="text-sm text-emerald-300 mt-0.5">{rawData.recommended_market.best_signal}</div>
-                          <div className="text-xs text-emerald-400 mt-1">
-                            {rawData.recommended_market.best_folds_profitable}/10 folds passed · Peak: {rawData.recommended_market.best_area_label}
+                          <div className="text-xs text-emerald-300 mt-1 flex items-center gap-2 flex-wrap">
+                            <span>{rawData.recommended_market.best_folds_profitable}/10 folds passed</span>
+                            <span>·</span>
+                            <span className="font-bold text-amber-300">🛡️ Max L-Streak: {rawData.recommended_market.min_consecutive_losses ?? 0} losses (Martingale Safe)</span>
+                            <span>·</span>
+                            <span>Peak: {rawData.recommended_market.best_area_label}</span>
                           </div>
                         </div>
                         <div className="text-right">
@@ -1033,6 +1075,7 @@ export default function DerivPatternLabPage() {
                                 {(mkt.top_win_rate * 100).toFixed(1)}%
                               </div>
                               <div className="text-[10px] text-slate-400 font-semibold">{mkt.best_folds_profitable}/10 folds</div>
+                              <div className="text-[9px] text-emerald-600 dark:text-emerald-400 font-bold">🛡️ Max L: {mkt.min_consecutive_losses ?? 0} streak</div>
                             </div>
                             <div className={`text-xs font-bold px-2 py-1 rounded-lg ${
                               mkt.stability_grade === "ELITE" ? "bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300" :
@@ -1151,6 +1194,18 @@ export default function DerivPatternLabPage() {
                                     <span>Memory: {s.stability_grade} ({s.sessions_observed ?? 1} sess · {((s.lifetime_win_rate ?? s.win_rate) * 100).toFixed(1)}% lifetime)</span>
                                   </span>
                                 )}
+                                {s.max_consecutive_losses !== undefined && (
+                                  <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1 ${
+                                    s.max_consecutive_losses <= 1
+                                      ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800"
+                                      : s.max_consecutive_losses === 2
+                                        ? "bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-800"
+                                        : "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800"
+                                  }`}>
+                                    <span>{s.max_consecutive_losses <= 1 ? "🛡️" : s.max_consecutive_losses === 2 ? "⚡" : "⚠️"}</span>
+                                    <span>Martingale Streak: Max {s.max_consecutive_losses} Losses ({Math.pow(2, s.max_consecutive_losses)}x stake)</span>
+                                  </span>
+                                )}
                               </div>
                               <div className="text-[11px] text-slate-400 mt-0.5">
                                 Window {s.window} digits · {s.total_trades} historical occurrences
@@ -1229,6 +1284,11 @@ export default function DerivPatternLabPage() {
                                     {fs.trades > 0 ? `${fs.winRate}%` : "—"}
                                   </div>
                                   <div className="text-[9px] opacity-75 font-semibold">{fs.trades} trades</div>
+                                  {fs.maxConsecutiveLosses !== undefined && (
+                                    <div className={`text-[8px] font-bold mt-0.5 ${fs.maxConsecutiveLosses <= 1 ? "text-emerald-600 dark:text-emerald-400" : fs.maxConsecutiveLosses === 2 ? "text-amber-600 dark:text-amber-400" : "text-rose-500"}`}>
+                                      Max L: {fs.maxConsecutiveLosses}
+                                    </div>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -1278,8 +1338,9 @@ export default function DerivPatternLabPage() {
                   <select
                     value={sortBy}
                     onChange={e => setSortBy(e.target.value as any)}
-                    className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                    className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer font-medium"
                   >
+                    <option value="least_consecutive_losses">🛡️ Least Consecutive Losses (Martingale Safe)</option>
                     <option value="confidence_lower">Reliability (CI Lower)</option>
                     <option value="win_rate">Win Rate</option>
                     <option value="edge">Edge %</option>
@@ -1300,8 +1361,11 @@ export default function DerivPatternLabPage() {
                       <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 font-semibold uppercase text-[10px] tracking-wider sticky top-0">
                         <tr>
                           <th className="py-3 px-3 text-left">#</th>
+                          {rawData?.is_multi_market && <th className="py-3 px-3 text-left">Market</th>}
                           <th className="py-3 px-3 text-left">Pattern</th>
                           <th className="py-3 px-3 text-left">Trade Type</th>
+                          <th className="py-3 px-3 text-center">🛡️ Max L-Streak (Martingale)</th>
+                          <th className="py-3 px-3 text-center">10-Fold Stability</th>
                           <th className="py-3 px-3 text-right">Win Rate</th>
                           <th className="py-3 px-3 text-right">Baseline</th>
                           <th className="py-3 px-3 text-right">Edge</th>
@@ -1313,10 +1377,17 @@ export default function DerivPatternLabPage() {
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                         {displayStrategies.map((s, i) => (
-                          <tr key={`${s.pattern.join(",")}_${s.trade_type}`} className={`hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors ${i === 0 ? "bg-amber-50/60 dark:bg-amber-950/20" : ""}`}>
+                          <tr key={`${s.symbol || ""}_${s.pattern.join(",")}_${s.trade_type}`} className={`hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors ${i === 0 ? "bg-amber-50/60 dark:bg-amber-950/20" : ""}`}>
                             <td className="py-2.5 px-3">
                               <span className={`font-black text-[11px] ${i === 0 ? "text-amber-600" : "text-slate-400"}`}>#{i + 1}</span>
                             </td>
+                            {rawData?.is_multi_market && (
+                              <td className="py-2.5 px-3">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                  {SYMBOL_LABELS[s.symbol || ""] || s.symbol}
+                                </span>
+                              </td>
+                            )}
                             <td className="py-2.5 px-3">
                               <div className="flex items-center gap-0.5">
                                 {s.pattern.map((d, pi) => (
@@ -1330,6 +1401,40 @@ export default function DerivPatternLabPage() {
                             <td className="py-2.5 px-3">
                               <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${ttColor(s.trade_type)}`}>
                                 {ttLabel(s.trade_type)}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {s.max_consecutive_losses === 0 ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                                  <span>🛡️</span>
+                                  <span>0 Losses (Clean)</span>
+                                </span>
+                              ) : s.max_consecutive_losses === 1 ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                                  <span>🛡️</span>
+                                  <span>1 Loss Max (1x Stake)</span>
+                                </span>
+                              ) : s.max_consecutive_losses === 2 ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700">
+                                  <span>⚡</span>
+                                  <span>2 Losses Max (2x Stake)</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-700">
+                                  <span>⚠️</span>
+                                  <span>{s.max_consecutive_losses} Losses ({Math.pow(2, s.max_consecutive_losses || 0)}x)</span>
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                (s.folds_profitable ?? 10) >= 9
+                                  ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300"
+                                  : (s.folds_profitable ?? 10) >= 7
+                                    ? "bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300"
+                                    : "bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300"
+                              }`}>
+                                {s.folds_profitable ?? 10}/10 folds ({s.consistency_pct ?? 100}%)
                               </span>
                             </td>
                             <td className={`py-2.5 px-3 text-right font-black text-sm tabular-nums ${winColor(s.win_rate)}`}>

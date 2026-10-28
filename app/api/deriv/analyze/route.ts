@@ -131,6 +131,10 @@ export async function POST(req: NextRequest) {
 
         const best = taggedStrategies[0];
         const robustCount = taggedStrategies.filter(s => (s.folds_profitable ?? 0) >= 8).length;
+        const minConsecutiveLosses = taggedStrategies.length > 0
+          ? Math.min(...taggedStrategies.map(s => s.max_consecutive_losses ?? 0))
+          : 0;
+
         marketScorecards.push({
           symbol: mktSymbol,
           label: SYMBOL_LABELS[mktSymbol] || mktSymbol,
@@ -145,6 +149,8 @@ export async function POST(req: NextRequest) {
           robust_count: robustCount,
           stability_grade: best?.stability_grade ?? "LEARNING",
           composite_score: best?.composite_score ?? 0,
+          min_consecutive_losses: minConsecutiveLosses,
+          best_max_consecutive_losses: best?.max_consecutive_losses ?? 0,
         });
       }
 
@@ -500,12 +506,16 @@ function runStatFallback(
   const strategies: any[] = [];
 
   for (let w = 2; w <= Math.min(maxWindow, 7); w++) {
-    // Map pattern key -> trade_type -> stats with 10-fold breakdown
+    // Map pattern key -> trade_type -> stats with 10-fold breakdown & Martingale streak analysis
     const patMap: Record<string, Record<string, {
       wins: number;
       total: number;
       foldWins: number[];
       foldTotals: number[];
+      currentLossStreak: number;
+      maxConsecutiveLosses: number;
+      foldCurrentLossStreak: number[];
+      foldMaxLossStreak: number[];
     }>> = {};
 
     for (let i = 0; i < N - w; i++) {
@@ -521,12 +531,33 @@ function runStatFallback(
             total: 0,
             foldWins: new Array(numFolds).fill(0),
             foldTotals: new Array(numFolds).fill(0),
+            currentLossStreak: 0,
+            maxConsecutiveLosses: 0,
+            foldCurrentLossStreak: new Array(numFolds).fill(0),
+            foldMaxLossStreak: new Array(numFolds).fill(0),
           };
         }
-        patMap[key][tt].total++;
-        patMap[key][tt].wins += nxt[tt];
-        patMap[key][tt].foldTotals[foldIdx]++;
-        patMap[key][tt].foldWins[foldIdx] += nxt[tt];
+
+        const entry = patMap[key][tt];
+        const won = nxt[tt] === 1;
+        entry.total++;
+        entry.foldTotals[foldIdx]++;
+
+        if (won) {
+          entry.wins++;
+          entry.foldWins[foldIdx]++;
+          entry.currentLossStreak = 0;
+          entry.foldCurrentLossStreak[foldIdx] = 0;
+        } else {
+          entry.currentLossStreak++;
+          if (entry.currentLossStreak > entry.maxConsecutiveLosses) {
+            entry.maxConsecutiveLosses = entry.currentLossStreak;
+          }
+          entry.foldCurrentLossStreak[foldIdx]++;
+          if (entry.foldCurrentLossStreak[foldIdx] > entry.foldMaxLossStreak[foldIdx]) {
+            entry.foldMaxLossStreak[foldIdx] = entry.foldCurrentLossStreak[foldIdx];
+          }
+        }
       }
     }
 
@@ -575,6 +606,7 @@ function runStatFallback(
             wins: fWin,
             winRate: Math.round(fWr * 1000) / 10,
             profitable: isProfitable,
+            maxConsecutiveLosses: stats.foldMaxLossStreak[f],
           };
         });
 
@@ -603,43 +635,47 @@ function runStatFallback(
           `2. When sequence [${seq}] appears in the last digits, ` +
           `3. IMMEDIATELY place ${actionLabel} on the NEXT tick (1-tick duration). ` +
           `Expected win rate: ${pct}% (${wins}/${total} won historically, +${(edge * 100).toFixed(1)}% edge over baseline). ` +
-          `10-Fold Stability: ${foldsProfitable}/${foldsTested} market folds profitable. Peak area: ${bestAreaLabel}.`;
+          `10-Fold Stability: ${foldsProfitable}/${foldsTested} market folds profitable. Peak area: ${bestAreaLabel}. ` +
+          `Martingale Safety: Max consecutive loss streak was ${stats.maxConsecutiveLosses} trades (Requires max ${Math.pow(2, stats.maxConsecutiveLosses)}x recovery multiplier).`;
 
         const sigMap: Record<string, string> = {
-          EVEN:    `After [${seq}] → BET EVEN (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
-          ODD:     `After [${seq}] → BET ODD (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
-          OVER:    `After [${seq}] → BET OVER ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
-          UNDER:   `After [${seq}] → BET UNDER ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
-          MATCHES: `After [${seq}] → BET MATCHES ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
-          DIFFERS: `After [${seq}] → BET DIFFERS ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
+          EVEN:    `After [${seq}] → BET EVEN (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed · Max L-Streak: ${stats.maxConsecutiveLosses})`,
+          ODD:     `After [${seq}] → BET ODD (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed · Max L-Streak: ${stats.maxConsecutiveLosses})`,
+          OVER:    `After [${seq}] → BET OVER ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed · Max L-Streak: ${stats.maxConsecutiveLosses})`,
+          UNDER:   `After [${seq}] → BET UNDER ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed · Max L-Streak: ${stats.maxConsecutiveLosses})`,
+          MATCHES: `After [${seq}] → BET MATCHES ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed · Max L-Streak: ${stats.maxConsecutiveLosses})`,
+          DIFFERS: `After [${seq}] → BET DIFFERS ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed · Max L-Streak: ${stats.maxConsecutiveLosses})`,
         };
 
         // Multi-backtest Composite Rank:
-        // Rewards both statistical certainty (Wilson CI) AND multi-epoch robustness across all 10 folds
-        const compositeScore = cl * (1 + 0.20 * (foldsProfitable / Math.max(1, foldsTested)));
+        // Rewards statistical certainty (Wilson CI), 10-fold consistency, AND penalizes consecutive losses for Martingale safety
+        const lossPenalty = Math.max(0, stats.maxConsecutiveLosses * 0.05);
+        const compositeScore = Math.max(0, (cl * (1 + 0.20 * (foldsProfitable / Math.max(1, foldsTested)))) - lossPenalty);
 
         strategies.push({
-          pattern:          pat,
-          window:           w,
-          trade_type:       tt,
-          total_trades:     total,
+          pattern:                     pat,
+          window:                      w,
+          trade_type:                  tt,
+          total_trades:                total,
           wins,
-          losses:           total - wins,
-          win_rate:         Math.round(wr   * 10000) / 10000,
-          baseline_rate:    Math.round(bl   * 10000) / 10000,
-          edge:             Math.round(edge * 10000) / 10000,
-          confidence_lower: Math.round(cl   * 10000) / 10000,
-          composite_score:  Math.round(compositeScore * 10000) / 10000,
-          signal:           sigMap[kind] ?? `After [${seq}] → ${tt} (${pct}% on ${total} trades)`,
+          losses:                      total - wins,
+          win_rate:                    Math.round(wr   * 10000) / 10000,
+          baseline_rate:               Math.round(bl   * 10000) / 10000,
+          edge:                        Math.round(edge * 10000) / 10000,
+          confidence_lower:            Math.round(cl   * 10000) / 10000,
+          composite_score:             Math.round(compositeScore * 10000) / 10000,
+          signal:                      sigMap[kind] ?? `After [${seq}] → ${tt} (${pct}% on ${total} trades)`,
+          max_consecutive_losses:      stats.maxConsecutiveLosses,
+          max_fold_consecutive_losses: Math.max(...stats.foldMaxLossStreak),
           // 10-Fold Cross-Validation Data:
-          folds_tested:     foldsTested,
-          folds_profitable: foldsProfitable,
-          consistency_pct:  consistencyPct,
-          best_area_label:  bestAreaLabel,
-          best_fold_wr:     Math.round(bestFoldWr * 1000) / 10,
-          recent_regime_wr: recentRegimeWr,
-          entry_instruction: entryInstruction,
-          fold_stats:       foldStats,
+          folds_tested:                foldsTested,
+          folds_profitable:            foldsProfitable,
+          consistency_pct:             consistencyPct,
+          best_area_label:             bestAreaLabel,
+          best_fold_wr:                Math.round(bestFoldWr * 1000) / 10,
+          recent_regime_wr:            recentRegimeWr,
+          entry_instruction:           entryInstruction,
+          fold_stats:                  foldStats,
         });
       }
     }
