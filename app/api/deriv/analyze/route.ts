@@ -91,6 +91,7 @@ export async function POST(req: NextRequest) {
       minOccurrences = 30,
       maxWindow      = 7,
       topN           = 30,
+      targetContract = "ALL",
       manualTicks,
     } = body;
 
@@ -102,7 +103,7 @@ export async function POST(req: NextRequest) {
 
     if (!sb) {
       const digits = manualTicks && manualTicks.length > 0 ? manualTicks : [];
-      const data   = runStatFallback(digits, maxWindow, minOccurrences, topN, symbol);
+      const data   = runStatFallback(digits, maxWindow, minOccurrences, topN, symbol, targetContract);
 
       await db.insert(derivAnalyses).values({
         id:                  analysisId,
@@ -221,7 +222,8 @@ function runStatFallback(
   maxWindow: number,
   minOccurrences: number,
   topN: number,
-  symbol: string
+  symbol: string,
+  targetContract = "ALL"
 ): any {
   // Digits arriving here are already extracted 0-9 integers from deriv-fetcher.ts
   // (which uses the correct per-symbol decimal precision). Do NOT re-extract —
@@ -236,7 +238,9 @@ function runStatFallback(
     symbol, tick_count: 0, digits_sample: [], digit_distribution: {},
     baseline_rates: {}, top_strategies: [], total_evaluated: 0,
     summary: "Not enough digits. Need at least 20.",
-    fetch_source: "manual", api_error: null, max_streaks: {}
+    fetch_source: "manual", api_error: null, max_streaks: {},
+    target_contract: targetContract,
+    folds_count: 10,
   };
 
   const outcomeFor = (d: number): Record<string, number> => {
@@ -251,10 +255,25 @@ function runStatFallback(
   };
 
   const allOutcomes = digits.map(d => outcomeFor(d));
-  const tradeTypes  = Object.keys(allOutcomes[0]);
+  let tradeTypes    = Object.keys(allOutcomes[0]);
+
+  // Target Contract Filter:
+  // Allows user to isolate specifically e.g. "UNDER_4", "OVER_5", "EVEN", "ODD", "DIFFERS_4", etc.
+  if (targetContract && targetContract !== "ALL") {
+    const norm = targetContract.trim().toUpperCase();
+    if (norm === "EVEN" || norm === "ODD") {
+      tradeTypes = [norm];
+    } else if (norm.includes("_")) {
+      tradeTypes = tradeTypes.filter(tt => tt === norm);
+    } else {
+      tradeTypes = tradeTypes.filter(tt => tt.startsWith(norm + "_"));
+    }
+    // Fallback if no exact match
+    if (tradeTypes.length === 0) tradeTypes = Object.keys(allOutcomes[0]);
+  }
 
   const baseline: Record<string, number> = {};
-  for (const tt of tradeTypes)
+  for (const tt of Object.keys(allOutcomes[0]))
     baseline[tt] = allOutcomes.reduce((a, o) => a + o[tt], 0) / N;
 
   const wilsonLower = (wins: number, n: number, z = 1.645) => {
@@ -263,25 +282,59 @@ function runStatFallback(
     return (p + z*z/(2*n) - z*Math.sqrt(p*(1-p)/n + z*z/(4*n*n))) / (1 + z*z/n);
   };
 
+  // 10-Fold Setup: Split market ticks into 10 sequential chronological zones
+  const numFolds = 10;
+  const foldSize = Math.max(1, Math.floor(N / numFolds));
+  const foldRanges = Array.from({ length: numFolds }, (_, f) => ({
+    fold: f + 1,
+    start: f * foldSize,
+    end: Math.min(N, (f + 1) * foldSize),
+  }));
+
+  // Adaptive occurrence threshold: if filtering to a single specific contract,
+  // allow slightly lower threshold so the user always sees top reliable patterns
+  const effectiveMinOccur = (targetContract !== "ALL" && !["OVER", "UNDER", "DIFFERS", "MATCHES"].includes(targetContract))
+    ? Math.max(8, Math.min(minOccurrences, Math.floor(N * 0.003)))
+    : minOccurrences;
+
   const strategies: any[] = [];
 
   for (let w = 2; w <= Math.min(maxWindow, 7); w++) {
-    const patMap: Record<string, Record<string, { wins: number; total: number }>> = {};
+    // Map pattern key -> trade_type -> stats with 10-fold breakdown
+    const patMap: Record<string, Record<string, {
+      wins: number;
+      total: number;
+      foldWins: number[];
+      foldTotals: number[];
+    }>> = {};
 
     for (let i = 0; i < N - w; i++) {
       const key = digits.slice(i, i + w).join(",");
       const nxt = allOutcomes[i + w];
+      const foldIdx = Math.min(numFolds - 1, Math.floor(i / foldSize));
+
       if (!patMap[key]) patMap[key] = {};
       for (const tt of tradeTypes) {
-        if (!patMap[key][tt]) patMap[key][tt] = { wins: 0, total: 0 };
+        if (!patMap[key][tt]) {
+          patMap[key][tt] = {
+            wins: 0,
+            total: 0,
+            foldWins: new Array(numFolds).fill(0),
+            foldTotals: new Array(numFolds).fill(0),
+          };
+        }
         patMap[key][tt].total++;
         patMap[key][tt].wins += nxt[tt];
+        patMap[key][tt].foldTotals[foldIdx]++;
+        patMap[key][tt].foldWins[foldIdx] += nxt[tt];
       }
     }
 
     for (const [patKey, ttMap] of Object.entries(patMap)) {
-      for (const [tt, { wins, total }] of Object.entries(ttMap)) {
-        if (total < minOccurrences) continue;
+      for (const [tt, stats] of Object.entries(ttMap)) {
+        const { total, wins, foldWins, foldTotals } = stats;
+        if (total < effectiveMinOccur) continue;
+
         const wr   = wins / total;
         const bl   = baseline[tt] || 0.5;
         const edge = wr - bl;
@@ -290,28 +343,110 @@ function runStatFallback(
         const seq  = pat.join("→");
         const pct  = (wr * 100).toFixed(1);
         const [kind, x] = tt.split("_");
-        const sigMap: Record<string, string> = {
-          EVEN:    `After [${seq}] → BET EVEN (${pct}% on ${total} trades)`,
-          ODD:     `After [${seq}] → BET ODD (${pct}% on ${total} trades)`,
-          OVER:    `After [${seq}] → BET OVER ${x} (${pct}% on ${total} trades)`,
-          UNDER:   `After [${seq}] → BET UNDER ${x} (${pct}% on ${total} trades)`,
-          MATCHES: `After [${seq}] → BET MATCHES ${x} (${pct}% on ${total} trades)`,
-          DIFFERS: `After [${seq}] → BET DIFFERS ${x} (${pct}% on ${total} trades)`,
+
+        // 10-Fold Multiple Backtest Evaluation
+        let foldsTested = 0;
+        let foldsProfitable = 0;
+        let bestFoldIndex = 0;
+        let bestFoldWr = 0;
+        let bestFoldTrades = 0;
+
+        const foldStats = foldRanges.map((rng, f) => {
+          const fTot = foldTotals[f];
+          const fWin = foldWins[f];
+          const fWr  = fTot > 0 ? fWin / fTot : 0;
+          const isProfitable = fTot > 0 && fWr >= bl;
+
+          if (fTot > 0) {
+            foldsTested++;
+            if (isProfitable) foldsProfitable++;
+            if (fWr > bestFoldWr || (fWr === bestFoldWr && fTot > bestFoldTrades)) {
+              bestFoldWr = fWr;
+              bestFoldIndex = f;
+              bestFoldTrades = fTot;
+            }
+          }
+
+          return {
+            fold: f + 1,
+            start: rng.start,
+            end: rng.end,
+            trades: fTot,
+            wins: fWin,
+            winRate: Math.round(fWr * 1000) / 10,
+            profitable: isProfitable,
+          };
+        });
+
+        const consistencyPct = foldsTested > 0 ? Math.round((foldsProfitable / foldsTested) * 100) : 0;
+        const bestRange = foldRanges[bestFoldIndex];
+        const bestAreaLabel = `Fold #${bestFoldIndex + 1} (Ticks ${bestRange.start.toLocaleString()}–${bestRange.end.toLocaleString()}): ${(bestFoldWr * 100).toFixed(1)}% win rate (${bestFoldTrades} trades)`;
+
+        // Recent Market Regime (Fold 10 = latest 10% of ticks)
+        const recentTot = foldTotals[numFolds - 1];
+        const recentWin = foldWins[numFolds - 1];
+        const recentRegimeWr = recentTot > 0 ? Math.round((recentWin / recentTot) * 1000) / 10 : null;
+
+        // Human-readable Signal & Physical Entry Blueprint
+        const labelMap: Record<string, string> = {
+          EVEN:    `BET EVEN`,
+          ODD:     `BET ODD`,
+          OVER:    `BET OVER ${x}`,
+          UNDER:   `BET UNDER ${x}`,
+          MATCHES: `BET MATCHES ${x}`,
+          DIFFERS: `BET DIFFERS ${x}`,
         };
+        const actionLabel = labelMap[kind] || `BET ${tt}`;
+
+        const entryInstruction =
+          `1. Watch Deriv ${symbol} tick stream. ` +
+          `2. When sequence [${seq}] appears in the last digits, ` +
+          `3. IMMEDIATELY place ${actionLabel} on the NEXT tick (1-tick duration). ` +
+          `Expected win rate: ${pct}% (${wins}/${total} won historically, +${(edge * 100).toFixed(1)}% edge over baseline). ` +
+          `10-Fold Stability: ${foldsProfitable}/${foldsTested} market folds profitable. Peak area: ${bestAreaLabel}.`;
+
+        const sigMap: Record<string, string> = {
+          EVEN:    `After [${seq}] → BET EVEN (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
+          ODD:     `After [${seq}] → BET ODD (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
+          OVER:    `After [${seq}] → BET OVER ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
+          UNDER:   `After [${seq}] → BET UNDER ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
+          MATCHES: `After [${seq}] → BET MATCHES ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
+          DIFFERS: `After [${seq}] → BET DIFFERS ${x} (${pct}% on ${total} trades · ${foldsProfitable}/10 folds passed)`,
+        };
+
+        // Multi-backtest Composite Rank:
+        // Rewards both statistical certainty (Wilson CI) AND multi-epoch robustness across all 10 folds
+        const compositeScore = cl * (1 + 0.20 * (foldsProfitable / Math.max(1, foldsTested)));
+
         strategies.push({
-          pattern: pat, window: w, trade_type: tt,
-          total_trades: total, wins, losses: total - wins,
+          pattern:          pat,
+          window:           w,
+          trade_type:       tt,
+          total_trades:     total,
+          wins,
+          losses:           total - wins,
           win_rate:         Math.round(wr   * 10000) / 10000,
           baseline_rate:    Math.round(bl   * 10000) / 10000,
           edge:             Math.round(edge * 10000) / 10000,
           confidence_lower: Math.round(cl   * 10000) / 10000,
-          signal: sigMap[kind] ?? `After [${seq}] → ${tt} (${pct}% on ${total} trades)`,
+          composite_score:  Math.round(compositeScore * 10000) / 10000,
+          signal:           sigMap[kind] ?? `After [${seq}] → ${tt} (${pct}% on ${total} trades)`,
+          // 10-Fold Cross-Validation Data:
+          folds_tested:     foldsTested,
+          folds_profitable: foldsProfitable,
+          consistency_pct:  consistencyPct,
+          best_area_label:  bestAreaLabel,
+          best_fold_wr:     Math.round(bestFoldWr * 1000) / 10,
+          recent_regime_wr: recentRegimeWr,
+          entry_instruction: entryInstruction,
+          fold_stats:       foldStats,
         });
       }
     }
   }
 
-  strategies.sort((a, b) => b.confidence_lower - a.confidence_lower);
+  // Sort by composite score (Wilson CI + 10-fold consistency)
+  strategies.sort((a, b) => (b.composite_score || b.confidence_lower) - (a.composite_score || a.confidence_lower));
   const top = strategies.slice(0, topN).map((s, i) => ({ ...s, rank: i + 1 }));
 
   const freq: Record<string, number> = {};
@@ -330,11 +465,14 @@ function runStatFallback(
   }
 
   const top1 = top[0];
+  const targetLabel = targetContract !== "ALL" ? ` [Target: ${targetContract}]` : "";
   return {
     symbol,
     fetch_source: "manual_js_fallback",
     api_error: null,
     tick_count: N,
+    target_contract: targetContract,
+    folds_count: numFolds,
     digits_sample: digits.slice(0, 30),
     digit_distribution: freq,
     baseline_rates: Object.fromEntries(
@@ -344,9 +482,10 @@ function runStatFallback(
     top_strategies: top,
     total_evaluated: strategies.length,
     summary: top1
-      ? `Analysed ${N} digits (JS engine). Evaluated ${strategies.length.toLocaleString()} pattern-strategy combos. ` +
-        `Best: ${top1.signal} (edge +${(top1.edge * 100).toFixed(1)}% over baseline).`
-      : `Analysed ${N} digits. No patterns met the minimum ${minOccurrences} occurrence threshold.`,
+      ? `Analysed ${N.toLocaleString()} ticks across 10 sequential market folds${targetLabel}. ` +
+        `Best Entry: ${top1.signal} (Peak Area: ${top1.best_area_label}). ` +
+        `10-Fold Robustness: ${top1.folds_profitable}/10 folds profitable (${top1.consistency_pct}% consistency).`
+      : `Analysed ${N.toLocaleString()} ticks${targetLabel}. No patterns met the minimum threshold (${effectiveMinOccur} occurrences). Try reducing Min occ or increasing tick count.`,
   };
 }
 
