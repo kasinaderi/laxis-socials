@@ -81,12 +81,27 @@ async function getAnalyticsSandbox(): Promise<any> {
   return null;
 }
 
+const SYMBOL_LABELS: Record<string, string> = {
+  R_10:     "Volatility 10 Index",
+  R_25:     "Volatility 25 Index",
+  R_50:     "Volatility 50 Index",
+  R_75:     "Volatility 75 Index",
+  R_100:    "Volatility 100 Index",
+  R_10_1S:  "Volatility 10 (1s)",
+  R_25_1S:  "Volatility 25 (1s)",
+  R_50_1S:  "Volatility 50 (1s)",
+  R_75_1S:  "Volatility 75 (1s)",
+  R_100_1S: "Volatility 100 (1s)",
+};
+
 // ── POST /api/deriv/analyze ────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const {
       symbol         = "R_10",
+      marketGroup,
+      multiMarketData,
       tickCount      = 5000,
       minOccurrences = 30,
       maxWindow      = 7,
@@ -98,7 +113,102 @@ export async function POST(req: NextRequest) {
     const now        = new Date().toISOString();
     const analysisId = `da_${Date.now()}`;
 
-    // ── MODE A: No E2B — run JS fallback synchronously ────────────────────────
+    // ── MULTI-MARKET SCAN (e.g. ALL_1S, ALL_STD, ALL_VOL) ─────────────────────
+    if (multiMarketData && Object.keys(multiMarketData).length > 0) {
+      const marketEntries = Object.entries(multiMarketData) as [string, number[]][];
+      const marketScorecards: any[] = [];
+      const allStrategies: any[] = [];
+      let totalTicks = 0;
+
+      for (const [mktSymbol, mktDigits] of marketEntries) {
+        if (!mktDigits || mktDigits.length < 20) continue;
+        totalTicks += mktDigits.length;
+        const mktData = runStatFallback(mktDigits, maxWindow, minOccurrences, topN, mktSymbol, targetContract);
+        const enriched = await updatePatternLearningMemory(mktSymbol, mktData.top_strategies || []);
+
+        const taggedStrategies = enriched.map(s => ({ ...s, symbol: mktSymbol }));
+        allStrategies.push(...taggedStrategies);
+
+        const best = taggedStrategies[0];
+        const robustCount = taggedStrategies.filter(s => (s.folds_profitable ?? 0) >= 8).length;
+        marketScorecards.push({
+          symbol: mktSymbol,
+          label: SYMBOL_LABELS[mktSymbol] || mktSymbol,
+          tick_count: mktDigits.length,
+          top_win_rate: best?.win_rate ?? 0,
+          top_edge: best?.edge ?? 0,
+          best_pattern: best?.pattern ?? [],
+          best_trade_type: best?.trade_type ?? "",
+          best_signal: best?.signal ?? "No pattern found",
+          best_folds_profitable: best?.folds_profitable ?? 0,
+          best_area_label: best?.best_area_label ?? "N/A",
+          robust_count: robustCount,
+          stability_grade: best?.stability_grade ?? "LEARNING",
+          composite_score: best?.composite_score ?? 0,
+        });
+      }
+
+      marketScorecards.sort((a, b) => (b.composite_score || b.top_win_rate) - (a.composite_score || a.top_win_rate));
+      marketScorecards.forEach((m, idx) => {
+        m.rank = idx + 1;
+        m.is_recommended = idx === 0;
+      });
+
+      allStrategies.sort((a, b) => (b.composite_score || b.confidence_lower) - (a.composite_score || a.confidence_lower));
+      const topMerged = allStrategies.slice(0, topN).map((s, i) => ({ ...s, rank: i + 1 }));
+
+      const recommendedMarket = marketScorecards[0];
+      const groupLabel = marketGroup || symbol;
+      const targetLabel = targetContract !== "ALL" ? ` [Target: ${targetContract}]` : "";
+
+      const summaryText = recommendedMarket
+        ? `🏆 RECOMMENDED MARKET TO TRADE: ${recommendedMarket.label} (Rank #1 of ${marketScorecards.length} markets scanned). ` +
+          `Top Strategy: ${recommendedMarket.best_signal} with ${(recommendedMarket.top_win_rate * 100).toFixed(1)}% win rate across ${recommendedMarket.best_folds_profitable}/10 folds passed. ` +
+          `Total ${totalTicks.toLocaleString()} ticks analyzed across ${marketScorecards.length * 10} multi-backtest epochs${targetLabel}.`
+        : `Scanned ${marketScorecards.length} markets. No patterns met the threshold.`;
+
+      const data = {
+        symbol: groupLabel,
+        is_multi_market: true,
+        market_group: groupLabel,
+        tick_count: totalTicks,
+        target_contract: targetContract,
+        folds_count: 10,
+        market_scorecards: marketScorecards,
+        recommended_market: recommendedMarket,
+        top_strategies: topMerged,
+        total_evaluated: allStrategies.length,
+        summary: summaryText,
+      };
+
+      await db.insert(derivAnalyses).values({
+        id:                  analysisId,
+        status:              "done",
+        symbol:              groupLabel,
+        inputTicks:          `Multi-market scan (${marketEntries.length} markets, ${totalTicks} ticks)`,
+        tickCount:           totalTicks,
+        windowSize:          maxWindow,
+        similarityThreshold: String(minOccurrences),
+        maxPatterns:         topN,
+        summary:             summaryText,
+        rawOutput:           JSON.stringify(data),
+        error:               null,
+        startedAt:           now,
+        completedAt:         new Date().toISOString(),
+        createdAt:           now,
+      }).run();
+
+      await persistStrategies(analysisId, topMerged);
+
+      return NextResponse.json({
+        analysisId,
+        status: "done",
+        summary: summaryText,
+        rawOutput: JSON.stringify(data),
+      });
+    }
+
+    // ── MODE A: Single Market JS Engine ───────────────────────────────────────
     const sb = await getAnalyticsSandbox().catch(() => null);
 
     if (!sb) {
@@ -107,7 +217,7 @@ export async function POST(req: NextRequest) {
 
       // Continuous Learning Memory: Update cumulative historical pattern performance
       const enrichedStrategies = await updatePatternLearningMemory(symbol, data.top_strategies || []);
-      data.top_strategies = enrichedStrategies;
+      data.top_strategies = enrichedStrategies.map(s => ({ ...s, symbol }));
 
       await db.insert(derivAnalyses).values({
         id:                  analysisId,

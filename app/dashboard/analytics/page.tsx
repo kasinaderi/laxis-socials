@@ -14,6 +14,7 @@ import {
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Strategy {
+  symbol?: string;
   pattern: number[];
   window: number;
   trade_type: string;
@@ -66,17 +67,54 @@ type Tab = "strategies" | "entrypoints" | "backtest" | "digits" | "manual" | "ag
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
+const MARKET_GROUPS: Record<string, { label: string; symbols: string[]; description: string }> = {
+  ALL_1S: {
+    label: "⚡ All 1-Second Markets (10, 25, 50, 75, 100 1s)",
+    symbols: ["R_10_1S", "R_25_1S", "R_50_1S", "R_75_1S", "R_100_1S"],
+    description: "Parallel multi-market scan across all 5 1-second markets to detect the #1 market to trade",
+  },
+  ALL_STD: {
+    label: "🌐 All Standard Markets (10, 25, 50, 75, 100)",
+    symbols: ["R_10", "R_25", "R_50", "R_75", "R_100"],
+    description: "Parallel multi-market scan across all 5 standard volatility indices",
+  },
+  ALL_VOL: {
+    label: "🔥 All 10 Volatilities (Full Cluster)",
+    symbols: ["R_10", "R_25", "R_50", "R_75", "R_100", "R_10_1S", "R_25_1S", "R_50_1S", "R_75_1S", "R_100_1S"],
+    description: "Exhaustive multi-market scan across all 10 Deriv synthetic indices",
+  },
+};
+
+const SYMBOL_LABELS: Record<string, string> = {
+  R_10:     "Volatility 10 Index",
+  R_25:     "Volatility 25 Index",
+  R_50:     "Volatility 50 Index",
+  R_75:     "Volatility 75 Index",
+  R_100:    "Volatility 100 Index",
+  R_10_1S:  "Volatility 10 (1s)",
+  R_25_1S:  "Volatility 25 (1s)",
+  R_50_1S:  "Volatility 50 (1s)",
+  R_75_1S:  "Volatility 75 (1s)",
+  R_100_1S: "Volatility 100 (1s)",
+  ALL_1S:   "⚡ All 1-Second Markets",
+  ALL_STD:  "🌐 All Standard Markets",
+  ALL_VOL:  "🔥 All 10 Volatilities",
+};
+
 const SYMBOLS = [
-  { value: "R_10",    label: "Volatility 10 Index" },
-  { value: "R_25",    label: "Volatility 25 Index" },
-  { value: "R_50",    label: "Volatility 50 Index" },
-  { value: "R_75",    label: "Volatility 75 Index" },
-  { value: "R_100",   label: "Volatility 100 Index" },
+  { value: "ALL_1S",  label: "⚡ All 1-Second Markets (10, 25, 50, 75, 100 1s)" },
+  { value: "ALL_STD", label: "🌐 All Standard Markets (10, 25, 50, 75, 100)" },
+  { value: "ALL_VOL", label: "🔥 All 10 Volatilities (Full Cluster)" },
   { value: "R_10_1S", label: "Volatility 10 (1s)" },
   { value: "R_25_1S", label: "Volatility 25 (1s)" },
   { value: "R_50_1S", label: "Volatility 50 (1s)" },
   { value: "R_75_1S", label: "Volatility 75 (1s)" },
   { value: "R_100_1S",label: "Volatility 100 (1s)" },
+  { value: "R_10",    label: "Volatility 10 Index" },
+  { value: "R_25",    label: "Volatility 25 Index" },
+  { value: "R_50",    label: "Volatility 50 Index" },
+  { value: "R_75",    label: "Volatility 75 Index" },
+  { value: "R_100",   label: "Volatility 100 Index" },
 ];
 
 const TRADE_TYPE_COLORS: Record<string, string> = {
@@ -141,6 +179,11 @@ function StrategyCard({ s, rank }: { s: Strategy; rank: number }) {
         <div className="flex-1 px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 flex-wrap">
+              {s.symbol && (
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                  📍 {SYMBOL_LABELS[s.symbol] || s.symbol}
+                </span>
+              )}
               <span className={`text-xs font-bold px-2 py-1 rounded-lg ${ttColor(s.trade_type)}`}>
                 {ttLabel(s.trade_type)}
               </span>
@@ -412,27 +455,62 @@ export default function DerivPatternLabPage() {
       body.fetchSource = "manual_paste";
     } else {
       // Server-side tick fetch — avoids browser WebSocket restrictions on Vercel
-      try {
-        setProgress(`🔗 Fetching ${tickCount.toLocaleString()} ticks from Deriv…`);
-        const tickRes = await fetch(`/api/deriv/ticks?symbol=${encodeURIComponent(symbol)}&count=${tickCount}`);
-        const tickData = await tickRes.json();
-
-        if (!tickRes.ok || !tickData.digits || tickData.digits.length < 20) {
+      if (MARKET_GROUPS[symbol]) {
+        const grp = MARKET_GROUPS[symbol];
+        setProgress(`🔗 Fetching ${tickCount.toLocaleString()} ticks across all ${grp.symbols.length} markets in parallel…`);
+        try {
+          const fetchPromises = grp.symbols.map(async (s) => {
+            const res = await fetch(`/api/deriv/ticks?symbol=${encodeURIComponent(s)}&count=${tickCount}`);
+            const d = await res.json();
+            return { symbol: s, data: d };
+          });
+          const results = await Promise.all(fetchPromises);
+          const multiMarketData: Record<string, number[]> = {};
+          let fetchedCount = 0;
+          for (const r of results) {
+            if (r.data?.digits && r.data.digits.length >= 20) {
+              multiMarketData[r.symbol] = r.data.digits;
+              fetchedCount += r.data.digits.length;
+            }
+          }
+          if (Object.keys(multiMarketData).length === 0) {
+            setRunning(false);
+            setProgress("");
+            alert("❌ Could not fetch ticks for the selected markets.");
+            return;
+          }
+          setProgress(`📊 Analyzing ${Object.keys(multiMarketData).length} markets (${fetchedCount.toLocaleString()} total ticks) across 10-fold multi-backtests…`);
+          body.marketGroup = symbol;
+          body.multiMarketData = multiMarketData;
+        } catch (fetchErr: any) {
           setRunning(false);
           setProgress("");
-          alert(`❌ Could not fetch ticks from Deriv: ${tickData.error || "No data returned"}`);
+          alert(`❌ Could not fetch multi-market ticks: ${fetchErr.message}`);
           return;
         }
+      } else {
+        try {
+          setProgress(`🔗 Fetching ${tickCount.toLocaleString()} ticks from Deriv…`);
+          const tickRes = await fetch(`/api/deriv/ticks?symbol=${encodeURIComponent(symbol)}&count=${tickCount}`);
+          const tickData = await tickRes.json();
 
-        const digits: number[] = tickData.digits;
-        setProgress(`📥 Got ${digits.length.toLocaleString()} ticks ✓  Precision: ${tickData.precision}dp · Source: ${tickData.source}  — Analysing…`);
-        body.manualTicks = digits;
-        body.fetchSource = tickData.source || "deriv_live";
-      } catch (fetchErr: any) {
-        setRunning(false);
-        setProgress("");
-        alert(`❌ Could not fetch ticks from Deriv: ${fetchErr.message}`);
-        return;
+          if (!tickRes.ok || !tickData.digits || tickData.digits.length < 20) {
+            setRunning(false);
+            setProgress("");
+            alert(`❌ Could not fetch ticks from Deriv: ${tickData.error || "No data returned"}`);
+            return;
+          }
+
+          const digits: number[] = tickData.digits;
+          setProgress(`📥 Got ${digits.length.toLocaleString()} ticks ✓  Precision: ${tickData.precision}dp · Source: ${tickData.source}  — Analysing…`);
+          body.manualTicks = digits;
+          body.fetchSource = tickData.source || "deriv_live";
+        } catch (fetchErr: any) {
+          setRunning(false);
+          setProgress("");
+          alert(`❌ Could not fetch ticks from Deriv: ${fetchErr.message}`);
+          return;
+        }
       }
     }
 
@@ -444,8 +522,8 @@ export default function DerivPatternLabPage() {
       const d = await r.json();
 
       // Mode A: JS fallback — results returned inline immediately
-      if (d.status === "done" && d.data) {
-        const raw = d.data;
+      if (d.status === "done" && (d.data || d.rawOutput)) {
+        const raw = d.data || JSON.parse(d.rawOutput);
         setRawData(raw);
         setStrategies(raw.top_strategies || []);
         setAnalysis({
@@ -459,6 +537,7 @@ export default function DerivPatternLabPage() {
         // Auto-apply contract focus filter so user immediately sees their chosen type
         setFilterTT(contractFocus);
         setTab("strategies");
+        checkSbStatus();
         fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); });
         return;
       }
@@ -509,10 +588,14 @@ export default function DerivPatternLabPage() {
           `Symbol: ${rawData.symbol} | Ticks analysed: ${rawData.tick_count?.toLocaleString()}`,
           `Target Contract Filter: ${contractFocus}`,
           `Total pattern-strategy combos evaluated: ${rawData.total_evaluated?.toLocaleString()}`,
-          `Digit distribution: ${Object.entries(rawData.digit_distribution || {}).map(([d,f]) => `${d}=${((f as number)*100).toFixed(1)}%`).join(", ")}`,
+          rawData.is_multi_market && rawData.market_scorecards
+            ? `MULTI-MARKET SCAN RESULTS (${rawData.market_scorecards.length} markets):\n${
+                rawData.market_scorecards.map((m: any) => `  Rank #${m.rank}: ${m.label} | Best WR: ${(m.top_win_rate*100).toFixed(1)}% | Edge: +${(m.top_edge*100).toFixed(2)}% | ${m.best_folds_profitable}/10 folds | Grade: ${m.stability_grade} | Signal: ${m.best_signal}`).join("\n")
+              }\nRECOMMENDED TO TRADE: ${rawData.recommended_market?.label}`
+            : `Digit distribution: ${Object.entries(rawData.digit_distribution || {}).map(([d,f]) => `${d}=${((f as number)*100).toFixed(1)}%`).join(", ")}`,
           `Even baseline: ${((rawData.baseline_rates?.EVEN || 0)*100).toFixed(1)}% | Odd baseline: ${((rawData.baseline_rates?.ODD || 0)*100).toFixed(1)}%`,
           `Top strategies with 10-Fold Cross-Validation:\n${topStrats.map((s: Strategy, i: number) =>
-            `  ${i+1}. [${s.pattern.join("→")}] → ${s.trade_type} | WinRate: ${(s.win_rate*100).toFixed(1)}% | Edge: +${(s.edge*100).toFixed(2)}% | Trades: ${s.total_trades} | 10-Fold Stability: ${s.folds_profitable ?? 10}/10 folds passed (${s.consistency_pct ?? 100}%) | Peak Market Area: ${s.best_area_label || "Consistent"} | Recent Regime (Fold 10): ${s.recent_regime_wr !== null && s.recent_regime_wr !== undefined ? `${s.recent_regime_wr}%` : "Stable"}`
+            `  ${i+1}. [${s.symbol ? `@${s.symbol} ` : ""}${s.pattern.join("→")}] → ${s.trade_type} | WinRate: ${(s.win_rate*100).toFixed(1)}% | Edge: +${(s.edge*100).toFixed(2)}% | Trades: ${s.total_trades} | 10-Fold: ${s.folds_profitable ?? 10}/10 folds | Memory: ${s.stability_grade || "LEARNING"} (${s.sessions_observed ?? 1} sessions)`
           ).join("\n")}`,
         ].join("\n")
       : "No analysis has been run yet. Ask the user to click 'Run Analysis' first.";
@@ -541,7 +624,7 @@ export default function DerivPatternLabPage() {
     : null;
 
   const tabs: { id: Tab; label: string; icon: any; badge?: number }[] = [
-    { id: "strategies",  label: "Best Strategies",            icon: Trophy, badge: strategies.length },
+    { id: "strategies",  label: rawData?.is_multi_market ? "🏆 Market Rankings" : "Best Strategies", icon: Trophy, badge: strategies.length },
     { id: "entrypoints", label: "🎯 Entry Blueprint (10-Fold)", icon: Target, badge: strategies.filter(s => (s.folds_profitable ?? 0) >= 7).length },
     { id: "backtest",    label: "Full Backtest",              icon: BarChart2 },
     { id: "digits",      label: "Digit Stats",                icon: Hash },
@@ -566,9 +649,27 @@ export default function DerivPatternLabPage() {
               <select
                 value={symbol}
                 onChange={e => setSymbol(e.target.value)}
-                className="text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                className="text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer font-medium"
               >
-                {SYMBOLS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                <optgroup label="⚡ Multi-Market Scanners (Compare & Trade Best)">
+                  <option value="ALL_1S">⚡ All 1-Second Markets (10, 25, 50, 75, 100 1s)</option>
+                  <option value="ALL_STD">🌐 All Standard Markets (10, 25, 50, 75, 100)</option>
+                  <option value="ALL_VOL">🔥 All 10 Volatilities (Full Cluster)</option>
+                </optgroup>
+                <optgroup label="⏱️ Individual 1-Second Markets">
+                  <option value="R_10_1S">Volatility 10 (1s)</option>
+                  <option value="R_25_1S">Volatility 25 (1s)</option>
+                  <option value="R_50_1S">Volatility 50 (1s)</option>
+                  <option value="R_75_1S">Volatility 75 (1s)</option>
+                  <option value="R_100_1S">Volatility 100 (1s)</option>
+                </optgroup>
+                <optgroup label="📊 Individual Standard Markets">
+                  <option value="R_10">Volatility 10 Index</option>
+                  <option value="R_25">Volatility 25 Index</option>
+                  <option value="R_50">Volatility 50 Index</option>
+                  <option value="R_75">Volatility 75 Index</option>
+                  <option value="R_100">Volatility 100 Index</option>
+                </optgroup>
               </select>
             </div>
 
@@ -679,10 +780,19 @@ export default function DerivPatternLabPage() {
             <button
               onClick={() => runAnalysis(false)}
               disabled={running}
-              className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-blue-500/20 cursor-pointer ml-auto"
+              className={`flex items-center gap-2 px-5 py-2 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl transition-all shadow-md cursor-pointer ml-auto ${
+                MARKET_GROUPS[symbol]
+                  ? "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20"
+                  : "bg-blue-600 hover:bg-blue-700 shadow-blue-500/20"
+              }`}
             >
               {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              {running ? "Analysing…" : "Run Analysis"}
+              {running
+                ? "Scanning…"
+                : MARKET_GROUPS[symbol]
+                  ? `⚡ Scan ${MARKET_GROUPS[symbol].symbols.length} Markets`
+                  : "Run Analysis"
+              }
             </button>
 
             {/* Sandbox status pill + Pause button */}
@@ -870,6 +980,78 @@ export default function DerivPatternLabPage() {
                 </div>
               )}
 
+              {/* ── MULTI-MARKET SCORECARD (only shown for group scans) ── */}
+              {rawData?.is_multi_market && rawData?.market_scorecards && (
+                <div className="space-y-4">
+                  {/* Recommended Market Banner */}
+                  {rawData.recommended_market && (
+                    <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-slate-900 rounded-3xl p-5 text-white border border-emerald-500/30 shadow-xl">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Trophy className="w-5 h-5 text-amber-400" />
+                        <span className="text-xs font-black uppercase tracking-wider text-emerald-300">🏆 #1 Recommended Market to Trade Right Now</span>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                          <div className="text-2xl font-black text-white">{rawData.recommended_market.label}</div>
+                          <div className="text-sm text-emerald-300 mt-0.5">{rawData.recommended_market.best_signal}</div>
+                          <div className="text-xs text-emerald-400 mt-1">
+                            {rawData.recommended_market.best_folds_profitable}/10 folds passed · Peak: {rawData.recommended_market.best_area_label}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-4xl font-black text-emerald-400">{(rawData.recommended_market.top_win_rate * 100).toFixed(1)}%</div>
+                          <div className="text-xs text-emerald-300 font-bold">Win Rate</div>
+                          <div className="text-xs text-amber-300 mt-1">+{(rawData.recommended_market.top_edge * 100).toFixed(2)}% edge</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Market Rankings Table */}
+                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
+                      <BarChart2 className="w-4 h-4 text-blue-500" />
+                      <span className="text-sm font-black text-slate-700 dark:text-white">All Markets Ranked by Best Pattern Strength</span>
+                      <span className="ml-auto text-xs text-slate-400">{rawData.market_scorecards.length} markets scanned</span>
+                    </div>
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {rawData.market_scorecards.map((mkt: any, idx: number) => (
+                        <div key={mkt.symbol} className={`flex flex-wrap items-center gap-3 px-4 py-3 ${mkt.is_recommended ? "bg-emerald-50/60 dark:bg-emerald-950/20" : ""}`}>
+                          <span className={`w-7 h-7 rounded-lg flex items-center justify-center font-black text-sm ${mkt.rank === 1 ? "bg-amber-400 text-white" : mkt.rank === 2 ? "bg-slate-300 text-slate-800" : mkt.rank === 3 ? "bg-amber-600 text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-500"}`}>
+                            {mkt.rank}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                              {mkt.label}
+                              {mkt.is_recommended && <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 px-1.5 py-0.5 rounded-full font-black">✅ TRADE THIS</span>}
+                            </div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">{mkt.best_signal}</div>
+                          </div>
+                          <div className="text-right flex items-center gap-4">
+                            <div>
+                              <div className={`text-lg font-black tabular-nums ${mkt.top_win_rate >= 0.95 ? "text-emerald-600 dark:text-emerald-400" : mkt.top_win_rate >= 0.90 ? "text-amber-600 dark:text-amber-400" : "text-slate-600 dark:text-slate-300"}`}>
+                                {(mkt.top_win_rate * 100).toFixed(1)}%
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-semibold">{mkt.best_folds_profitable}/10 folds</div>
+                            </div>
+                            <div className={`text-xs font-bold px-2 py-1 rounded-lg ${
+                              mkt.stability_grade === "ELITE" ? "bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300" :
+                              mkt.stability_grade === "ROBUST" ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300" :
+                              "bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300"
+                            }`}>
+                              {mkt.stability_grade === "ELITE" ? "💎" : mkt.stability_grade === "ROBUST" ? "🧠" : "🌱"} {mkt.stability_grade}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 text-center px-4">
+                    ↓ All {strategies.length} best patterns from all markets combined and ranked below
+                  </p>
+                </div>
+              )}
+
               {/* Cards */}
               {displayStrategies.length === 0 && !running ? (
                 <div className="text-center py-20 text-slate-400">
@@ -885,7 +1067,7 @@ export default function DerivPatternLabPage() {
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   {displayStrategies.map((s, i) => (
-                    <StrategyCard key={`${s.pattern.join(",")}_${s.trade_type}`} s={s} rank={i + 1} />
+                    <StrategyCard key={`${s.symbol || ""}_${s.pattern.join(",")}_${s.trade_type}`} s={s} rank={i + 1} />
                   ))}
                 </div>
               )}
