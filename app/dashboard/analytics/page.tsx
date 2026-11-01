@@ -362,6 +362,8 @@ export default function DerivPatternLabPage() {
   const [customResults, setCustomResults]     = useState<any[]>([]);
   const [customSortBy, setCustomSortBy]       = useState<"win_rate"|"occurrences"|"least_consecutive_losses">("win_rate");
   const [selectedCustomMarket, setSelectedCustomMarket] = useState<string | null>(null);
+  // Controls bar collapse — auto-hides after analysis to maximise the results view
+  const [controlsExpanded, setControlsExpanded] = useState(true);
 
   const addCustomDigit = (d = 0) => {
     if (customDigits.length < 5) setCustomDigits(prev => [...prev, d]);
@@ -462,6 +464,7 @@ export default function DerivPatternLabPage() {
             setRunning(false);
             setProgress("");
             clearInterval(pollRef.current!);
+            setControlsExpanded(false); // auto-collapse controls after scan completes
             checkSbStatus();  // refresh sandbox status pill
             fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); });
           } else if (d.analysis.status === "error") {
@@ -593,6 +596,7 @@ export default function DerivPatternLabPage() {
         });
         setRunning(false);
         setProgress("");
+        setControlsExpanded(false); // auto-collapse controls after scan to maximise results view
         checkSbStatus();
         fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); });
         return;
@@ -725,7 +729,43 @@ export default function DerivPatternLabPage() {
         <Header title="Deriv Pattern Lab" subtitle="Real tick data · All trade types · Walk-forward backtested · Ranked entry signals" />
 
         {/* ── Controls Bar ───────────────────────────────────────────────── */}
-        <div className="flex-shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 sm:px-6 py-3">
+        <div className="flex-shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
+
+          {/* ── Collapsed Strip — always visible, click to expand ── */}
+          {!controlsExpanded && (
+            <div className="flex items-center gap-3 px-4 sm:px-6 py-2.5 bg-slate-50/80 dark:bg-slate-900/80">
+              {/* Summary pill */}
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 truncate leading-relaxed">
+                  {analysis?.summary || "No analysis yet"}
+                </p>
+              </div>
+
+              {/* Status pill */}
+              <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border flex-shrink-0 ${
+                sbActive
+                  ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200"
+                  : "bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-300 border-blue-200"
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${sbActive ? "bg-emerald-500 animate-pulse" : "bg-blue-400"}`} />
+                {sbActive ? "VM Live" : "JS Engine ✓"}
+              </div>
+
+              {/* Expand toggle */}
+              <button
+                onClick={() => setControlsExpanded(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl border border-purple-300 dark:border-purple-700 bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 shadow-sm transition-all cursor-pointer flex-shrink-0"
+              >
+                <ChevronDown className="w-3.5 h-3.5" />
+                <span>Show Controls & Settings</span>
+              </button>
+            </div>
+          )}
+
+          {/* ── Full Controls (collapsible) ── */}
+          {controlsExpanded && (
+            <div className="px-4 sm:px-6 py-3">
           {/* Analysis Mode Switcher */}
           <div className="flex flex-wrap items-center gap-3 mb-3 pb-2.5 border-b border-slate-100 dark:border-slate-800">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Mode:</span>
@@ -765,6 +805,18 @@ export default function DerivPatternLabPage() {
               <span className="text-xs text-slate-400">
                 Automatically analyzes 2–7 digit windows across all trade types & 10-fold cross-validates
               </span>
+            )}
+
+            {analysis && (
+              <button
+                type="button"
+                onClick={() => setControlsExpanded(false)}
+                className="ml-auto flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all cursor-pointer"
+                title="Hide controls panel to view full results"
+              >
+                <ChevronDown className="w-3.5 h-3.5 rotate-180" />
+                Hide Controls
+              </button>
             )}
           </div>
 
@@ -1060,6 +1112,22 @@ export default function DerivPatternLabPage() {
               <p className="text-xs text-rose-600 dark:text-rose-400">{analysis.error}</p>
             </div>
           )}
+
+          {/* Collapse controls button */}
+          {analysis?.status === "done" && !running && (
+            <div className="mt-2 flex justify-end">
+              <button
+                onClick={() => setControlsExpanded(false)}
+                className="flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all cursor-pointer"
+                title="Collapse settings to maximise the results view"
+              >
+                <ChevronDown className="w-3 h-3 rotate-180" />
+                Collapse Settings
+              </button>
+            </div>
+          )}
+            </div>
+          )}
         </div>
 
         {/* ── Tab Bar ────────────────────────────────────────────────────── */}
@@ -1246,110 +1314,7 @@ export default function DerivPatternLabPage() {
                     </div>
                   </div>
 
-                  {/* Leaderboard Cards */}
-                  <div className="space-y-3">
-                    {sortedCustomResults.map((mkt: any, idx: number) => {
-                      const isSelected = (selectedMarketData?.symbol || "") === mkt.symbol;
-                      const wr = mkt.win_rate;
-                      const isRecommended = idx === 0 && customSortBy === "win_rate";
-
-                      return (
-                        <div
-                          key={mkt.symbol}
-                          onClick={() => setSelectedCustomMarket(mkt.symbol)}
-                          className={`bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer overflow-hidden p-4 sm:p-5 ${
-                            isSelected
-                              ? "border-purple-500 ring-2 ring-purple-500/20 shadow-md"
-                              : isRecommended
-                                ? "border-emerald-300 dark:border-emerald-800/80 bg-emerald-50/20 dark:bg-emerald-950/10"
-                                : "border-slate-200/80 dark:border-slate-800 hover:border-slate-300"
-                          }`}
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-4">
-                            {/* Rank & Market name */}
-                            <div className="flex items-center gap-3">
-                              <span className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm ${
-                                idx === 0
-                                  ? "bg-amber-400 text-white shadow"
-                                  : idx === 1
-                                    ? "bg-slate-300 text-slate-800"
-                                    : idx === 2
-                                      ? "bg-amber-600 text-white"
-                                      : "bg-slate-100 dark:bg-slate-800 text-slate-500"
-                              }`}>
-                                #{idx + 1}
-                              </span>
-
-                              <div>
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-base font-black text-slate-800 dark:text-white">
-                                    {mkt.label}
-                                  </span>
-                                  {isRecommended && (
-                                    <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 px-2 py-0.5 rounded-full font-black">
-                                      🏆 TOP WINNING MARKET
-                                    </span>
-                                  )}
-                                  {isSelected && (
-                                    <span className="text-[10px] bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-300 px-2 py-0.5 rounded-full font-black">
-                                      SELECTED FOR 10-FOLD VIEW
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-2 flex-wrap">
-                                  <span>Occurred <strong>{mkt.total_occurrences}</strong> times in {tickCount.toLocaleString()} ticks</span>
-                                  <span>·</span>
-                                  <span>Peak Zone: <span className="font-semibold text-slate-700 dark:text-slate-300">{mkt.best_area_label}</span></span>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Stats */}
-                            <div className="flex items-center gap-6 text-right">
-                              {/* Occurrences & Wins */}
-                              <div>
-                                <div className="text-base font-black text-slate-800 dark:text-white">
-                                  {mkt.wins} / {mkt.total_occurrences} won
-                                </div>
-                                <div className="text-[10px] text-slate-400 font-semibold uppercase">
-                                  Edge: {mkt.edge > 0 ? "+" : ""}{(mkt.edge * 100).toFixed(1)}%
-                                </div>
-                              </div>
-
-                              {/* Martingale Streak Badge */}
-                              <div>
-                                <div className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-black ${
-                                  mkt.max_consecutive_losses <= 1
-                                    ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300"
-                                    : mkt.max_consecutive_losses === 2
-                                      ? "bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300"
-                                      : "bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-300"
-                                }`}>
-                                  <span>{mkt.max_consecutive_losses <= 1 ? "🛡️" : mkt.max_consecutive_losses === 2 ? "⚡" : "⚠️"}</span>
-                                  <span>Max {mkt.max_consecutive_losses} L-Streak</span>
-                                </div>
-                                <div className="text-[9px] text-slate-400 mt-0.5 font-semibold">
-                                  {mkt.folds_profitable}/10 Folds ({mkt.consistency_pct}%)
-                                </div>
-                              </div>
-
-                              {/* Win Rate */}
-                              <div>
-                                <div className={`text-2xl font-black tabular-nums ${winColor(wr)}`}>
-                                  {(wr * 100).toFixed(1)}%
-                                </div>
-                                <div className="text-[10px] text-slate-400 font-bold uppercase">
-                                  Win Rate
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Detailed 10-Fold Section for Selected Market */}
+                  {/* ── Detailed 10-Fold Section for Selected Market (shown ABOVE leaderboard) ── */}
                   {selectedMarketData && (
                     <div className="bg-white dark:bg-slate-900 rounded-3xl border border-purple-200 dark:border-purple-800/80 p-6 space-y-6 shadow-sm">
                       <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
@@ -1421,6 +1386,115 @@ export default function DerivPatternLabPage() {
                       </div>
                     </div>
                   )}
+
+                  {/* Leaderboard Cards */}
+                  <div className="space-y-3">
+                    {sortedCustomResults.map((mkt: any, idx: number) => {
+                      const isSelected = (selectedMarketData?.symbol || "") === mkt.symbol;
+                      const wr = mkt.win_rate;
+                      const isRecommended = idx === 0 && customSortBy === "win_rate";
+
+                      return (
+                        <div
+                          key={mkt.symbol}
+                          onClick={() => setSelectedCustomMarket(mkt.symbol)}
+                          className={`bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer overflow-hidden p-4 sm:p-5 ${
+                            isSelected
+                              ? "border-purple-500 ring-2 ring-purple-500/20 shadow-md"
+                              : isRecommended
+                                ? "border-emerald-300 dark:border-emerald-800/80 bg-emerald-50/20 dark:bg-emerald-950/10"
+                                : "border-slate-200/80 dark:border-slate-800 hover:border-slate-300"
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-4">
+                            {/* Rank & Market name */}
+                            <div className="flex items-center gap-3">
+                              <span className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm ${
+                                idx === 0
+                                  ? "bg-amber-400 text-white shadow"
+                                  : idx === 1
+                                    ? "bg-slate-300 text-slate-800"
+                                    : idx === 2
+                                      ? "bg-amber-600 text-white"
+                                      : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                              }`}>
+                                #{idx + 1}
+                              </span>
+
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-base font-black text-slate-800 dark:text-white">
+                                    {mkt.label}
+                                  </span>
+                                  {isRecommended && (
+                                    <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 px-2 py-0.5 rounded-full font-black">
+                                      🏆 TOP WINNING MARKET
+                                    </span>
+                                  )}
+                                  {isSelected ? (
+                                    <span className="text-[10px] bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-300 px-2 py-0.5 rounded-full font-black">
+                                      ✓ VIEWING 10-FOLD BREAKDOWN
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-purple-600 dark:hover:text-purple-300 border border-slate-200 dark:border-slate-700 px-2 py-0.5 rounded-full font-semibold transition-colors">
+                                      👁️ Click to inspect 10-fold
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                                  <span>Occurred <strong>{mkt.total_occurrences}</strong> times in {tickCount.toLocaleString()} ticks</span>
+                                  <span>·</span>
+                                  <span>Peak Zone: <span className="font-semibold text-slate-700 dark:text-slate-300">{mkt.best_area_label}</span></span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Stats */}
+                            <div className="flex items-center gap-6 text-right">
+                              {/* Occurrences & Wins */}
+                              <div>
+                                <div className="text-base font-black text-slate-800 dark:text-white">
+                                  {mkt.wins} / {mkt.total_occurrences} won
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-semibold uppercase">
+                                  Edge: {mkt.edge > 0 ? "+" : ""}{(mkt.edge * 100).toFixed(1)}%
+                                </div>
+                              </div>
+
+                              {/* Martingale Streak Badge */}
+                              <div>
+                                <div className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-black ${
+                                  mkt.max_consecutive_losses <= 1
+                                    ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300"
+                                    : mkt.max_consecutive_losses === 2
+                                      ? "bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300"
+                                      : "bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-300"
+                                }`}>
+                                  <span>{mkt.max_consecutive_losses <= 1 ? "🛡️" : mkt.max_consecutive_losses === 2 ? "⚡" : "⚠️"}</span>
+                                  <span>Max {mkt.max_consecutive_losses} L-Streak</span>
+                                </div>
+                                <div className="text-[9px] text-slate-400 mt-0.5 font-semibold">
+                                  {mkt.folds_profitable}/10 Folds ({mkt.consistency_pct}%)
+                                </div>
+                              </div>
+
+                              {/* Win Rate */}
+                              <div>
+                                <div className={`text-2xl font-black tabular-nums ${winColor(wr)}`}>
+                                  {(wr * 100).toFixed(1)}%
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-bold uppercase">
+                                  Win Rate
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+
                 </div>
               )}
             </div>
