@@ -67,7 +67,7 @@ interface Analysis {
   completedAt: string | null;
 }
 
-type Tab = "strategies" | "entrypoints" | "backtest" | "digits" | "manual" | "agent";
+type Tab = "custom_lookup" | "strategies" | "entrypoints" | "backtest" | "digits" | "manual" | "agent";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -356,6 +356,26 @@ export default function DerivPatternLabPage() {
   const [chatLoading, setChatLoading]   = useState(false);
   const [manualTicks, setManualTicks]   = useState("");
   const [usedJsEngine, setUsedJsEngine] = useState(false); // true when analysis ran via JS fallback (no VM)
+  // Custom Pattern Lookup state (1 to 5 consecutive digits scan)
+  const [useCustomDigits, setUseCustomDigits] = useState(false);
+  const [customDigits, setCustomDigits]       = useState<number[]>([4, 5]);
+  const [customResults, setCustomResults]     = useState<any[]>([]);
+  const [customSortBy, setCustomSortBy]       = useState<"win_rate"|"occurrences"|"least_consecutive_losses">("win_rate");
+  const [selectedCustomMarket, setSelectedCustomMarket] = useState<string | null>(null);
+
+  const addCustomDigit = (d = 0) => {
+    if (customDigits.length < 5) setCustomDigits(prev => [...prev, d]);
+  };
+  const removeCustomDigit = (idx: number) => {
+    if (customDigits.length > 1) setCustomDigits(prev => prev.filter((_, i) => i !== idx));
+  };
+  const updateCustomDigit = (idx: number, val: number) => {
+    setCustomDigits(prev => {
+      const copy = [...prev];
+      copy[idx] = Math.max(0, Math.min(9, isNaN(val) ? 0 : val));
+      return copy;
+    });
+  };
   // Sandbox status
   const [sbActive, setSbActive]         = useState(false);
   const [sbPausing, setSbPausing]       = useState(false);
@@ -395,11 +415,16 @@ export default function DerivPatternLabPage() {
               try {
                 const raw = JSON.parse(d.analysis.rawOutput);
                 setRawData(raw);
-                // Prefer rich raw.top_strategies (with cross-val & memory), fall back to DB rows
-                if (raw.top_strategies && raw.top_strategies.length > 0) {
+                if (raw.is_custom_pattern_scan) {
+                  setCustomResults(raw.custom_pattern_results || []);
+                  if (raw.custom_pattern_results && raw.custom_pattern_results.length > 0) {
+                    setSelectedCustomMarket(raw.custom_pattern_results[0].symbol);
+                  }
+                  setTab("custom_lookup");
+                } else if (raw.top_strategies && raw.top_strategies.length > 0) {
                   setStrategies(raw.top_strategies);
+                  setTab("strategies");
                 } else if (d.strategies && d.strategies.length > 0) {
-                  // Map DB rows back to Strategy shape
                   setStrategies(d.strategies.map((s: any) => ({
                     pattern:          JSON.parse(s.pattern),
                     window:           s.windowSize,
@@ -414,6 +439,7 @@ export default function DerivPatternLabPage() {
                     signal:           s.signal,
                     rank:             s.rank,
                   })));
+                  setTab("strategies");
                 }
               } catch {}
             } else if (d.strategies) {
@@ -431,11 +457,11 @@ export default function DerivPatternLabPage() {
                 signal:           s.signal,
                 rank:             s.rank,
               })));
+              setTab("strategies");
             }
             setRunning(false);
             setProgress("");
             clearInterval(pollRef.current!);
-            setTab("strategies");
             checkSbStatus();  // refresh sandbox status pill
             fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); });
           } else if (d.analysis.status === "error") {
@@ -462,6 +488,13 @@ export default function DerivPatternLabPage() {
       topN,
       targetContract: contractFocus,
     };
+
+    if (useCustomDigits && customDigits.length >= 1) {
+      body.customPattern = customDigits;
+      if (contractFocus === "ALL") {
+        body.targetContract = "UNDER_4";
+      }
+    }
 
     if (useManual) {
       // Manual tab: use pasted digits
@@ -541,18 +574,25 @@ export default function DerivPatternLabPage() {
       if (d.status === "done" && (d.data || d.rawOutput)) {
         const raw = d.data || JSON.parse(d.rawOutput);
         setRawData(raw);
-        setStrategies(raw.top_strategies || []);
+        if (raw.is_custom_pattern_scan) {
+          setCustomResults(raw.custom_pattern_results || []);
+          if (raw.custom_pattern_results && raw.custom_pattern_results.length > 0) {
+            setSelectedCustomMarket(raw.custom_pattern_results[0].symbol);
+          }
+          setTab("custom_lookup");
+        } else {
+          setStrategies(raw.top_strategies || []);
+          setFilterTT(contractFocus);
+          setTab("strategies");
+        }
         setAnalysis({
           id: d.analysisId, status: "done", symbol,
-          tickCount: raw.tick_count, summary: raw.summary,
+          tickCount: raw.tick_count || 0, summary: raw.summary,
           rawOutput: JSON.stringify(raw), error: null,
           createdAt: new Date().toISOString(), completedAt: new Date().toISOString(),
         });
         setRunning(false);
         setProgress("");
-        // Auto-apply contract focus filter so user immediately sees their chosen type
-        setFilterTT(contractFocus);
-        setTab("strategies");
         checkSbStatus();
         fetch("/api/deriv/status").then(r => r.json()).then(d => { if (d.analyses) setHistory(d.analyses); });
         return;
@@ -647,7 +687,27 @@ export default function DerivPatternLabPage() {
         .sort((a, b) => b.confidence_lower - a.confidence_lower)[0]
     : null;
 
+  // Custom Pattern results sorting
+  const sortedCustomResults = [...customResults].sort((a, b) => {
+    if (customSortBy === "least_consecutive_losses") {
+      const aLoss = a.max_consecutive_losses ?? 999;
+      const bLoss = b.max_consecutive_losses ?? 999;
+      if (aLoss !== bLoss) return aLoss - bLoss; // Ascending: least losses first
+      return b.win_rate - a.win_rate; // Tie breaker: win rate
+    }
+    if (customSortBy === "occurrences") {
+      if (b.total_occurrences !== a.total_occurrences) return b.total_occurrences - a.total_occurrences;
+      return b.win_rate - a.win_rate;
+    }
+    // Default: win_rate
+    if (b.win_rate !== a.win_rate) return b.win_rate - a.win_rate;
+    return b.total_occurrences - a.total_occurrences;
+  });
+
+  const selectedMarketData = customResults.find(m => m.symbol === selectedCustomMarket) || sortedCustomResults[0] || null;
+
   const tabs: { id: Tab; label: string; icon: any; badge?: number }[] = [
+    { id: "custom_lookup", label: "🎯 Custom Digit Lookup", icon: Target, badge: customResults.length > 0 ? customResults.length : undefined },
     { id: "strategies",  label: rawData?.is_multi_market ? "🏆 Market Rankings" : "Best Strategies", icon: Trophy, badge: strategies.length },
     { id: "entrypoints", label: "🎯 Entry Blueprint (10-Fold)", icon: Target, badge: strategies.filter(s => (s.folds_profitable ?? 0) >= 7).length },
     { id: "backtest",    label: "Full Backtest",              icon: BarChart2 },
@@ -666,6 +726,120 @@ export default function DerivPatternLabPage() {
 
         {/* ── Controls Bar ───────────────────────────────────────────────── */}
         <div className="flex-shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 sm:px-6 py-3">
+          {/* Analysis Mode Switcher */}
+          <div className="flex flex-wrap items-center gap-3 mb-3 pb-2.5 border-b border-slate-100 dark:border-slate-800">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Mode:</span>
+            <div className="flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setUseCustomDigits(false)}
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  !useCustomDigits
+                    ? "bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-300 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700 dark:text-slate-400"
+                }`}
+              >
+                <span>✨ Auto Pattern Discovery</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setUseCustomDigits(true);
+                  setTab("custom_lookup");
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  useCustomDigits
+                    ? "bg-purple-600 text-white shadow-sm"
+                    : "text-slate-500 hover:text-slate-700 dark:text-slate-400"
+                }`}
+              >
+                <span>🎯 Custom Digit Lookup (1–5 Digits)</span>
+              </button>
+            </div>
+
+            {useCustomDigits ? (
+              <span className="text-xs text-purple-600 dark:text-purple-400 font-semibold">
+                Set 1–5 consecutive digits · Scans all markets to find which had the highest win rate on the next tick
+              </span>
+            ) : (
+              <span className="text-xs text-slate-400">
+                Automatically analyzes 2–7 digit windows across all trade types & 10-fold cross-validates
+              </span>
+            )}
+          </div>
+
+          {/* Custom Digits Input Ribbon (Active when Custom Mode enabled) */}
+          {useCustomDigits && (
+            <div className="mb-3 p-3 bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/60 rounded-2xl flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black uppercase text-purple-700 dark:text-purple-300">
+                  Custom Consecutive Digits:
+                </span>
+                <div className="flex items-center gap-1">
+                  {customDigits.map((d, i) => (
+                    <div key={i} className="flex items-center gap-1">
+                      <div className="relative group">
+                        <input
+                          type="number"
+                          min={0}
+                          max={9}
+                          value={d}
+                          onChange={e => updateCustomDigit(i, parseInt(e.target.value) || 0)}
+                          className="w-10 h-10 text-center font-mono font-black text-lg bg-white dark:bg-slate-800 border-2 border-purple-400 rounded-xl text-purple-700 dark:text-purple-300 focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm"
+                        />
+                        {customDigits.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeCustomDigit(i)}
+                            className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-rose-500 text-white text-[10px] flex items-center justify-center font-bold hover:bg-rose-600 shadow cursor-pointer"
+                            title="Remove digit"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                      {i < customDigits.length - 1 && (
+                        <ChevronRight className="w-3.5 h-3.5 text-purple-400 font-black" />
+                      )}
+                    </div>
+                  ))}
+
+                  {customDigits.length < 5 && (
+                    <button
+                      type="button"
+                      onClick={() => addCustomDigit(0)}
+                      className="ml-1 text-xs font-bold px-2.5 py-2 rounded-xl border border-dashed border-purple-400 text-purple-600 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors cursor-pointer"
+                      title="Add another consecutive digit (up to 5)"
+                    >
+                      + Add Digit ({customDigits.length}/5)
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Quick Presets */}
+              <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+                <span className="text-[11px] text-purple-600 dark:text-purple-400 font-semibold">Presets:</span>
+                {[
+                  { label: "4→5", digits: [4, 5] },
+                  { label: "3", digits: [3] },
+                  { label: "0→0", digits: [0, 0] },
+                  { label: "7→8→9", digits: [7, 8, 9] },
+                  { label: "2→3", digits: [2, 3] },
+                ].map(p => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => setCustomDigits(p.digits)}
+                    className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/40 cursor-pointer shadow-xs"
+                  >
+                    [{p.label}]
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-3">
             {/* Symbol */}
             <div className="flex items-center gap-2">
@@ -805,17 +979,23 @@ export default function DerivPatternLabPage() {
               onClick={() => runAnalysis(false)}
               disabled={running}
               className={`flex items-center gap-2 px-5 py-2 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl transition-all shadow-md cursor-pointer ml-auto ${
-                MARKET_GROUPS[symbol]
-                  ? "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20"
-                  : "bg-blue-600 hover:bg-blue-700 shadow-blue-500/20"
+                useCustomDigits
+                  ? "bg-purple-600 hover:bg-purple-700 shadow-purple-500/20"
+                  : MARKET_GROUPS[symbol]
+                    ? "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20"
+                    : "bg-blue-600 hover:bg-blue-700 shadow-blue-500/20"
               }`}
             >
               {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
               {running
                 ? "Scanning…"
-                : MARKET_GROUPS[symbol]
-                  ? `⚡ Scan ${MARKET_GROUPS[symbol].symbols.length} Markets`
-                  : "Run Analysis"
+                : useCustomDigits
+                  ? MARKET_GROUPS[symbol]
+                    ? `🎯 Scan ${MARKET_GROUPS[symbol].symbols.length} Markets for [${customDigits.join("→")}]`
+                    : `🎯 Scan [${customDigits.join("→")}] on ${SYMBOL_LABELS[symbol] || symbol}`
+                  : MARKET_GROUPS[symbol]
+                    ? `⚡ Scan ${MARKET_GROUPS[symbol].symbols.length} Markets`
+                    : "Run Analysis"
               }
             </button>
 
@@ -911,6 +1091,340 @@ export default function DerivPatternLabPage() {
 
         {/* ── Content ────────────────────────────────────────────────────── */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 lg:pb-6">
+
+          {/* ────────────────────────────────────── TAB: Custom Digit Lookup */}
+          {tab === "custom_lookup" && (
+            <div className="space-y-6 max-w-5xl mx-auto">
+              {/* Header Box */}
+              <div className="bg-gradient-to-r from-purple-900 via-indigo-900 to-slate-900 rounded-3xl p-6 text-white border border-purple-500/30 shadow-xl">
+                <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-purple-500/20 border border-purple-400/30 flex items-center justify-center text-2xl">
+                      🎯
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-black tracking-tight text-white flex items-center gap-2">
+                        Custom Digit Sequence Scanner & Market Leaderboard
+                      </h2>
+                      <p className="text-xs text-purple-200">
+                        Scan all markets for exact appearance of your chosen consecutive digits · 10-fold backtested · Martingale safety rank
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Run button shortcut */}
+                  <button
+                    onClick={() => {
+                      setUseCustomDigits(true);
+                      runAnalysis(false);
+                    }}
+                    disabled={running}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white font-black text-xs rounded-xl shadow-lg transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                    {running ? "Scanning Markets…" : `Scan Now for [${customDigits.join("→")}]`}
+                  </button>
+                </div>
+
+                {/* Pattern & Target Blueprint Bar */}
+                <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/15 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-purple-200 uppercase tracking-wider">
+                      When Sequence Appears:
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {customDigits.map((d, i) => (
+                        <span key={i} className="flex items-center gap-1">
+                          <span className="w-9 h-9 rounded-xl bg-white text-purple-900 font-mono font-black text-lg flex items-center justify-center shadow-md">
+                            {d}
+                          </span>
+                          {i < customDigits.length - 1 && (
+                            <ChevronRight className="w-4 h-4 text-purple-300 font-bold" />
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-amber-300 mx-1 font-black" />
+                    <span className="text-xs font-bold text-purple-200 uppercase tracking-wider">
+                      Next Tick Bet:
+                    </span>
+                    <span className="px-3 py-1.5 rounded-xl bg-amber-400 text-slate-900 font-black text-sm shadow">
+                      BET {contractFocus === "ALL" ? "UNDER 4" : ttLabel(contractFocus).toUpperCase()}
+                    </span>
+                  </div>
+
+                  <div className="text-right text-xs text-purple-200">
+                    <div>Scanned across: <span className="font-bold text-white">{MARKET_GROUPS[symbol] ? MARKET_GROUPS[symbol].label : SYMBOL_LABELS[symbol] || symbol}</span></div>
+                    <div>Ticks per market: <span className="font-bold text-white">{tickCount.toLocaleString()} ticks</span></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Leaderboard & Results */}
+              {customResults.length === 0 && !running ? (
+                <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-12 text-center text-slate-400 space-y-4">
+                  <Target className="w-16 h-16 mx-auto opacity-20 text-purple-500" />
+                  <div>
+                    <p className="font-black text-lg text-slate-700 dark:text-slate-200">No custom scan results yet</p>
+                    <p className="text-sm mt-1 max-w-md mx-auto">
+                      Choose your 1–5 consecutive digits above (e.g. <strong>[4, 5]</strong> or <strong>[3]</strong>), pick your contract (e.g. <strong>Under 4</strong>), and click <strong>"Scan Markets"</strong> to find the top winning market!
+                    </p>
+                  </div>
+                  <div className="flex justify-center gap-2 pt-2 flex-wrap">
+                    <button
+                      onClick={() => {
+                        setUseCustomDigits(true);
+                        setCustomDigits([4, 5]);
+                        setContractFocus("UNDER_4");
+                        runAnalysis(false);
+                      }}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow transition-all cursor-pointer"
+                    >
+                      🚀 Test Example: Scan [4 → 5] → Under 4
+                    </button>
+                    <button
+                      onClick={() => {
+                        setUseCustomDigits(true);
+                        setCustomDigits([3]);
+                        setContractFocus("UNDER_4");
+                        runAnalysis(false);
+                      }}
+                      className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                    >
+                      🎯 Test Example: Scan [3] → Under 4
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Sorting & Stats bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <BarChart2 className="w-4 h-4 text-purple-500" />
+                      <span className="text-sm font-black text-slate-800 dark:text-white">
+                        Market Rankings Leaderboard
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        ({customResults.length} markets found pattern)
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-500">Sort by:</span>
+                      <div className="flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700">
+                        <button
+                          onClick={() => setCustomSortBy("win_rate")}
+                          className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                            customSortBy === "win_rate"
+                              ? "bg-purple-600 text-white shadow"
+                              : "text-slate-600 dark:text-slate-300"
+                          }`}
+                        >
+                          🏆 Highest Win Rate
+                        </button>
+                        <button
+                          onClick={() => setCustomSortBy("occurrences")}
+                          className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                            customSortBy === "occurrences"
+                              ? "bg-purple-600 text-white shadow"
+                              : "text-slate-600 dark:text-slate-300"
+                          }`}
+                        >
+                          📊 Most Occurrences
+                        </button>
+                        <button
+                          onClick={() => setCustomSortBy("least_consecutive_losses")}
+                          className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                            customSortBy === "least_consecutive_losses"
+                              ? "bg-purple-600 text-white shadow"
+                              : "text-slate-600 dark:text-slate-300"
+                          }`}
+                        >
+                          🛡️ Least Consecutive Losses
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Leaderboard Cards */}
+                  <div className="space-y-3">
+                    {sortedCustomResults.map((mkt: any, idx: number) => {
+                      const isSelected = (selectedMarketData?.symbol || "") === mkt.symbol;
+                      const wr = mkt.win_rate;
+                      const isRecommended = idx === 0 && customSortBy === "win_rate";
+
+                      return (
+                        <div
+                          key={mkt.symbol}
+                          onClick={() => setSelectedCustomMarket(mkt.symbol)}
+                          className={`bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer overflow-hidden p-4 sm:p-5 ${
+                            isSelected
+                              ? "border-purple-500 ring-2 ring-purple-500/20 shadow-md"
+                              : isRecommended
+                                ? "border-emerald-300 dark:border-emerald-800/80 bg-emerald-50/20 dark:bg-emerald-950/10"
+                                : "border-slate-200/80 dark:border-slate-800 hover:border-slate-300"
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-4">
+                            {/* Rank & Market name */}
+                            <div className="flex items-center gap-3">
+                              <span className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm ${
+                                idx === 0
+                                  ? "bg-amber-400 text-white shadow"
+                                  : idx === 1
+                                    ? "bg-slate-300 text-slate-800"
+                                    : idx === 2
+                                      ? "bg-amber-600 text-white"
+                                      : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                              }`}>
+                                #{idx + 1}
+                              </span>
+
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-base font-black text-slate-800 dark:text-white">
+                                    {mkt.label}
+                                  </span>
+                                  {isRecommended && (
+                                    <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 px-2 py-0.5 rounded-full font-black">
+                                      🏆 TOP WINNING MARKET
+                                    </span>
+                                  )}
+                                  {isSelected && (
+                                    <span className="text-[10px] bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-300 px-2 py-0.5 rounded-full font-black">
+                                      SELECTED FOR 10-FOLD VIEW
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                                  <span>Occurred <strong>{mkt.total_occurrences}</strong> times in {tickCount.toLocaleString()} ticks</span>
+                                  <span>·</span>
+                                  <span>Peak Zone: <span className="font-semibold text-slate-700 dark:text-slate-300">{mkt.best_area_label}</span></span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Stats */}
+                            <div className="flex items-center gap-6 text-right">
+                              {/* Occurrences & Wins */}
+                              <div>
+                                <div className="text-base font-black text-slate-800 dark:text-white">
+                                  {mkt.wins} / {mkt.total_occurrences} won
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-semibold uppercase">
+                                  Edge: {mkt.edge > 0 ? "+" : ""}{(mkt.edge * 100).toFixed(1)}%
+                                </div>
+                              </div>
+
+                              {/* Martingale Streak Badge */}
+                              <div>
+                                <div className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-black ${
+                                  mkt.max_consecutive_losses <= 1
+                                    ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300"
+                                    : mkt.max_consecutive_losses === 2
+                                      ? "bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300"
+                                      : "bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-300"
+                                }`}>
+                                  <span>{mkt.max_consecutive_losses <= 1 ? "🛡️" : mkt.max_consecutive_losses === 2 ? "⚡" : "⚠️"}</span>
+                                  <span>Max {mkt.max_consecutive_losses} L-Streak</span>
+                                </div>
+                                <div className="text-[9px] text-slate-400 mt-0.5 font-semibold">
+                                  {mkt.folds_profitable}/10 Folds ({mkt.consistency_pct}%)
+                                </div>
+                              </div>
+
+                              {/* Win Rate */}
+                              <div>
+                                <div className={`text-2xl font-black tabular-nums ${winColor(wr)}`}>
+                                  {(wr * 100).toFixed(1)}%
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-bold uppercase">
+                                  Win Rate
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Detailed 10-Fold Section for Selected Market */}
+                  {selectedMarketData && (
+                    <div className="bg-white dark:bg-slate-900 rounded-3xl border border-purple-200 dark:border-purple-800/80 p-6 space-y-6 shadow-sm">
+                      <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
+                        <div>
+                          <div className="text-xs font-black text-purple-600 dark:text-purple-400 uppercase tracking-wider">
+                            Detailed 10-Fold Walk-Forward Cross-Validation
+                          </div>
+                          <h3 className="text-xl font-black text-slate-900 dark:text-white mt-0.5">
+                            {selectedMarketData.label} — Multi-Epoch Backtest Analysis
+                          </h3>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs text-slate-400">Total Tested:</span>
+                          <span className="ml-1 text-sm font-black text-purple-600 dark:text-purple-400">
+                            {selectedMarketData.total_occurrences} occurrences
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Physical Entry Instructions Blueprint */}
+                      <div className="bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/30 dark:to-indigo-950/30 border border-purple-200 dark:border-purple-800/60 rounded-2xl p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Zap className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                          <span className="text-xs font-black text-purple-700 dark:text-purple-300 uppercase tracking-wider">
+                            Exact Physical Trading Execution Guide
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed font-medium">
+                          {selectedMarketData.entry_instruction}
+                        </p>
+                      </div>
+
+                      {/* 10-Fold Grid */}
+                      <div>
+                        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center justify-between">
+                          <span>10 Sequential Chronological Folds Performance:</span>
+                          <span className="text-[11px] text-slate-400 font-normal">
+                            (Each fold contains ~{Math.floor(tickCount / 10).toLocaleString()} ticks)
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                          {selectedMarketData.fold_stats?.map((f: any) => (
+                            <div
+                              key={f.fold}
+                              className={`p-3 rounded-xl border text-center ${
+                                f.profitable
+                                  ? "bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800"
+                                  : "bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700"
+                              }`}
+                            >
+                              <div className="text-[10px] font-black text-slate-500 uppercase">
+                                Fold #{f.fold}
+                              </div>
+                              <div className={`text-lg font-black my-0.5 ${
+                                f.trades === 0 ? "text-slate-400" : f.winRate >= 50 ? "text-emerald-600 dark:text-emerald-400" : "text-slate-700 dark:text-slate-200"
+                              }`}>
+                                {f.trades > 0 ? `${f.winRate.toFixed(1)}%` : "0 trades"}
+                              </div>
+                              <div className="text-[10px] text-slate-500">
+                                {f.wins}/{f.trades} won
+                              </div>
+                              <div className="mt-1 pt-1 border-t border-slate-200/60 dark:border-slate-700/60 text-[9px] font-bold text-slate-500">
+                                Max L: {f.maxConsecutiveLosses ?? 0}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ────────────────────────────────────── TAB: Best Strategies */}
           {tab === "strategies" && (

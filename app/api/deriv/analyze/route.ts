@@ -108,10 +108,123 @@ export async function POST(req: NextRequest) {
       topN           = 30,
       targetContract = "ALL",
       manualTicks,
+      customPattern, // e.g. [4, 5] or [3] — custom consecutive digit sequence for exact lookup
     } = body;
 
     const now        = new Date().toISOString();
     const analysisId = `da_${Date.now()}`;
+
+    // ── CUSTOM PATTERN LOOKUP (exact consecutive digit sequence scan) ──────────
+    // When customPattern is set, we scan every market's digit history for exact
+    // occurrences of the sequence and measure the win rate of targetContract on
+    // the very next tick. Works for both single-market and multi-market modes.
+    if (customPattern && Array.isArray(customPattern) && customPattern.length >= 1) {
+      const validPattern = customPattern
+        .map((d: any) => parseInt(String(d), 10))
+        .filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 9);
+
+      if (validPattern.length < 1) {
+        return NextResponse.json({ error: "Invalid customPattern — must be 1–5 digits (0–9)" }, { status: 400 });
+      }
+
+      const effectiveTarget = (targetContract && targetContract !== "ALL") ? targetContract.trim().toUpperCase() : "UNDER_4";
+
+      if (multiMarketData && Object.keys(multiMarketData).length > 0) {
+        // ── CUSTOM PATTERN + MULTI-MARKET: rank all markets ──────────────────
+        const marketEntries = Object.entries(multiMarketData) as [string, number[]][];
+        const customResults: any[] = [];
+
+        for (const [mktSymbol, mktDigits] of marketEntries) {
+          if (!mktDigits || mktDigits.length < 20) continue;
+          const res = runCustomPatternScan(mktDigits, validPattern, effectiveTarget, mktSymbol);
+          if (res.total_occurrences === 0) continue;
+          customResults.push({
+            symbol: mktSymbol,
+            label: SYMBOL_LABELS[mktSymbol] || mktSymbol,
+            ...res,
+          });
+        }
+
+        customResults.sort((a, b) => {
+          // Primary: win rate; tie-break: total occurrences (more data = more reliable)
+          if (b.win_rate !== a.win_rate) return b.win_rate - a.win_rate;
+          return b.total_occurrences - a.total_occurrences;
+        });
+        customResults.forEach((r, idx) => {
+          r.rank = idx + 1;
+          r.is_recommended = idx === 0;
+        });
+
+        const patternStr = validPattern.join("→");
+        const summaryText = customResults.length > 0
+          ? `📍 Custom Pattern [${patternStr}] → ${effectiveTarget}: Scanned ${marketEntries.length} markets. ` +
+            `Best market: ${customResults[0].label} with ${(customResults[0].win_rate * 100).toFixed(1)}% win rate ` +
+            `(${customResults[0].wins}/${customResults[0].total_occurrences} wins, Max L-Streak: ${customResults[0].max_consecutive_losses}).`
+          : `Custom pattern [${patternStr}] was not found in any scanned market.`;
+
+        const data = {
+          is_custom_pattern_scan: true,
+          custom_pattern: validPattern,
+          target_contract: effectiveTarget,
+          market_group: marketGroup || symbol,
+          custom_pattern_results: customResults,
+          summary: summaryText,
+        };
+
+        await db.insert(derivAnalyses).values({
+          id: analysisId, status: "done", symbol: marketGroup || symbol,
+          inputTicks: `Custom pattern [${patternStr}] scan (${marketEntries.length} markets)`,
+          tickCount: 0, windowSize: validPattern.length,
+          similarityThreshold: String(minOccurrences), maxPatterns: topN,
+          summary: summaryText, rawOutput: JSON.stringify(data), error: null,
+          startedAt: now, completedAt: new Date().toISOString(), createdAt: now,
+        }).run();
+
+        return NextResponse.json({ analysisId, status: "done", summary: summaryText, rawOutput: JSON.stringify(data) });
+
+      } else {
+        // ── CUSTOM PATTERN + SINGLE MARKET ───────────────────────────────────
+        const digits = manualTicks && manualTicks.length > 0 ? manualTicks : [];
+        const cleanDigits = digits
+          .map((v: any) => (typeof v === "number" ? v : parseInt(String(v), 10)))
+          .filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 9);
+
+        if (cleanDigits.length < 20) {
+          return NextResponse.json({ error: "Not enough digits for custom pattern scan. Fetch ticks first." }, { status: 400 });
+        }
+
+        const res = runCustomPatternScan(cleanDigits, validPattern, effectiveTarget, symbol);
+        const patternStr = validPattern.join("→");
+        const summaryText = res.total_occurrences > 0
+          ? `📍 Custom Pattern [${patternStr}] → ${effectiveTarget} on ${SYMBOL_LABELS[symbol] || symbol}: ` +
+            `Found ${res.total_occurrences} occurrences. Win Rate: ${(res.win_rate * 100).toFixed(1)}% ` +
+            `(${res.wins}/${res.total_occurrences} wins). Max L-Streak: ${res.max_consecutive_losses}. ` +
+            `${res.folds_profitable}/10 folds profitable.`
+          : `Pattern [${patternStr}] was not found in ${cleanDigits.length} ticks of ${symbol}.`;
+
+        const data = {
+          is_custom_pattern_scan: true,
+          is_single_market_custom: true,
+          custom_pattern: validPattern,
+          target_contract: effectiveTarget,
+          symbol,
+          tick_count: cleanDigits.length,
+          custom_pattern_results: [{ symbol, label: SYMBOL_LABELS[symbol] || symbol, rank: 1, is_recommended: true, ...res }],
+          summary: summaryText,
+        };
+
+        await db.insert(derivAnalyses).values({
+          id: analysisId, status: "done", symbol,
+          inputTicks: `Custom pattern [${patternStr}] single-market scan`,
+          tickCount: cleanDigits.length, windowSize: validPattern.length,
+          similarityThreshold: String(minOccurrences), maxPatterns: topN,
+          summary: summaryText, rawOutput: JSON.stringify(data), error: null,
+          startedAt: now, completedAt: new Date().toISOString(), createdAt: now,
+        }).run();
+
+        return NextResponse.json({ analysisId, status: "done", summary: summaryText, rawOutput: JSON.stringify(data) });
+      }
+    }
 
     // ── MULTI-MARKET SCAN (e.g. ALL_1S, ALL_STD, ALL_VOL) ─────────────────────
     if (multiMarketData && Object.keys(multiMarketData).length > 0) {
@@ -420,6 +533,197 @@ async function updatePatternLearningMemory(symbol: string, strategies: any[]): P
   }
 
   return enriched;
+}
+
+// ── Custom Consecutive Digit Pattern Evaluation ──────────────────────────────
+function evaluateTargetContract(digit: number, contract: string): boolean {
+  const c = contract.trim().toUpperCase();
+  if (c === "EVEN") return digit % 2 === 0;
+  if (c === "ODD") return digit % 2 === 1;
+  const [kind, valStr] = c.split("_");
+  const val = parseInt(valStr, 10);
+  if (kind === "UNDER") {
+    const target = isNaN(val) ? 4 : val;
+    return digit < target;
+  }
+  if (kind === "OVER") {
+    const target = isNaN(val) ? 5 : val;
+    return digit > target;
+  }
+  if (kind === "MATCHES") {
+    const target = isNaN(val) ? 0 : val;
+    return digit === target;
+  }
+  if (kind === "DIFFERS") {
+    const target = isNaN(val) ? 0 : val;
+    return digit !== target;
+  }
+  return false;
+}
+
+function getTargetContractBaseline(contract: string): number {
+  const c = contract.trim().toUpperCase();
+  if (c === "EVEN" || c === "ODD") return 0.5;
+  const [kind, valStr] = c.split("_");
+  const val = parseInt(valStr, 10);
+  if (kind === "UNDER") {
+    const x = isNaN(val) ? 4 : val;
+    return x / 10;
+  }
+  if (kind === "OVER") {
+    const x = isNaN(val) ? 5 : val;
+    return (9 - x) / 10;
+  }
+  if (kind === "MATCHES") return 0.1;
+  if (kind === "DIFFERS") return 0.9;
+  return 0.5;
+}
+
+function runCustomPatternScan(
+  digits: number[],
+  pattern: number[],
+  targetContract: string,
+  symbol: string
+): any {
+  const N = digits.length;
+  const w = pattern.length;
+  const bl = getTargetContractBaseline(targetContract);
+
+  let total = 0;
+  let wins = 0;
+  let currentLossStreak = 0;
+  let maxConsecutiveLosses = 0;
+
+  const numFolds = 10;
+  const foldSize = Math.max(1, Math.floor(N / numFolds));
+  const foldRanges = Array.from({ length: numFolds }, (_, f) => ({
+    fold: f + 1,
+    start: f * foldSize,
+    end: Math.min(N, (f + 1) * foldSize),
+  }));
+
+  const foldTotals = new Array(numFolds).fill(0);
+  const foldWins = new Array(numFolds).fill(0);
+  const foldMaxLossStreak = new Array(numFolds).fill(0);
+  const foldCurrentLossStreak = new Array(numFolds).fill(0);
+
+  // Scan digits in chronological order (oldest to newest)
+  for (let i = 0; i <= N - w - 1; i++) {
+    let match = true;
+    for (let j = 0; j < w; j++) {
+      if (digits[i + j] !== pattern[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (!match) continue;
+
+    const nextDigit = digits[i + w];
+    const foldIdx = Math.min(numFolds - 1, Math.floor(i / foldSize));
+    const won = evaluateTargetContract(nextDigit, targetContract);
+
+    total++;
+    foldTotals[foldIdx]++;
+
+    if (won) {
+      wins++;
+      foldWins[foldIdx]++;
+      currentLossStreak = 0;
+      foldCurrentLossStreak[foldIdx] = 0;
+    } else {
+      currentLossStreak++;
+      if (currentLossStreak > maxConsecutiveLosses) {
+        maxConsecutiveLosses = currentLossStreak;
+      }
+      foldCurrentLossStreak[foldIdx]++;
+      if (foldCurrentLossStreak[foldIdx] > foldMaxLossStreak[foldIdx]) {
+        foldMaxLossStreak[foldIdx] = foldCurrentLossStreak[foldIdx];
+      }
+    }
+  }
+
+  const wr = total > 0 ? wins / total : 0;
+  const edge = wr - bl;
+  const wilsonLower = (wCount: number, n: number, z = 1.645) => {
+    if (n === 0) return 0;
+    const p = wCount / n;
+    return (p + z * z / (2 * n) - z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / (1 + z * z / n);
+  };
+  const cl = wilsonLower(wins, total);
+
+  let foldsTested = 0;
+  let foldsProfitable = 0;
+  let bestFoldIndex = 0;
+  let bestFoldWr = 0;
+  let bestFoldTrades = 0;
+
+  const foldStats = foldRanges.map((rng, f) => {
+    const fTot = foldTotals[f];
+    const fWin = foldWins[f];
+    const fWr = fTot > 0 ? fWin / fTot : 0;
+    const isProfitable = fTot > 0 && fWr >= bl;
+
+    if (fTot > 0) {
+      foldsTested++;
+      if (isProfitable) foldsProfitable++;
+      if (fWr > bestFoldWr || (fWr === bestFoldWr && fTot > bestFoldTrades)) {
+        bestFoldWr = fWr;
+        bestFoldIndex = f;
+        bestFoldTrades = fTot;
+      }
+    }
+
+    return {
+      fold: f + 1,
+      start: rng.start,
+      end: rng.end,
+      trades: fTot,
+      wins: fWin,
+      winRate: Math.round(fWr * 1000) / 10,
+      profitable: isProfitable,
+      maxConsecutiveLosses: foldMaxLossStreak[f],
+    };
+  });
+
+  const consistencyPct = foldsTested > 0 ? Math.round((foldsProfitable / foldsTested) * 100) : 0;
+  const bestRange = foldRanges[bestFoldIndex];
+  const bestAreaLabel = total > 0
+    ? `Fold #${bestFoldIndex + 1} (Ticks ${bestRange.start.toLocaleString()}–${bestRange.end.toLocaleString()}): ${(bestFoldWr * 100).toFixed(1)}% win rate (${bestFoldTrades} trades)`
+    : "No occurrences";
+
+  const lossPenalty = Math.max(0, maxConsecutiveLosses * 0.05);
+  const compositeScore = Math.max(0, (cl * (1 + 0.20 * (foldsProfitable / Math.max(1, foldsTested)))) - lossPenalty);
+
+  const patternStr = pattern.join("→");
+  const entryInstruction =
+    `1. Watch Deriv ${symbol} tick stream. ` +
+    `2. When exact sequence [${patternStr}] appears in the last digits, ` +
+    `3. IMMEDIATELY place BET ${targetContract} on the NEXT tick (1-tick duration). ` +
+    `Win rate: ${(wr * 100).toFixed(1)}% (${wins}/${total} won, +${(edge * 100).toFixed(1)}% edge over ${(bl * 100).toFixed(1)}% baseline). ` +
+    `10-Fold Stability: ${foldsProfitable}/${foldsTested} market folds passed. Peak zone: ${bestAreaLabel}. ` +
+    `Martingale Safety: Max consecutive losses was ${maxConsecutiveLosses} trades (Requires max ${Math.pow(2, maxConsecutiveLosses)}x recovery multiplier).`;
+
+  return {
+    pattern,
+    target_contract: targetContract,
+    total_occurrences: total,
+    wins,
+    losses: total - wins,
+    win_rate: Math.round(wr * 10000) / 10000,
+    baseline_rate: Math.round(bl * 10000) / 10000,
+    edge: Math.round(edge * 10000) / 10000,
+    confidence_lower: Math.round(cl * 10000) / 10000,
+    composite_score: Math.round(compositeScore * 10000) / 10000,
+    max_consecutive_losses: maxConsecutiveLosses,
+    max_fold_consecutive_losses: Math.max(0, ...foldMaxLossStreak),
+    folds_tested: foldsTested,
+    folds_profitable: foldsProfitable,
+    consistency_pct: consistencyPct,
+    best_area_label: bestAreaLabel,
+    best_fold_wr: Math.round(bestFoldWr * 1000) / 10,
+    entry_instruction: entryInstruction,
+    fold_stats: foldStats,
+  };
 }
 
 // ── In-process JS stat fallback (no E2B) ─────────────────────────────────────
