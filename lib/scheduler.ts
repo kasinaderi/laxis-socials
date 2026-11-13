@@ -13,6 +13,31 @@ import {
 } from "./memory";
 import { popNextQueuedImage, getAutoApproveSetting, notifyTelegramApproval } from "./vault";
 
+// Random post time generator - each agent has its own peak window so they
+// never all post at the same time. Jitter added so times vary every day.
+// Dead hours 02:00-06:00 EAT (UTC+3) are skipped automatically.
+function getRandomPostTime(agentId: string): string {
+  // Window [minMinutes, maxMinutes] from now per agent
+  const windows: Record<string, [number, number]> = {
+    fb_laxdollar:  [20,  90],
+    fb_jotrainer:  [45, 150],
+    fb_contentor:  [60, 240],
+    ig_real:       [30, 120],
+    ig_shader:     [90, 300],
+  };
+  const [lo, hi] = windows[agentId] ?? [20, 120];
+  const jitter   = Math.floor(Math.random() * 51) - 25; // -25 to +25 min
+  const mins     = Math.max(10, Math.floor(Math.random() * (hi - lo + 1)) + lo + jitter);
+  const date     = new Date(Date.now() + mins * 60_000);
+  // EAT = UTC+3; skip 02:00-06:00 EAT
+  const eatHour  = (date.getUTCHours() + 3) % 24;
+  if (eatHour >= 2 && eatHour < 6) {
+    // Push forward to 06:15 EAT (03:15 UTC)
+    date.setUTCHours(3, 15, 0, 0);
+    if (date <= new Date()) date.setUTCDate(date.getUTCDate() + 1);
+  }
+  return date.toISOString();
+}
 /**
  * Executes a single agent task and handles dependencies/hand-offs
  */
@@ -195,7 +220,7 @@ export async function runAgentTask(taskId: string): Promise<void> {
     if (output && mediaUrl) {
       const autoApprove = await getAutoApproveSetting();
       const postStatus = autoApprove ? "scheduled" : "pending_approval";
-      const scheduledTime = new Date(Date.now() + 1800000).toISOString(); // 30 min from now
+      const scheduledTime = getRandomPostTime(task.agentId);
       const postId = `post_${Date.now()}_${task.agentId}`;
 
       await db.insert(posts)
