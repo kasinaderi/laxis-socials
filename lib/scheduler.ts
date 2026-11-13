@@ -11,6 +11,7 @@ import {
   verifyDraftUniqueness,
   enrichVisualPrompt,
 } from "./memory";
+import { popNextQueuedImage, getAutoApproveSetting, notifyTelegramApproval } from "./vault";
 
 /**
  * Executes a single agent task and handles dependencies/hand-offs
@@ -45,6 +46,14 @@ export async function runAgentTask(taskId: string): Promise<void> {
     let platforms = ["facebook"];
     let targetGroups: any[] = [];
 
+    // 1b. Check if user provided an image in this agent's Image Vault
+    const queuedUserImage = await popNextQueuedImage(task.agentId);
+    const isUserProvidedImage = Boolean(queuedUserImage?.url);
+    if (queuedUserImage?.url) {
+      mediaUrl = queuedUserImage.url;
+      console.log(`[Scheduler] Agent ${task.agentId} using personal image from user vault (ID: ${queuedUserImage.id})`);
+    }
+
     // 2. Agent Specific Execution Logic with Anti-Duplication Directives
     if (task.agentId === "fb_laxdollar") {
       const res = await askWorkerAgent(
@@ -53,17 +62,20 @@ export async function runAgentTask(taskId: string): Promise<void> {
         {
           targetBrand: "https://laxdollar.site",
           niche: "Deriv Boom & Crash, Synthetic Indices, Money Memes, African Traders",
+          visualContext: isUserProvidedImage ? "Using user's personal uploaded photo/screenshot. Craft an authentic, exciting trading caption tailored to this image!" : undefined,
         },
         antiDupDirective
       );
       output = res.output;
 
-      const rawPrompt =
-        res.mediaPrompt ||
-        "Cinematic shot of a modern trading desk with glowing Deriv synthetic indices candlestick charts, gold watch, coffee mug";
-      const enriched = enrichVisualPrompt(rawPrompt);
-      const img = await generateSocialImage(enriched.prompt, "1:1", enriched.seed);
-      mediaUrl = img.url;
+      if (!mediaUrl) {
+        const rawPrompt =
+          res.mediaPrompt ||
+          "Cinematic shot of a modern trading desk with glowing Deriv synthetic indices candlestick charts, gold watch, coffee mug";
+        const enriched = enrichVisualPrompt(rawPrompt);
+        const img = await generateSocialImage(enriched.prompt, "1:1", enriched.seed);
+        mediaUrl = img.url;
+      }
 
       platforms = ["facebook"];
       targetGroups = [
@@ -74,17 +86,22 @@ export async function runAgentTask(taskId: string): Promise<void> {
       const res = await askWorkerAgent(
         "JOTRAINER JOBS (Microwork & AI Training Recruiter)",
         task.instructions,
-        { targetGigs: "Outlier, Remotasks, Appen, Data Annotation, MicroTasks" },
+        {
+          targetGigs: "Outlier, Remotasks, Appen, Data Annotation, MicroTasks",
+          visualContext: isUserProvidedImage ? "Using user's personal uploaded screenshot/photo. Craft an engaging remote job/gig recruiter caption for it!" : undefined,
+        },
         antiDupDirective
       );
       output = res.output;
 
-      const rawPrompt =
-        res.mediaPrompt ||
-        "Minimalist workspace with MacBook, notebook titled AI Training Jobs 2025, modern aesthetic";
-      const enriched = enrichVisualPrompt(rawPrompt);
-      const img = await generateSocialImage(enriched.prompt, "1:1", enriched.seed);
-      mediaUrl = img.url;
+      if (!mediaUrl) {
+        const rawPrompt =
+          res.mediaPrompt ||
+          "Minimalist workspace with MacBook, notebook titled AI Training Jobs 2025, modern aesthetic";
+        const enriched = enrichVisualPrompt(rawPrompt);
+        const img = await generateSocialImage(enriched.prompt, "1:1", enriched.seed);
+        mediaUrl = img.url;
+      }
 
       platforms = ["facebook"];
       targetGroups = [
@@ -95,14 +112,19 @@ export async function runAgentTask(taskId: string): Promise<void> {
       const res = await askWorkerAgent(
         "CONTENTOR (Viral Sheng Comedy & Meme Master)",
         task.instructions,
-        { humorStyle: "Relatable street humor, hilarious Kenyan & African dilemmas, Sheng slang" },
+        {
+          humorStyle: "Relatable street humor, hilarious Kenyan & African dilemmas, Sheng slang",
+          visualContext: isUserProvidedImage ? "Using user's personal comedy photo/meme. Craft a hilarious, viral Sheng caption tailored to this image!" : undefined,
+        },
         antiDupDirective
       );
       output = res.output;
 
-      const videoPrompt = res.mediaPrompt || getRandomViralPrompt();
-      const videoRes = buildFreeVideoUrl({ prompt: videoPrompt });
-      mediaUrl = videoRes.videoUrl;
+      if (!mediaUrl) {
+        const videoPrompt = res.mediaPrompt || getRandomViralPrompt();
+        const videoRes = buildFreeVideoUrl({ prompt: videoPrompt });
+        mediaUrl = videoRes.videoUrl;
+      }
 
       platforms = ["facebook"];
       targetGroups = [{ platform: "facebook", groupName: "Nairobi Funniest Memes and Comedy" }];
@@ -110,17 +132,22 @@ export async function runAgentTask(taskId: string): Promise<void> {
       const res = await askWorkerAgent(
         "INSTA REAL (Drama, Unfiltered True Stories & Confessions)",
         task.instructions,
-        { visualStyle: "Story text overlaid on dramatic cinematic emotional photograph" },
+        {
+          visualStyle: "Story text overlaid on dramatic cinematic emotional photograph",
+          visualContext: isUserProvidedImage ? "Using user's personal photo. Craft a deep, dramatic confession/story caption matching this visual!" : undefined,
+        },
         antiDupDirective
       );
       output = res.output;
 
-      const rawPrompt =
-        res.mediaPrompt ||
-        "Cinematic moody portrait of a person looking out of a rainy window with deep emotional contemplation";
-      const enriched = enrichVisualPrompt(rawPrompt);
-      const img = await generateSocialImage(enriched.prompt, "4:5", enriched.seed);
-      mediaUrl = img.url;
+      if (!mediaUrl) {
+        const rawPrompt =
+          res.mediaPrompt ||
+          "Cinematic moody portrait of a person looking out of a rainy window with deep emotional contemplation";
+        const enriched = enrichVisualPrompt(rawPrompt);
+        const img = await generateSocialImage(enriched.prompt, "4:5", enriched.seed);
+        mediaUrl = img.url;
+      }
 
       platforms = ["instagram"];
       targetGroups = [{ platform: "instagram", groupName: "@instareal_confessions" }];
@@ -128,24 +155,29 @@ export async function runAgentTask(taskId: string): Promise<void> {
       const res = await askWorkerAgent(
         "INSTA SHADER (Pop Culture, Celebrity Tea & Viral AI Scandals)",
         task.instructions,
-        { tone: "The Shade Room style spicy commentary, engaging hooks, opinion polls" },
+        {
+          tone: "The Shade Room style spicy commentary, engaging hooks, opinion polls",
+          visualContext: isUserProvidedImage ? "Using user's personal photo. Craft spicy, engaging entertainment gossip commentary for this photo!" : undefined,
+        },
         antiDupDirective
       );
       output = res.output;
 
-      const rawPrompt =
-        res.mediaPrompt ||
-        "Paparazzi style glossy glamour shot under flashbulbs, red carpet aesthetic, entertainment magazine cover";
-      const enriched = enrichVisualPrompt(rawPrompt);
-      const img = await generateSocialImage(enriched.prompt, "4:5", enriched.seed);
-      mediaUrl = img.url;
+      if (!mediaUrl) {
+        const rawPrompt =
+          res.mediaPrompt ||
+          "Paparazzi style glossy glamour shot under flashbulbs, red carpet aesthetic, entertainment magazine cover";
+        const enriched = enrichVisualPrompt(rawPrompt);
+        const img = await generateSocialImage(enriched.prompt, "4:5", enriched.seed);
+        mediaUrl = img.url;
+      }
 
       platforms = ["instagram"];
       targetGroups = [{ platform: "instagram", groupName: "@instashader_tea" }];
     } else {
       const res = await askWorkerAgent(task.agentId, task.instructions, {}, antiDupDirective);
       output = res.output;
-      if (res.mediaUrl) {
+      if (!mediaUrl && res.mediaUrl) {
         mediaUrl = res.mediaUrl;
       }
     }
@@ -159,9 +191,13 @@ export async function runAgentTask(taskId: string): Promise<void> {
       output = `${output}\n\n[Fresh Angle Insight: A distinct perspective exploring today's emerging market dynamic.]`;
     }
 
-    // 4. Auto-create scheduled post if deliverable output is present
+    // 4. Auto-create post (scheduled or pending approval based on autoApprove setting)
     if (output && mediaUrl) {
+      const autoApprove = await getAutoApproveSetting();
+      const postStatus = autoApprove ? "scheduled" : "pending_approval";
+      const scheduledTime = new Date(Date.now() + 1800000).toISOString(); // 30 min from now
       const postId = `post_${Date.now()}_${task.agentId}`;
+
       await db.insert(posts)
         .values({
           id: postId,
@@ -172,11 +208,23 @@ export async function runAgentTask(taskId: string): Promise<void> {
           mediaUrls: JSON.stringify([mediaUrl]),
           platforms: JSON.stringify(platforms),
           targetGroups: JSON.stringify(targetGroups),
-          status: "scheduled",
-          scheduledAt: new Date(Date.now() + 1800000).toISOString(), // 30 min from now
+          status: postStatus,
+          scheduledAt: scheduledTime,
           createdAt: now,
         })
         .run();
+
+      // If pending approval, trigger Telegram notification card with interactive buttons
+      if (postStatus === "pending_approval") {
+        notifyTelegramApproval({
+          id: postId,
+          title: task.title,
+          caption: output,
+          mediaUrl,
+          agentId: task.agentId,
+          scheduledAt: scheduledTime,
+        }).catch((e) => console.warn("[Scheduler] Telegram approval alert notice:", e?.message));
+      }
 
       // Store in deliverables table for auditing & permanent portfolio
       const delivId = `deliv_${Date.now()}_${task.agentId}`;

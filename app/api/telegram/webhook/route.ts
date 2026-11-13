@@ -2,8 +2,17 @@ import { NextResponse, after } from "next/server";
 import { askMasterAgent } from "@/lib/ai";
 import { generateSocialImage } from "@/lib/images";
 import { db } from "@/db";
-import { agentMessages } from "@/db/schema";
+import { agentMessages, posts, appConfig } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
+import {
+  queueUserImage,
+  getAgentQueuedCount,
+  getAutoApproveSetting,
+  setAutoApproveSetting,
+  setTelegramOwnerChatId,
+  AGENT_VAULT_LABELS,
+} from "@/lib/vault";
+import { executeLocoagentPublish } from "@/lib/locoagent";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -72,6 +81,40 @@ async function sendTelegramMessage(chatId: number | string, text: string) {
   }
 }
 
+async function sendTelegramInlineKeyboard(chatId: number | string, text: string, inlineKeyboard: any[][]) {
+  if (!TELEGRAM_BOT_TOKEN) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: inlineKeyboard,
+        },
+      }),
+    });
+  } catch (err) {
+    console.error("[Telegram send keyboard error]:", err);
+  }
+}
+
+async function answerCallbackQuery(callbackQueryId: string, text?: string) {
+  if (!TELEGRAM_BOT_TOKEN) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        text,
+      }),
+    });
+  } catch {}
+}
+
 async function sendTelegramPhoto(chatId: number | string, photoUrl: string, caption?: string) {
   if (!TELEGRAM_BOT_TOKEN) return;
   try {
@@ -119,11 +162,93 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const update = await req.json();
+
+    // ── 1. HANDLE INLINE KEYBOARD ACTIONS (Callback Queries) ─────────────────
+    if (update.callback_query) {
+      const cb = update.callback_query;
+      const data = cb.data || "";
+      const chatId = cb.message?.chat?.id;
+      const callbackQueryId = cb.id;
+
+      after(async () => {
+        try {
+          if (chatId) await setTelegramOwnerChatId(chatId);
+
+          // ACTION: Save pending photo to specific agent's Image Vault
+          if (data.startsWith("vault_")) {
+            const agentId = data.replace("vault_", "");
+            const label = AGENT_VAULT_LABELS[agentId] || agentId;
+            const pendingKey = `tg_pending_img_${chatId}`;
+            const row = await db.select().from(appConfig).where(eq(appConfig.key, pendingKey)).get();
+
+            if (row && row.value) {
+              const res = await queueUserImage(agentId, row.value, "Telegram Photo Drop");
+              await answerCallbackQuery(callbackQueryId, `Saved to ${label}!`);
+              await sendTelegramMessage(
+                chatId,
+                `✅ *Saved to ${label}'s Image Vault!*\n\nCurrently *${res.queuedCount} photo(s)* queued in this agent's vault.\nNext time ${label} runs its scheduled post, it will use your photo with a custom persona caption instead of generating one!`
+              );
+              await db.delete(appConfig).where(eq(appConfig.key, pendingKey)).run();
+            } else {
+              await answerCallbackQuery(callbackQueryId, "Photo expired. Please re-send.");
+            }
+          }
+
+          // ACTION: Approve post and schedule it
+          else if (data.startsWith("approve_")) {
+            const postId = data.replace("approve_", "");
+            await db.update(posts)
+              .set({ status: "scheduled" })
+              .where(eq(posts.id, postId))
+              .run();
+            await answerCallbackQuery(callbackQueryId, "Post Approved!");
+            await sendTelegramMessage(chatId, `✅ *Post Approved!* It has been scheduled and will publish automatically at its time.`);
+          }
+
+          // ACTION: Publish post immediately via Locoagent
+          else if (data.startsWith("publish_")) {
+            const postId = data.replace("publish_", "");
+            await answerCallbackQuery(callbackQueryId, "Publishing now...");
+            await sendTelegramMessage(chatId, `⚡ *Publishing now via Locoagent...*`);
+            const pubRes = await executeLocoagentPublish(postId);
+            if (pubRes?.success) {
+              await sendTelegramMessage(chatId, `🎉 *Post Published Successfully!* ${pubRes.publishedUrl ? `[View Post](${pubRes.publishedUrl})` : "Live on social media."}`);
+            } else {
+              await sendTelegramMessage(chatId, `⚠️ Publish notice: ${pubRes?.error || "Done, check connected accounts"}`);
+            }
+          }
+
+          // ACTION: Reject post
+          else if (data.startsWith("reject_")) {
+            const postId = data.replace("reject_", "");
+            await db.delete(posts).where(eq(posts.id, postId)).run();
+            await answerCallbackQuery(callbackQueryId, "Draft Rejected");
+            await sendTelegramMessage(chatId, `🗑️ *Post Draft Rejected and removed from queue.*`);
+          }
+
+          // ACTION: Toggle Auto-Approve
+          else if (data === "autoapprove_on") {
+            await setAutoApproveSetting(true);
+            await answerCallbackQuery(callbackQueryId, "Auto-Approve Enabled");
+            await sendTelegramMessage(chatId, `⚙️ *Auto-Approve is now ON!* All newly generated posts will be approved & scheduled automatically without asking.`);
+          } else if (data === "autoapprove_off") {
+            await setAutoApproveSetting(false);
+            await answerCallbackQuery(callbackQueryId, "Auto-Approve Disabled");
+            await sendTelegramMessage(chatId, `⏸️ *Auto-Approve is now OFF.* All newly generated posts will wait for your thumb-up approval.`);
+          }
+        } catch (err: any) {
+          console.error("[Telegram Callback Error]:", err);
+        }
+      });
+
+      return NextResponse.json({ ok: true });
+    }
+
+    // ── 2. HANDLE REGULAR MESSAGES & PHOTOS ──────────────────────────────────
     if (!update.message) {
       return NextResponse.json({ ok: true });
     }
 
-    // Suppress Telegram duplicate webhook deliveries
     if (isDuplicateUpdate(update.update_id)) {
       console.log(`[Telegram Webhook] Suppressed duplicate update_id: ${update.update_id}`);
       return NextResponse.json({ ok: true, duplicate: true });
@@ -131,42 +256,99 @@ export async function POST(req: Request) {
 
     const message = update.message;
     const chatId = message.chat.id;
-    const text = message.text || message.caption || "";
+    const text = (message.text || message.caption || "").trim();
 
-    // Process asynchronously so Telegram gets HTTP 200 OK immediately in <30ms
     after(async () => {
       try {
-        // Immediate visual typing feedback
+        await setTelegramOwnerChatId(chatId);
         await sendTelegramChatAction(chatId, "typing");
 
-        // Handle /start command
+        // Command: /start
         if (text === "/start") {
+          const autoApprove = await getAutoApproveSetting();
           await sendTelegramMessage(
             chatId,
-            `👋 *Welcome to Laxis Socials Master Agent!*\n\nI am your Autonomous Agency Director. You can:\n• Send instructions, goals, or check system status\n• Ask questions about your 6 worker agents & quotas\n• Send photos for instant AI visual critique & feedback\n• Ask to generate social graphics ("Generate an image of...")\n\nWhat are we building today?`
+            `👋 *Welcome to Laxis Socials Master Director!*\n\n` +
+            `Here are your superpowers:\n` +
+            `• *Send any photo*: Directly queues into an agent's personal Image Vault so it posts your photos with custom captions!\n` +
+            `• *Review & Approve*: Get instant cards to approve or publish posts with 1 tap\n` +
+            `• */autoapprove*: Toggle auto-approval ON or OFF (Current: *${autoApprove ? "ON ✅" : "OFF ⏸️"}*)\n` +
+            `• */vault*: View how many photos each agent has waiting in its store\n` +
+            `• */pending*: View posts waiting for your approval right now\n\n` +
+            `You can also chat with me naturally to give any instruction to your 6 agents!`
           );
+          return;
+        }
+
+        // Command: /autoapprove
+        if (text.startsWith("/autoapprove")) {
+          const current = await getAutoApproveSetting();
+          const next = !current;
+          await setAutoApproveSetting(next);
+          await sendTelegramMessage(
+            chatId,
+            `⚙️ *Auto-Approve Setting Updated!*\n\nStatus is now: *${next ? "ON ✅ (All posts publish automatically)" : "OFF ⏸️ (Posts wait for your review)"}*`
+          );
+          return;
+        }
+
+        // Command: /vault
+        if (text.startsWith("/vault")) {
+          const summaryLines: string[] = [];
+          for (const [key, label] of Object.entries(AGENT_VAULT_LABELS)) {
+            const count = await getAgentQueuedCount(key);
+            summaryLines.push(`• *${label}*: ${count} queued photo(s)`);
+          }
+          await sendTelegramMessage(
+            chatId,
+            `📦 *Agent Image Vault Status:*\n\n${summaryLines.join("\n")}\n\n_Tip: Send any photo here to queue it for an agent!_`
+          );
+          return;
+        }
+
+        // Command: /pending
+        if (text.startsWith("/pending")) {
+          const pending = await db.select().from(posts).where(eq(posts.status, "pending_approval")).limit(5).all();
+          if (pending.length === 0) {
+            await sendTelegramMessage(chatId, `✨ *No posts pending approval!* Everything is up to date.`);
+            return;
+          }
+
+          await sendTelegramMessage(chatId, `📋 *Found ${pending.length} post(s) waiting for approval:*`);
+          for (const p of pending) {
+            const media = JSON.parse(p.mediaUrls || "[]");
+            const keyboard = [
+              [
+                { text: "✅ Approve & Schedule", callback_data: `approve_${p.id}` },
+                { text: "⚡ Publish Now", callback_data: `publish_${p.id}` },
+              ],
+              [
+                { text: "🗑️ Reject", callback_data: `reject_${p.id}` },
+              ],
+            ];
+            await sendTelegramInlineKeyboard(
+              chatId,
+              `📌 *${p.title}*\n_${p.caption.slice(0, 180)}..._\nScheduled for: ${p.scheduledAt ? new Date(p.scheduledAt).toLocaleTimeString() : "Next Slot"}`,
+              keyboard
+            );
+          }
           return;
         }
 
         let userImageUrl: string | undefined;
 
-        // Handle photo sent by user on Telegram - fetch buffer directly & convert to base64 Data URL
+        // Download user photo if sent
         if (message.photo && Array.isArray(message.photo) && message.photo.length > 0) {
           const fileId = message.photo[message.photo.length - 1].file_id;
           if (TELEGRAM_BOT_TOKEN) {
             try {
-              const fileRes = await fetch(
-                `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`
-              );
+              const fileRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
               const fileData = await fileRes.json();
-              if (fileData.result && fileData.result.file_path) {
-                const imgRes = await fetch(
-                  `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`
-                );
+              if (fileData.result?.file_path) {
+                const imgRes = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`);
                 if (imgRes.ok) {
                   const buffer = await imgRes.arrayBuffer();
-                  const base64 = Buffer.from(buffer).toString("base64");
-                  userImageUrl = `data:image/jpeg;base64,${base64}`;
+                  userImageUrl = `data:image/jpeg;base64,${Buffer.from(buffer).toString("base64")}`;
                 }
               }
             } catch (pErr) {
@@ -174,35 +356,87 @@ export async function POST(req: Request) {
             }
           }
         } else if (message.document && message.document.mime_type?.startsWith("image/")) {
-          // Handle uncompressed image files sent as documents
           const fileId = message.document.file_id;
           if (TELEGRAM_BOT_TOKEN) {
             try {
-              const fileRes = await fetch(
-                `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`
-              );
+              const fileRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
               const fileData = await fileRes.json();
-              if (fileData.result && fileData.result.file_path) {
-                const imgRes = await fetch(
-                  `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`
-                );
+              if (fileData.result?.file_path) {
+                const imgRes = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`);
                 if (imgRes.ok) {
                   const buffer = await imgRes.arrayBuffer();
-                  const base64 = Buffer.from(buffer).toString("base64");
                   const mime = message.document.mime_type || "image/jpeg";
-                  userImageUrl = `data:${mime};base64,${base64}`;
+                  userImageUrl = `data:${mime};base64,${Buffer.from(buffer).toString("base64")}`;
                 }
               }
             } catch (dErr) {
-              console.error("[Telegram Webhook] Document image download error:", dErr);
+              console.error("[Telegram Webhook] Document image error:", dErr);
             }
           }
         }
 
+        // ── 3. IF A PHOTO WAS RECEIVED: ROUTE TO AGENT IMAGE VAULT ───────────
+        if (userImageUrl) {
+          let targetedAgentId: string | null = null;
+          const lower = text.toLowerCase();
+          if (lower.includes("laxdollar") || lower.includes("trading") || lower.includes("deriv")) {
+            targetedAgentId = "fb_laxdollar";
+          } else if (lower.includes("jotrainer") || lower.includes("job") || lower.includes("gig") || lower.includes("remote")) {
+            targetedAgentId = "fb_jotrainer";
+          } else if (lower.includes("contentor") || lower.includes("sheng") || lower.includes("comedy") || lower.includes("meme")) {
+            targetedAgentId = "fb_contentor";
+          } else if (lower.includes("shader") || lower.includes("shade") || lower.includes("tea")) {
+            targetedAgentId = "ig_shader";
+          } else if (lower.includes("real") || lower.includes("confession") || lower.includes("drama")) {
+            targetedAgentId = "ig_real";
+          }
+
+          if (targetedAgentId) {
+            const res = await queueUserImage(targetedAgentId, userImageUrl, text || "Telegram Photo Drop");
+            const label = AGENT_VAULT_LABELS[targetedAgentId] || targetedAgentId;
+            await sendTelegramMessage(
+              chatId,
+              `✅ *Photo Saved to ${label}'s Image Vault!*\n\nCurrently *${res.queuedCount} photo(s)* queued for this agent.\nWhen its scheduled post time arrives, it will use your photo with a custom persona caption instead of generating one!`
+            );
+            return;
+          }
+
+          // If no specific agent was mentioned in the caption, show inline keyboard selection buttons
+          const pendingKey = `tg_pending_img_${chatId}`;
+          const nowIso = new Date().toISOString();
+          await db.insert(appConfig).values({
+            key: pendingKey,
+            value: userImageUrl,
+            updatedAt: nowIso,
+          }).onConflictDoUpdate({
+            target: appConfig.key,
+            set: { value: userImageUrl, updatedAt: nowIso },
+          }).run();
+
+          await sendTelegramInlineKeyboard(
+            chatId,
+            `📸 *Personal Photo Received!*\n\nWhich agent's Image Vault would you like to save this photo to? Next time that agent posts, it will use your photo instead of generating an AI image!`,
+            [
+              [
+                { text: "💰 LAXDOLLAR (Trading)", callback_data: "vault_fb_laxdollar" },
+                { text: "💼 JOTRAINER (Jobs)", callback_data: "vault_fb_jotrainer" },
+              ],
+              [
+                { text: "🎭 CONTENTOR (Comedy)", callback_data: "vault_fb_contentor" },
+                { text: "📸 IG REAL (Confessions)", callback_data: "vault_ig_real" },
+              ],
+              [
+                { text: "🎨 IG SHADER (The Shade)", callback_data: "vault_ig_shader" },
+              ],
+            ]
+          );
+          return;
+        }
+
+        // ── 4. REGULAR CONVERSATIONAL CHAT WITH MASTER AGENT ─────────────────
         const campaignId = "default_campaign";
         const nowIso = new Date().toISOString();
 
-        // Load previous 10 messages from database for conversational context
         const history = (await db
           .select()
           .from(agentMessages)
@@ -213,40 +447,32 @@ export async function POST(req: Request) {
           .reverse()
           .map((m) => ({ sender: m.sender, text: m.text }));
 
-        // Save incoming user message to database
         const userMsgId = `tg_user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
         await db.insert(agentMessages).values({
           id: userMsgId,
           campaignId,
           agentId: "master",
           sender: "user",
-          text: text || (userImageUrl ? "[Attached Photo]" : "Hello"),
-          metadata: userImageUrl ? JSON.stringify({ hasMedia: true, platform: "telegram" }) : JSON.stringify({ platform: "telegram" }),
+          text: text || "Hello",
+          metadata: JSON.stringify({ platform: "telegram" }),
           createdAt: nowIso,
         }).run();
 
-        // Refresh typing indicator before model generation
-        await sendTelegramChatAction(chatId, userImageUrl ? "upload_photo" : "typing");
-
-        // Ask Master Agent with live system ground truth, conversation history, and real action execution
-        const userPrompt = text || (userImageUrl ? "Explain what is in this image" : "Hello");
         const masterRes = await askMasterAgent(
-          userPrompt,
+          text || "Hello",
           history,
-          userImageUrl,
+          undefined,
           undefined,
           undefined,
           `tg_${chatId}`
         );
 
-        // Send Telegram response
         if (masterRes.mediaUrl) {
           await sendTelegramPhoto(chatId, masterRes.mediaUrl, masterRes.text);
         } else {
           await sendTelegramMessage(chatId, masterRes.text);
         }
 
-        // Save Master Agent reply to database
         const agentMsgId = `tg_agent_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
         await db.insert(agentMessages).values({
           id: agentMsgId,
@@ -257,13 +483,13 @@ export async function POST(req: Request) {
           metadata: masterRes.mediaUrl ? JSON.stringify({ mediaUrl: masterRes.mediaUrl, platform: "telegram" }) : JSON.stringify({ platform: "telegram" }),
           createdAt: new Date().toISOString(),
         }).run();
+
       } catch (err: any) {
         console.error("[Telegram webhook after() error]:", err);
         await sendTelegramMessage(chatId, "Sorry, I ran into a brief hiccup. Could you try asking again?");
       }
     });
 
-    // Return 200 OK to Telegram immediately to prevent timeouts and duplicate retries
     return NextResponse.json({ ok: true });
   } catch (error: any) {
     console.error("Telegram webhook root error:", error);
