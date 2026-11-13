@@ -13,6 +13,7 @@ import {
   AGENT_VAULT_LABELS,
 } from "@/lib/vault";
 import { executeHermesPublish } from "@/lib/locoagent";
+import { tickScheduler } from "@/lib/scheduler";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -274,7 +275,8 @@ export async function POST(req: Request) {
             `• *Review & Approve*: Get instant cards to approve or publish posts with 1 tap\n` +
             `• */autoapprove*: Toggle auto-approval ON or OFF (Current: *${autoApprove ? "ON ✅" : "OFF ⏸️"}*)\n` +
             `• */vault*: View how many photos each agent has waiting in its store\n` +
-            `• */pending*: View posts waiting for your approval right now\n\n` +
+            `• */pending*: View posts waiting for your approval right now\n` +
+            `• */autopilot*: Run scheduler immediately via Hermes to publish due posts\n\n` +
             `You can also chat with me naturally to give any instruction to your 6 agents!`
           );
           return;
@@ -331,6 +333,21 @@ export async function POST(req: Request) {
               `📌 *${p.title}*\n_${p.caption.slice(0, 180)}..._\nScheduled for: ${p.scheduledAt ? new Date(p.scheduledAt).toLocaleTimeString() : "Next Slot"}`,
               keyboard
             );
+          }
+          return;
+        }
+
+        // Command: /autopilot or /tick
+        if (text.startsWith("/autopilot") || text.startsWith("/tick")) {
+          await sendTelegramMessage(chatId, `🔄 *Running Autopilot Tick via Hermes...* Checking scheduled posts & tasks.`);
+          try {
+            const tickRes = await tickScheduler();
+            await sendTelegramMessage(
+              chatId,
+              `✅ *Autopilot Tick Finished!*\n\n• Published: *${tickRes.publishedCount}* post(s)\n• Tasks processed: *${tickRes.tasksRunCount}* task(s)`
+            );
+          } catch (tErr: any) {
+            await sendTelegramMessage(chatId, `⚠️ Autopilot Notice: ${tErr?.message || "Check server logs"}`);
           }
           return;
         }
