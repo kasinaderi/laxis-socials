@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { posts } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
-import { executeLocoagentPublish } from "@/lib/locoagent";
+import { executeHermesPublish } from "@/lib/locoagent";
 
 export async function GET(req: Request) {
   try {
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
       .run();
 
     if (publishNow) {
-      const pubResult = await executeLocoagentPublish(id);
+      const pubResult = await executeHermesPublish(id);
       return NextResponse.json({ success: true, post: { id, status: "published" }, pubResult });
     }
 

@@ -4,7 +4,7 @@ import { eq, and, lte } from "drizzle-orm";
 import { askWorkerAgent } from "./ai";
 import { generateSocialImage } from "./images";
 import { buildFreeVideoUrl, getRandomViralPrompt } from "./videos";
-import { executeLocoagentPublish } from "./locoagent";
+import { executeHermesPublish } from "./locoagent";
 import {
   getAgentContentMemory,
   buildAntiDuplicationDirective,
@@ -313,7 +313,7 @@ export async function tickScheduler(): Promise<{ publishedCount: number; tasksRu
 
   let publishedCount = 0;
   for (const post of duePosts) {
-    await executeLocoagentPublish(post.id);
+    await executeHermesPublish(post.id);
     publishedCount++;
   }
 

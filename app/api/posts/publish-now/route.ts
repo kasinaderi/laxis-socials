@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { executeLocoagentPublish } from "@/lib/locoagent";
+import { executeHermesPublish } from "@/lib/locoagent";
 
 export async function POST(req: Request) {
   try {
@@ -8,7 +8,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Post ID is required" }, { status: 400 });
     }
 
-    const result = await executeLocoagentPublish(postId);
+    const result = await executeHermesPublish(postId);
     return NextResponse.json(result);
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

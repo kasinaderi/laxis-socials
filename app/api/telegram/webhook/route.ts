@@ -12,7 +12,7 @@ import {
   setTelegramOwnerChatId,
   AGENT_VAULT_LABELS,
 } from "@/lib/vault";
-import { executeLocoagentPublish } from "@/lib/locoagent";
+import { executeHermesPublish } from "@/lib/locoagent";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -210,7 +210,7 @@ export async function POST(req: Request) {
             const postId = data.replace("publish_", "");
             await answerCallbackQuery(callbackQueryId, "Publishing now...");
             await sendTelegramMessage(chatId, `⚡ *Publishing now via Locoagent...*`);
-            const pubRes = await executeLocoagentPublish(postId);
+            const pubRes = await executeHermesPublish(postId);
             if (pubRes?.success) {
               await sendTelegramMessage(chatId, `🎉 *Post Published Successfully!* ${pubRes.publishedUrl ? `[View Post](${pubRes.publishedUrl})` : "Live on social media."}`);
             } else {
