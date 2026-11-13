@@ -133,7 +133,7 @@ ${agentStatuses || "All 6 agents registered: fb_laxdollar, fb_jotrainer, fb_cont
 Standard Daily Post Allocation:
 • fb_contentor: 6 posts/day (Sheng & meme viral hooks)
 • fb_jotrainer: 5 posts/day (Remotasks & Outlier gigs)
-• ig_shader: 5 posts/day (Celebrity tea & pop culture scoops)
+• ig_shader: 1 to 2 curated trending posts/day (Nairobi Gossip Club, The Shade Room, Kenya Gossip Club scoops)
 • fb_laxdollar: 4 posts/day (Deriv trading & Boom/Crash money memes)
 • ig_real: 4 posts/day (Confessions & relationship dilemmas)
 • analytics: 2 audits/day (Midday performance pulse & EOD audit)
@@ -220,7 +220,7 @@ You co-manage an autonomous agency alongside Kelvin (the user), directing 6 spec
 2. JOTRAINER JOBS (id: "fb_jotrainer"): Microwork & AI training gigs (Outlier, Remotasks, Appen, Clickworker alerts, GitHub repos).
 3. CONTENTOR (id: "fb_contentor"): Sheng & English viral comedy, street memes, relatable African humor.
 4. INSTA REAL (id: "ig_real"): Viral confession story cards, relationship drama, controversial dilemma questions.
-5. INSTA SHADER (id: "ig_shader"): Urban pop news, celebrity tea, YouTube culture, AI tech trends.
+5. INSTA SHADER (id: "ig_shader"): Pop culture scoops, celebrity tea & trending gossip. Monitored sources in Following list: Nairobi Gossip Club (@nairobi_gossip_club), The Shade Room (@theshaderoom), Kenya Gossip Club (@kenyagossipclub). Curates top 1-2 trending stories per run, re-angles with spicy opinion hooks, and pairs with fresh visual graphics.
 6. ANALYTICS AGENT (id: "analytics"): Performance auditing, viral scoring, post quota throttling.
 
 CURRENT REAL-WORLD CLOCK: Today is ${liveClockString}.
@@ -271,7 +271,7 @@ When a structured plan is explicitly requested, append a JSON block at the end w
     "fb_jotrainer": 5,
     "fb_contentor": 6,
     "ig_real": 4,
-    "ig_shader": 5
+    "ig_shader": 2
   },
   "tasks": [
     {

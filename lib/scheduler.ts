@@ -178,10 +178,16 @@ export async function runAgentTask(taskId: string): Promise<void> {
       targetGroups = [{ platform: "instagram", groupName: "@instareal_confessions" }];
     } else if (task.agentId === "ig_shader") {
       const res = await askWorkerAgent(
-        "INSTA SHADER (Pop Culture, Celebrity Tea & Viral AI Scandals)",
-        task.instructions,
+        "INSTA SHADER (Celebrity Tea, Trending Entertainment & Pop Culture Curator)",
+        task.instructions || "Curate the top 1-2 trending entertainment scoops from monitored sources (Nairobi Gossip Club, The Shade Room, Kenya Gossip Club). Re-angle the scoop into a viral, spicy post with an opinion hook and question for the comments.",
         {
-          tone: "The Shade Room style spicy commentary, engaging hooks, opinion polls",
+          monitoredSources: [
+            "@nairobi_gossip_club (Nairobi Gossip Club)",
+            "@theshaderoom (The Shade Room)",
+            "@kenyagossipclub (Kenya Gossip Club)",
+          ],
+          sourceMonitoringRule: "Extract the core hook of the trending entertainment or celebrity news from these monitored following pages. Never copy-paste verbatim. Paraphrase with witty commentary, high-energy drama, and a polarizing closing question (e.g. 'Roommates, what's your take?' or 'Wasee, is this valid or clout chasing?').",
+          tone: "The Shade Room / Nairobi Gossip style spicy commentary, engaging hooks, opinion polls",
           visualContext: isUserProvidedImage ? "Using user's personal photo. Craft spicy, engaging entertainment gossip commentary for this photo!" : undefined,
         },
         antiDupDirective
@@ -191,7 +197,7 @@ export async function runAgentTask(taskId: string): Promise<void> {
       if (!mediaUrl) {
         const rawPrompt =
           res.mediaPrompt ||
-          "Paparazzi style glossy glamour shot under flashbulbs, red carpet aesthetic, entertainment magazine cover";
+          "Dramatic entertainment breaking news graphic card, bold stylized typography background, high contrast red carpet celebrity snapshot, viral Instagram magazine editorial style";
         const enriched = enrichVisualPrompt(rawPrompt);
         const img = await generateSocialImage(enriched.prompt, "4:5", enriched.seed);
         mediaUrl = img.url;
