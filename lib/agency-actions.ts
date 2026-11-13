@@ -992,7 +992,7 @@ export async function executeAgentChromeTask(
       const hermesStatus = await checkHermesStatus(activeSb).catch(() => ({ installed: false, configured: false, version: "" }));
       if (hermesStatus.configured) {
         console.log(`[Hermes] Active on ${displayName} VM. Handing off full PC control to in-VM Hermes agent...`);
-        const hermesResult = await runHermesTask(activeSb, rawPrompt);
+        const hermesResult = await runHermesTask(activeSb, rawPrompt, 180_000, agentId);
         if (hermesResult.mode === "hermes" && hermesResult.success) {
           const mediaUrl = hermesResult.screenshotB64 ? `data:image/png;base64,${hermesResult.screenshotB64}` : undefined;
           await db.update(agents).set({ status: "idle", currentTask: null }).where(eq(agents.id, agentId)).run();

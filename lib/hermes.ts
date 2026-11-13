@@ -13,6 +13,10 @@
  * ============================================================
  */
 
+import { db } from "@/db";
+import { appConfig } from "@/db/schema";
+import { eq } from "drizzle-orm";
+
 export interface HermesAgentConfig {
   agentId: string;
   modelProvider: "gemini" | "nous" | "openai" | "anthropic" | "openrouter";
@@ -26,6 +30,43 @@ export interface HermesAgentConfig {
 export const HERMES_KEY_1 = process.env.GEMINI_HERMES_KEY_1 || "";
 export const HERMES_KEY_2 = process.env.GEMINI_HERMES_KEY_2 || "";
 export const HERMES_KEY_3 = process.env.GEMINI_HERMES_KEY_3 || "";
+
+/**
+ * Procedural Memory Persistence (Turso Cloud SQLite)
+ * Restores and persists learned routes across sandbox VM restarts
+ */
+export async function getAgentHermesRoutes(agentId: string): Promise<Record<string, any>> {
+  try {
+    const key = `hermes_routes_${agentId}`;
+    const row = await db.select().from(appConfig).where(eq(appConfig.key, key)).get();
+    if (row && row.value) {
+      return JSON.parse(row.value);
+    }
+  } catch (err) {
+    console.warn(`[Hermes] Notice reading routes for ${agentId}:`, err);
+  }
+  return {};
+}
+
+export async function saveAgentHermesRoutes(agentId: string, routes: Record<string, any>): Promise<void> {
+  try {
+    if (!routes || Object.keys(routes).length === 0) return;
+    const key = `hermes_routes_${agentId}`;
+    const value = JSON.stringify(routes);
+    const now = new Date().toISOString();
+    await db.insert(appConfig).values({
+      key,
+      value,
+      updatedAt: now,
+    }).onConflictDoUpdate({
+      target: appConfig.key,
+      set: { value, updatedAt: now }
+    }).run();
+    console.log(`[Hermes] ✓ Persisted ${Object.keys(routes).length} learned routes to database for ${agentId}`);
+  } catch (err) {
+    console.warn(`[Hermes] Notice saving routes for ${agentId}:`, err);
+  }
+}
 
 /**
  * Returns the assigned primary and failover keys for each agent
@@ -330,21 +371,30 @@ Look at the current live screen. What is the next logical step to complete the o
             final_b64 = take_screenshot() or last_b64
 
             # SAVE SUCCESSFUL ROUTE TO PROCEDURAL MEMORY
-            # This ensures that next time you ask something similar, Hermes navigates instantly!
-            if domain and ("search" in raw_task.lower() or "find" in raw_task.lower()):
-                save_learned_route(f"{domain}_search", {
+            # Learns ANY successful action sequence (search, post, navigate, settings, follow, click, etc.)
+            task_type = "action"
+            for candidate in ["search", "find", "post", "publish", "login", "navigate", "settings", "profile", "comment", "like", "follow", "message", "trade", "analyze", "report", "download"]:
+                if candidate in raw_task.lower():
+                    task_type = candidate
+                    break
+
+            route_key = f"{domain}_{task_type}" if domain else f"task_{task_type}"
+            if len(action_history) > 0:
+                save_learned_route(route_key, {
                     "domain": domain,
-                    "type": "search",
+                    "type": task_type,
                     "sample_query": raw_task,
-                    "action_sequence": action_history[-4:]
+                    "action_sequence": action_history[-6:]
                 })
 
+            routes_dump = load_routes()
             print(json.dumps({
                 "success": True,
                 "summary": summary,
                 "screenshot_b64": final_b64,
                 "steps_taken": step,
-                "route_cached": True
+                "route_cached": True,
+                "learned_routes": routes_dump
             }))
             return
 
@@ -385,12 +435,14 @@ Look at the current live screen. What is the next logical step to complete the o
     # Final step reached
     final_b64 = take_screenshot() or last_b64
     summary = f"Completed {len(action_history)} autonomous steps on workstation: " + "; ".join(action_history[-3:])
+    routes_dump = load_routes()
     print(json.dumps({
         "success": True,
         "summary": summary,
         "screenshot_b64": final_b64,
         "steps_taken": len(action_history),
-        "route_cached": False
+        "route_cached": False,
+        "learned_routes": routes_dump
     }))
 
 if __name__ == "__main__":
@@ -439,8 +491,20 @@ export async function installHermesInSandbox(sb: any, agentId?: string): Promise
     // 1. Ensure scrot is installed for fast visual snapshots
     await sb.commands.run(`sudo apt-get install -y -qq scrot 2>/dev/null || true`).catch(() => {});
 
-    // 2. Create memory directory for route caching
+    // 2. Create memory directory for route caching and restore any past learned routes
     await sb.commands.run(`mkdir -p /home/user/.hermes/memory`).catch(() => {});
+    if (agentId) {
+      try {
+        const savedRoutes = await getAgentHermesRoutes(agentId);
+        if (savedRoutes && Object.keys(savedRoutes).length > 0) {
+          const safeJson = JSON.stringify(savedRoutes, null, 2).replace(/'/g, "'\\''");
+          await sb.commands.run(`cat << 'ROUTESEOF' > /home/user/.hermes/memory/learned_routes.json\n${safeJson}\nROUTESEOF`).catch(() => {});
+          console.log(`[Hermes] Restored ${Object.keys(savedRoutes).length} learned routes into VM for ${agentId}`);
+        }
+      } catch (e: any) {
+        console.warn(`[Hermes] Notice restoring memory for ${agentId}:`, e?.message);
+      }
+    }
 
     // 3. Deploy python computer-use agent script
     await sb.commands.run(`cat << 'HERMESEOF' > /home/user/hermes_agent.py\n${IN_VM_HERMES_AGENT_PY}\nHERMESEOF\nchmod +x /home/user/hermes_agent.py`).catch(() => {});
@@ -495,12 +559,14 @@ ENVEOF
 export async function runHermesTask(
   sb: any,
   task: string,
-  timeoutMs: number = 180_000
+  timeoutMs: number = 180_000,
+  agentId?: string
 ): Promise<{
   success: boolean;
   summary: string;
   screenshotB64: string;
   mode: "hermes" | "fallback_cdp";
+  learnedRoutes?: Record<string, any>;
 }> {
   if (!sb?.commands?.run) {
     return { success: false, summary: "No sandbox available", screenshotB64: "", mode: "fallback_cdp" };
@@ -521,11 +587,15 @@ export async function runHermesTask(
       const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.learned_routes && agentId) {
+          saveAgentHermesRoutes(agentId, parsed.learned_routes).catch(() => {});
+        }
         return {
           success: parsed.success !== false,
           summary: parsed.summary || parsed.result || "Task completed on workstation.",
           screenshotB64: parsed.screenshot_b64 || "",
           mode: "hermes",
+          learnedRoutes: parsed.learned_routes,
         };
       }
     } catch {}

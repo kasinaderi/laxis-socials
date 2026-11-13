@@ -13,6 +13,7 @@ import {
   configureHermesAgent,
   runHermesTask,
   checkHermesStatus,
+  getAgentHermesRoutes,
   getDefaultHermesConfigForAgent,
   ALL_AGENT_IDS,
   AGENT_NAMES,
@@ -37,12 +38,17 @@ export async function GET(req: NextRequest) {
   const results = await Promise.all(
     agentsToCheck.map(async (id) => {
       const sb = getActiveSandbox(id);
+      const learnedRoutes = await getAgentHermesRoutes(id);
+      const learnedRoutesCount = Object.keys(learnedRoutes).length;
+
       if (!sb) {
         return {
           agentId: id,
           name: AGENT_NAMES[id] || id,
           vmStatus: "standby",
           hermes: { installed: false, configured: false, version: "" },
+          learnedRoutesCount,
+          learnedRoutes,
         };
       }
 
@@ -52,6 +58,8 @@ export async function GET(req: NextRequest) {
         name: AGENT_NAMES[id] || id,
         vmStatus: "active",
         hermes: status,
+        learnedRoutesCount,
+        learnedRoutes,
       };
     })
   );
@@ -106,7 +114,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "task is required for run action" }, { status: 400 });
       }
 
-      const result = await runHermesTask(sb, task, 120_000);
+      const result = await runHermesTask(sb, task, 120_000, agentId);
 
       return NextResponse.json({
         success: result.success,
@@ -118,6 +126,7 @@ export async function POST(req: NextRequest) {
         screenshotDataUrl: result.screenshotB64
           ? `data:image/png;base64,${result.screenshotB64}`
           : null,
+        learnedRoutesCount: result.learnedRoutes ? Object.keys(result.learnedRoutes).length : undefined,
       });
     }
 
