@@ -25,7 +25,7 @@ export interface AgentOfficePlacement {
   target: string;
   dailyPosts: string;
   seatNumber: 1 | 2 | 3 | 4;
-  zone: "red" | "yellow" | "green" | "blue";
+  zone: "red" | "yellow" | "green" | "blue" | "purple";
   zoneLabel: string;
   defaultCoords: { leftPercent: number; topPercent: number; widthPercent: number };
 }
@@ -54,11 +54,11 @@ export const DEFAULT_AGENT_CONFIGS: AgentOfficePlacement[] = [
   },
   {
     id: "fb_laxdollar",
-    name: "LAXDOLLAR FB",
-    role: "Deriv Trading & laxdollar.site Marketer",
+    name: "LAXDOLLAR (Trading & Hustles)",
+    role: "Deriv Trading, Forex & Remote Gigs Marketer",
     emoji: "📈",
-    niche: "Deriv Boom & Crash, Synthetic Indices & Money Memes",
-    target: "laxdollar.site & 3x FB Trading Groups",
+    niche: "Deriv Synthetic Indices, Forex, Remotasks & Outlier Jobs",
+    target: "laxdollar.site, Deriv Groups & Remote Work Hubs",
     dailyPosts: "3-8 posts/day (Dedicated Agent PC)",
     seatNumber: 3,
     zone: "yellow",
@@ -67,15 +67,15 @@ export const DEFAULT_AGENT_CONFIGS: AgentOfficePlacement[] = [
   },
   {
     id: "fb_jotrainer",
-    name: "JOTRAINER JOBS",
-    role: "Microwork & AI Training Jobs Scout",
-    emoji: "💼",
-    niche: "Remote AI Annotation, Outlier & Remotasks Job Alerts",
-    target: "Online Jobs Kenya & Remote Work Africa Groups",
-    dailyPosts: "3-8 posts/day (Dedicated Agent PC)",
+    name: "JOTRAINER (Pinterest)",
+    role: "Pinterest Marketing & Viral Pin Specialist",
+    emoji: "📌",
+    niche: "Viral Pin Graphics, Topic Boards & Outbound Link Traffic",
+    target: "Pinterest Feed, Group Boards & Destination Links",
+    dailyPosts: "3-8 pins/day (Dedicated Agent PC)",
     seatNumber: 4,
-    zone: "yellow",
-    zoneLabel: "Facebook Agency Zone",
+    zone: "purple",
+    zoneLabel: "Pinterest Marketing Zone",
     defaultCoords: { leftPercent: 32.0, topPercent: 38.0, widthPercent: 10.5 },
   },
   {

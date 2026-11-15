@@ -10,7 +10,7 @@ import {
   Sparkles,
   Bot,
   TrendingUp,
-  Briefcase,
+  Pin,
   Flame,
   MessageCircle,
   Newspaper,
@@ -53,7 +53,7 @@ export default function AIAgentPage() {
   const agentIcons: Record<string, any> = {
     master: Sparkles,
     fb_laxdollar: TrendingUp,
-    fb_jotrainer: Briefcase,
+    fb_jotrainer: Pin,
     fb_contentor: Flame,
     ig_real: MessageCircle,
     ig_shader: Newspaper,

@@ -82,12 +82,12 @@ export async function runAgentTask(taskId: string): Promise<void> {
     // 2. Agent Specific Execution Logic with Anti-Duplication Directives
     if (task.agentId === "fb_laxdollar") {
       const res = await askWorkerAgent(
-        "LAXDOLLAR FB (Deriv Trading & laxdollar.site Affiliate Marketer)",
+        "LAXDOLLAR (Deriv Trading, Forex & Remote Gigs Marketer)",
         task.instructions,
         {
           targetBrand: "https://laxdollar.site",
-          niche: "Deriv Boom & Crash, Synthetic Indices, Money Memes, African Traders",
-          visualContext: isUserProvidedImage ? "Using user's personal uploaded photo/screenshot. Craft an authentic, exciting trading caption tailored to this image!" : undefined,
+          niche: "Deriv Boom & Crash, Synthetic Indices, Forex, Remotasks & Outlier AI Training Gigs, Money Memes",
+          visualContext: isUserProvidedImage ? "Using user's personal uploaded photo/screenshot. Craft an authentic, exciting trading or remote work caption tailored to this image!" : undefined,
         },
         antiDupDirective
       );
@@ -96,7 +96,7 @@ export async function runAgentTask(taskId: string): Promise<void> {
       if (!mediaUrl) {
         const rawPrompt =
           res.mediaPrompt ||
-          "Cinematic shot of a modern trading desk with glowing Deriv synthetic indices candlestick charts, gold watch, coffee mug";
+          "Cinematic shot of a modern trading desk with glowing Deriv synthetic indices candlestick charts, digital laptop, gold watch";
         const enriched = enrichVisualPrompt(rawPrompt);
         const img = await generateSocialImage(enriched.prompt, "1:1", enriched.seed);
         mediaUrl = img.url;
@@ -106,14 +106,16 @@ export async function runAgentTask(taskId: string): Promise<void> {
       targetGroups = [
         { platform: "facebook", groupName: "Deriv Synthetic Indices Traders Kenya" },
         { platform: "facebook", groupName: "Boom & Crash Signals Club East Africa" },
+        { platform: "facebook", groupName: "Online Jobs Kenya Work From Home" },
       ];
     } else if (task.agentId === "fb_jotrainer") {
       const res = await askWorkerAgent(
-        "JOTRAINER JOBS (Microwork & AI Training Recruiter)",
+        "JOTRAINER (Pinterest Marketing & Viral Pin Creator)",
         task.instructions,
         {
-          targetGigs: "Outlier, Remotasks, Appen, Data Annotation, MicroTasks",
-          visualContext: isUserProvidedImage ? "Using user's personal uploaded screenshot/photo. Craft an engaging remote job/gig recruiter caption for it!" : undefined,
+          niche: "Pinterest Marketing, Viral Pin Graphics, High-CTR Infographics, Lifestyle & Aesthetic Boards",
+          goal: "Drive clicks to destination link through an irresistible visual Pin title and keyword-dense description",
+          visualContext: isUserProvidedImage ? "Using user's personal uploaded photo. Craft a viral Pinterest Pin title, rich keyword description, and call to action to click the link!" : undefined,
         },
         antiDupDirective
       );
@@ -122,16 +124,15 @@ export async function runAgentTask(taskId: string): Promise<void> {
       if (!mediaUrl) {
         const rawPrompt =
           res.mediaPrompt ||
-          "Minimalist workspace with MacBook, notebook titled AI Training Jobs 2025, modern aesthetic";
+          "Vertical Pinterest pin aesthetic graphic layout (9:16), clean modern typography with bold problem-solving headline";
         const enriched = enrichVisualPrompt(rawPrompt);
-        const img = await generateSocialImage(enriched.prompt, "1:1", enriched.seed);
+        const img = await generateSocialImage(enriched.prompt, "9:16", enriched.seed);
         mediaUrl = img.url;
       }
 
-      platforms = ["facebook"];
+      platforms = ["pinterest"];
       targetGroups = [
-        { platform: "facebook", groupName: "Online Jobs Kenya Work From Home" },
-        { platform: "facebook", groupName: "Remote AI Tasks & Data Annotators Africa" },
+        { platform: "pinterest", groupName: "Pinterest Main Feed & Topic Boards" },
       ];
     } else if (task.agentId === "fb_contentor") {
       const res = await askWorkerAgent(

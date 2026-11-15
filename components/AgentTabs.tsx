@@ -57,14 +57,16 @@ const AGENT_NICHE_SHORTCUTS: Record<string, { label: string; url: string; color?
   fb_laxdollar: [
     { label: "laxdollar.site", url: "https://laxdollar.site", color: "emerald" },
     { label: "Deriv Portal", url: "https://track.deriv.com", color: "blue" },
+    { label: "Remotasks", url: "https://remotasks.com", color: "indigo" },
+    { label: "Outlier AI", url: "https://outlier.ai", color: "purple" },
     { label: "Facebook Groups", url: "https://facebook.com/groups", color: "sky" },
     { label: "Facebook Login", url: "https://facebook.com", color: "slate" },
   ],
   fb_jotrainer: [
-    { label: "Remotasks", url: "https://remotasks.com", color: "indigo" },
-    { label: "Outlier AI", url: "https://outlier.ai", color: "purple" },
-    { label: "Facebook Jobs", url: "https://facebook.com/jobs", color: "blue" },
-    { label: "Facebook Login", url: "https://facebook.com", color: "slate" },
+    { label: "Pinterest", url: "https://pinterest.com", color: "rose" },
+    { label: "Create Pin", url: "https://pinterest.com/pin-creation-tool", color: "red" },
+    { label: "Pinterest Trends", url: "https://trends.pinterest.com", color: "amber" },
+    { label: "Pinterest Analytics", url: "https://analytics.pinterest.com", color: "purple" },
   ],
   fb_contentor: [
     { label: "Facebook Reels", url: "https://facebook.com/reels", color: "pink" },

@@ -55,7 +55,7 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
     found = "fb_laxdollar";
   } else if (lower.includes("fb_contentor") || lower.includes("contentor")) {
     found = "fb_contentor";
-  } else if (lower.includes("fb_jotrainer") || lower.includes("jotrainer") || /\bjobs\b/.test(lower)) {
+  } else if (lower.includes("fb_jotrainer") || lower.includes("jotrainer") || lower.includes("pinterest") || /\bpins?\b/.test(lower) || /\bpinning\b/.test(lower)) {
     found = "fb_jotrainer";
   } else if (
     lower.includes("analytics agent") || lower.includes("analytics") || lower.includes("analytic") ||
@@ -73,7 +73,7 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
       if (target === "real") found = "ig_real";
       else if (target === "shader") found = "ig_shader";
       else if (target === "contentor") found = "fb_contentor";
-      else if (target === "jotrainer" || target === "jobs") found = "fb_jotrainer";
+      else if (target === "jotrainer" || target === "jobs" || target === "pinterest" || target === "pin" || target === "pins") found = "fb_jotrainer";
       else if (target === "laxdollar") found = "fb_laxdollar";
       else if (target === "analytics" || target === "analytic") found = "analytics";
     }
@@ -138,7 +138,8 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
   // 4. Fallback domain topics (only if no active context)
   if (lower.includes("confession") || lower.includes("dilemma")) return "ig_real";
   if (lower.includes("celebrity") || lower.includes("tea")) return "ig_shader";
-  if (lower.includes("remotask") || lower.includes("outlier")) return "fb_jotrainer";
+  if (lower.includes("pinterest") || lower.includes("pin marketing") || lower.includes("pins")) return "fb_jotrainer";
+  if (lower.includes("remotask") || lower.includes("outlier") || lower.includes("deriv") || lower.includes("boom") || lower.includes("crash")) return "fb_laxdollar";
   if (lower.includes("sheng") || lower.includes("comedy meme")) return "fb_contentor";
 
   return null;
@@ -146,8 +147,8 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
 
 export function getAgentDisplayName(agentId: string): string {
   const names: Record<string, string> = {
-    fb_laxdollar: "LAXDOLLAR FB",
-    fb_jotrainer: "JOTRAINER JOBS",
+    fb_laxdollar: "LAXDOLLAR (Trading & Hustles)",
+    fb_jotrainer: "JOTRAINER (Pinterest)",
     fb_contentor: "CONTENTOR",
     ig_real: "INSTA REAL",
     ig_shader: "INSTA SHADER",

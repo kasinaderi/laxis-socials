@@ -73,16 +73,16 @@ export async function saveAgentHermesRoutes(agentId: string, routes: Record<stri
  */
 export const AGENT_NICHE_CONTEXT: Record<string, { name: string; niche: string; groupTypes: string; topics: string }> = {
   fb_laxdollar: {
-    name: "Lax Dollar",
-    niche: "Deriv Synthetic Indices (Boom/Crash, Volatility 75), Forex Trading, Online Hustles",
-    groupTypes: "Kenyan forex trading groups, Deriv traders, Synthetic index communities, Make Money Online Kenya",
-    topics: "Deriv trading signals, Boom 1000/Crash 500 spikes, risk management, broker bonuses, trader mindset"
+    name: "Lax Dollar (Trading & Hustles)",
+    niche: "Deriv Synthetic Indices, Forex Trading, Online Hustles, Remotasks & Outlier AI Training Gigs",
+    groupTypes: "Kenyan forex trading groups, Deriv traders, Synthetic index communities, Remotasks Kenya, Online Jobs Kenya, Make Money Online",
+    topics: "Deriv trading signals, Boom 1000/Crash 500 spikes, forex risk management, Remotasks/Outlier gig tips, AI task approvals, trader mindset"
   },
   fb_jotrainer: {
-    name: "Jo Trainer",
-    niche: "Remotasks, Outlier AI Training, Online Freelancing, Digital Gigs & Micro-Work",
-    groupTypes: "Kenya freelancer groups, Remotasks Kenya, Outlier AI community, Campus Hustlers, Online Writers Kenya",
-    topics: "AI prompt annotation gigs, Outlier onboarding, task approval tips, weekly earnings proof, legit remote gigs"
+    name: "Jo Trainer (Pinterest)",
+    niche: "Pinterest Marketing, Viral Pin Graphics, Topic Boards & Outbound Traffic",
+    groupTypes: "Pinterest boards, niche topic group boards, visual aesthetic discovery feeds, traffic-driving pins",
+    topics: "High-CTR Pins, vertical infographic designs, lifestyle and problem-solving pins, outbound links to destination sites"
   },
   fb_contentor: {
     name: "Contentor",
@@ -748,8 +748,8 @@ export async function checkHermesStatus(sb: any): Promise<{
 }
 
 export const AGENT_NAMES: Record<string, string> = {
-  fb_laxdollar: "LAXDOLLAR FB",
-  fb_jotrainer: "JOTRAINER JOBS",
+  fb_laxdollar: "LAXDOLLAR (Trading & Hustles)",
+  fb_jotrainer: "JOTRAINER (Pinterest)",
   fb_contentor: "CONTENTOR",
   ig_real: "INSTA REAL",
   ig_shader: "INSTA SHADER",

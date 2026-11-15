@@ -275,8 +275,8 @@ export async function toggleUserTakeover(
 
 function getSimulatedDesktopPreview(agentId: string): string {
   const searchQueries: Record<string, string> = {
-    fb_laxdollar: "facebook.com/groups/deriv-kenya-traders & laxdollar.site",
-    fb_jotrainer: "facebook.com/groups/online-jobs-kenya & remotasks.com",
+    fb_laxdollar: "facebook.com/groups/deriv-kenya-traders & remotasks.com",
+    fb_jotrainer: "pinterest.com/pin-creation-tool & pinterest.com",
     fb_contentor: "facebook.com/groups/nairobi-memes-comedy",
     ig_real: "instagram.com/instareal_confessions",
     ig_shader: "instagram.com/instashader_tea",

@@ -60,15 +60,15 @@ export async function executeLocoagentPublish(postId: string): Promise<PublishRe
 
     // 1. Identify which agent is responsible for this post
     let agentId = "fb_laxdollar";
-    if (postId.includes("_fb_jotrainer") || post.caption.toLowerCase().includes("outlier") || post.caption.toLowerCase().includes("microwork")) {
+    if (postId.includes("_fb_jotrainer") || platforms.includes("pinterest") || post.caption.toLowerCase().includes("pinterest") || post.caption.toLowerCase().includes("pin ")) {
       agentId = "fb_jotrainer";
     } else if (postId.includes("_fb_contentor") || post.caption.toLowerCase().includes("sheng") || post.caption.toLowerCase().includes("meme")) {
       agentId = "fb_contentor";
-    } else if (postId.includes("_ig_real") || platforms.includes("instagram") && post.caption.toLowerCase().includes("confession")) {
+    } else if (postId.includes("_ig_real") || (platforms.includes("instagram") && post.caption.toLowerCase().includes("confession"))) {
       agentId = "ig_real";
     } else if (postId.includes("_ig_shader") || platforms.includes("instagram")) {
       agentId = "ig_shader";
-    } else if (post.caption.toLowerCase().includes("laxdollar") || post.caption.toLowerCase().includes("deriv")) {
+    } else if (post.caption.toLowerCase().includes("laxdollar") || post.caption.toLowerCase().includes("deriv") || post.caption.toLowerCase().includes("outlier") || post.caption.toLowerCase().includes("remotask")) {
       agentId = "fb_laxdollar";
     }
 
@@ -262,7 +262,7 @@ export async function executeHermesPublish(postId: string): Promise<PublishResul
     .join(" ")}`.trim();
 
   let agentId = "fb_laxdollar";
-  if (postId.includes("_fb_jotrainer") || fullCaption.toLowerCase().includes("outlier") || fullCaption.toLowerCase().includes("microwork")) {
+  if (postId.includes("_fb_jotrainer") || platforms.includes("pinterest") || fullCaption.toLowerCase().includes("pinterest") || fullCaption.toLowerCase().includes("pin ")) {
     agentId = "fb_jotrainer";
   } else if (postId.includes("_fb_contentor") || fullCaption.toLowerCase().includes("sheng") || fullCaption.toLowerCase().includes("meme")) {
     agentId = "fb_contentor";
@@ -270,7 +270,7 @@ export async function executeHermesPublish(postId: string): Promise<PublishResul
     agentId = "ig_real";
   } else if (postId.includes("_ig_shader") || platforms.includes("instagram")) {
     agentId = "ig_shader";
-  } else if (fullCaption.toLowerCase().includes("laxdollar") || fullCaption.toLowerCase().includes("deriv")) {
+  } else if (fullCaption.toLowerCase().includes("laxdollar") || fullCaption.toLowerCase().includes("deriv") || fullCaption.toLowerCase().includes("outlier") || fullCaption.toLowerCase().includes("remotask")) {
     agentId = "fb_laxdollar";
   }
 
@@ -324,20 +324,34 @@ export async function executeHermesPublish(postId: string): Promise<PublishResul
     ? `\n- Download this image first: ${mediaUrls[0]}\n- Then attach it to the post.`
     : "\n- This is a text-only post, no image needed.";
 
+  const effectivePlatforms = platforms.length > 0 ? platforms : [agentId === "fb_jotrainer" ? "pinterest" : "facebook"];
+
   const hermesTask = `
 You are the ${agentId} social media agent. Your task is to publish the following post.
 
-PLATFORMS: ${platforms.join(", ") || "facebook"}
+PLATFORMS: ${effectivePlatforms.join(", ")}
 TARGET: ${groupInfo}
 
-POST CAPTION (copy exactly):
+POST CAPTION / PIN DETAILS (copy exactly):
 """
 ${fullCaption}
 """
 ${imageInstruction}
 
+${agentId === "fb_jotrainer" || effectivePlatforms.includes("pinterest") ? `
+Steps for Pinterest Pin Publishing:
+1. Open Chrome and go to Pinterest (pinterest.com).
+2. Confirm you are logged in.
+3. Click "Create" or "Create Pin" (or navigate to pin-creation-tool).
+4. If there is an image, upload/drag it into the pin uploader.
+5. Enter the Pin title and description from the caption above.
+6. If a destination link or URL is mentioned in the caption or task, enter it into the destination link field.
+7. Select or create the relevant Board matching this topic.
+8. Click Publish / Save.
+9. Verify the Pin appears on your profile/board and report success.
+` : `
 Steps:
-1. Open Chrome and go to the platform (Facebook or Instagram).
+1. Open Chrome and go to the platform (${effectivePlatforms.join(", ")}).
 2. Confirm you are logged in. If not, check saved credentials.
 3. Target Group / Page Reasoning:
    - Identify or choose the most appropriate group or page that matches this specific post topic.
@@ -348,8 +362,9 @@ Steps:
 7. Click Publish / Share / Post.
 8. Confirm the post appeared on the feed.
 9. Report success.
+`}
 
-Remember: Golden routes are workflow blueprints. Replicate the user's interaction cadence and posting method, while reasoning dynamically about which group fits this specific post.
+Remember: Golden routes are workflow blueprints. Replicate the user's interaction cadence and posting method, while reasoning dynamically about which destination fits this specific post.
 `.trim();
 
   addLog(`Sending publish task to Hermes (${fullCaption.length} chars)...`);

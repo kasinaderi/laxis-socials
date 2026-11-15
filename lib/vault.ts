@@ -206,8 +206,8 @@ export async function setTelegramOwnerChatId(chatId: string | number): Promise<v
 }
 
 export const AGENT_VAULT_LABELS: Record<string, string> = {
-  fb_laxdollar: "LAXDOLLAR FB (Trading)",
-  fb_jotrainer: "JOTRAINER JOBS (Remote Gigs)",
+  fb_laxdollar: "LAXDOLLAR (Trading & Online Hustles)",
+  fb_jotrainer: "JOTRAINER (Pinterest Marketing)",
   fb_contentor: "CONTENTOR (Viral Comedy)",
   ig_real: "INSTA REAL (Aesthetics)",
   ig_shader: "INSTA SHADER (Motion & Art)",
