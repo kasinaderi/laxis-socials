@@ -132,7 +132,7 @@ ${agentStatuses || "All 6 agents registered: fb_laxdollar, fb_jotrainer, fb_cont
 
 Standard Daily Post Allocation:
 • fb_contentor: 6 posts/day (Sheng & meme viral hooks)
-• fb_jotrainer: 5 pins/day (Pinterest Marketing — viral pins, lifestyle & niche graphics, outbound links)
+• PINTR (fb_jotrainer): 5 pins/day (Pinterest Marketing — viral pins, lifestyle & niche graphics, outbound links)
 • ig_shader: 1 to 2 curated trending posts/day (Nairobi Gossip Club, The Shade Room, Kenya Gossip Club scoops)
 • fb_laxdollar: 5 posts/day (Deriv trading, Boom/Crash, Forex, plus Remotasks/Outlier AI training gigs & online money hustles)
 • ig_real: 4 posts/day (Confessions & relationship dilemmas)
@@ -217,7 +217,7 @@ export async function askMasterAgent(
     const systemPrompt = `You are AGENTLAX — the Autonomous Director and Computer-Use Reasoning Brain for "laxis socials".
 You co-manage an autonomous agency alongside Kelvin (the user), directing 6 specialist worker agents:
 1. LAXDOLLAR (id: "fb_laxdollar"): Trading & Online Money Hub — Deriv broker gateway "laxdollar.site" (Boom & Crash, Volatility, Forex, money memes) PLUS Remotasks, Outlier AI training, online freelancing, and digital hustle gigs.
-2. JOTRAINER / PIN MARKETING (id: "fb_jotrainer"): Pinterest Marketing & Pin Creator — designs and publishes high-converting Pins across diverse lifestyle, educational, and trending topics, complete with outbound destination links to drive traffic.
+2. PINTR (id: "fb_jotrainer"): Pinterest Marketing & Pin Creator — designs and publishes high-converting Pins across diverse lifestyle, educational, and trending topics, complete with outbound destination links to drive traffic.
 3. CONTENTOR (id: "fb_contentor"): Sheng & English viral comedy, street memes, relatable African humor.
 4. INSTA REAL (id: "ig_real"): Viral confession story cards, relationship drama, controversial dilemma questions.
 5. INSTA SHADER (id: "ig_shader"): Pop culture scoops, celebrity tea & trending gossip. Monitored sources in Following list: Nairobi Gossip Club (@nairobi_gossip_club), The Shade Room (@theshaderoom), Kenya Gossip Club (@kenyagossipclub). Curates top 1-2 trending stories per run, re-angles with spicy opinion hooks, and pairs with fresh visual graphics.

@@ -79,7 +79,7 @@ export const AGENT_NICHE_CONTEXT: Record<string, { name: string; niche: string; 
     topics: "Deriv trading signals, Boom 1000/Crash 500 spikes, forex risk management, Remotasks/Outlier gig tips, AI task approvals, trader mindset"
   },
   fb_jotrainer: {
-    name: "Jo Trainer (Pinterest)",
+    name: "PINTR",
     niche: "Pinterest Marketing, Viral Pin Graphics, Topic Boards & Outbound Traffic",
     groupTypes: "Pinterest boards, niche topic group boards, visual aesthetic discovery feeds, traffic-driving pins",
     topics: "High-CTR Pins, vertical infographic designs, lifestyle and problem-solving pins, outbound links to destination sites"
@@ -749,7 +749,7 @@ export async function checkHermesStatus(sb: any): Promise<{
 
 export const AGENT_NAMES: Record<string, string> = {
   fb_laxdollar: "LAXDOLLAR (Trading & Hustles)",
-  fb_jotrainer: "JOTRAINER (Pinterest)",
+  fb_jotrainer: "PINTR",
   fb_contentor: "CONTENTOR",
   ig_real: "INSTA REAL",
   ig_shader: "INSTA SHADER",

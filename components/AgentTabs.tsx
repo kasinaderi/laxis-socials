@@ -1193,7 +1193,7 @@ export function AgentTabs({
                   agentId === "fb_laxdollar"
                     ? "Generate an ultra-realistic 3D trading candlestick chart visual with Deriv boom and crash setup for laxdollar.site"
                     : agentId === "fb_jotrainer"
-                    ? "Generate a clean high-tech photo of a remote AI data annotator laptop workspace"
+                    ? "Generate a vertical aesthetic Pinterest pin graphic with modern typography and viral problem-solving headline"
                     : agentId === "fb_contentor"
                     ? "Generate a hilarious relatable comedy meme scene with African street humor"
                     : agentId === "ig_real"
@@ -1457,9 +1457,9 @@ export function AgentTabs({
                 readOnly
                 value={
                   agentId === "fb_laxdollar"
-                    ? "Deriv Trading, Synthetic Indices, Forex & Money Memes (laxdollar.site)"
+                    ? "Deriv Trading, Synthetic Indices, Forex, Remotasks, Outlier AI & Online Money Hustles"
                     : agentId === "fb_jotrainer"
-                    ? "Microwork, AI Data Annotation, Remotasks & Remote Jobs"
+                    ? "Pinterest Marketing, Viral Pin Graphics, Topic Boards & Outbound Link Traffic"
                     : agentId === "fb_contentor"
                     ? "Viral Sheng Comedy, Relatable Memes & Street Humor"
                     : agentId === "ig_real"

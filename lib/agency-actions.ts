@@ -55,7 +55,7 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
     found = "fb_laxdollar";
   } else if (lower.includes("fb_contentor") || lower.includes("contentor")) {
     found = "fb_contentor";
-  } else if (lower.includes("fb_jotrainer") || lower.includes("jotrainer") || lower.includes("pinterest") || /\bpins?\b/.test(lower) || /\bpinning\b/.test(lower)) {
+  } else if (lower.includes("pintr") || lower.includes("fb_jotrainer") || lower.includes("jotrainer") || lower.includes("pinterest") || /\bpins?\b/.test(lower) || /\bpinning\b/.test(lower)) {
     found = "fb_jotrainer";
   } else if (
     lower.includes("analytics agent") || lower.includes("analytics") || lower.includes("analytic") ||
@@ -73,7 +73,7 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
       if (target === "real") found = "ig_real";
       else if (target === "shader") found = "ig_shader";
       else if (target === "contentor") found = "fb_contentor";
-      else if (target === "jotrainer" || target === "jobs" || target === "pinterest" || target === "pin" || target === "pins") found = "fb_jotrainer";
+      else if (target === "pintr" || target === "jotrainer" || target === "jobs" || target === "pinterest" || target === "pin" || target === "pins") found = "fb_jotrainer";
       else if (target === "laxdollar") found = "fb_laxdollar";
       else if (target === "analytics" || target === "analytic") found = "analytics";
     }
@@ -148,7 +148,7 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
 export function getAgentDisplayName(agentId: string): string {
   const names: Record<string, string> = {
     fb_laxdollar: "LAXDOLLAR (Trading & Hustles)",
-    fb_jotrainer: "JOTRAINER (Pinterest)",
+    fb_jotrainer: "PINTR",
     fb_contentor: "CONTENTOR",
     ig_real: "INSTA REAL",
     ig_shader: "INSTA SHADER",
@@ -1379,7 +1379,7 @@ export async function handleAgencyExecutiveCommand(
   // Handles: "switch of that vm", "switch them both off", "switch all vms off", "not agents only but any active vm", etc.
   const targetAgentForStop = extractAgentFromPrompt(text, contextId);
   const hasStopWord = /(?:pause|stop|power\s*of+|shut\s*down|turn\s*of+|switch\s*of+|kill|freeze|halt|standby)/i.test(lower);
-  const hasTargetWord = /(?:vm|pc|agent|agents|analytic|analytics|jotrainer|laxdollar|shader|real|contentor|master|all|everything|session|browser|both|them)/i.test(lower);
+  const hasTargetWord = /(?:vm|pc|agent|agents|analytic|analytics|pintr|jotrainer|laxdollar|shader|real|contentor|master|all|everything|session|browser|both|them)/i.test(lower);
   const isStopCommand =
     (hasStopWord && hasTargetWord) ||
     lower.includes("switch them both off") ||

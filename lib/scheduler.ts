@@ -110,7 +110,7 @@ export async function runAgentTask(taskId: string): Promise<void> {
       ];
     } else if (task.agentId === "fb_jotrainer") {
       const res = await askWorkerAgent(
-        "JOTRAINER (Pinterest Marketing & Viral Pin Creator)",
+        "PINTR (Pinterest Marketing & Viral Pin Creator)",
         task.instructions,
         {
           niche: "Pinterest Marketing, Viral Pin Graphics, High-CTR Infographics, Lifestyle & Aesthetic Boards",

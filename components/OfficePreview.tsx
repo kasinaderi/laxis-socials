@@ -67,7 +67,7 @@ export const DEFAULT_AGENT_CONFIGS: AgentOfficePlacement[] = [
   },
   {
     id: "fb_jotrainer",
-    name: "JOTRAINER (Pinterest)",
+    name: "PINTR",
     role: "Pinterest Marketing & Viral Pin Specialist",
     emoji: "📌",
     niche: "Viral Pin Graphics, Topic Boards & Outbound Link Traffic",
