@@ -163,7 +163,76 @@ export function AgentTabs({
       }
     }
     setShortcuts(AGENT_NICHE_SHORTCUTS[agentId] || AGENT_NICHE_SHORTCUTS.master);
+    // Reset recorder state when switching agents
+    setIsRecording(false);
+    setRecordRouteName("");
+    setRecordStatus("");
+    fetchSavedRoutes();
   }, [agentId]);
+
+  const fetchSavedRoutes = async () => {
+    if (!agentId || agentId === "master") return;
+    try {
+      const res = await fetch(`/api/hermes/record?agentId=${agentId}`);
+      const data = await res.json();
+      if (data.routes) setSavedRoutes(data.routes);
+    } catch {}
+  };
+
+  const handleStartRecording = async () => {
+    if (!recordRouteName.trim()) { setRecordStatus("Enter a route name first"); return; }
+    setRecordStatus("Starting recorder...");
+    try {
+      const res = await fetch("/api/hermes/record", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "start", agentId, routeName: recordRouteName.trim() }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsRecording(true);
+        setRecordStatus(`Recording "${recordRouteName}" - navigate in Chrome above...`);
+      } else {
+        setRecordStatus(data.error || "Failed to start");
+      }
+    } catch (e: any) {
+      setRecordStatus(e.message || "Error starting recorder");
+    }
+  };
+
+  const handleStopRecording = async () => {
+    setRecordStatus("Saving route...");
+    try {
+      const res = await fetch("/api/hermes/record", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "stop", agentId }),
+      });
+      const data = await res.json();
+      setIsRecording(false);
+      if (data.success) {
+        setRecordStatus(`Saved "${data.routeName}" - ${data.stepsRecorded} step(s) recorded`);
+        setRecordRouteName("");
+        fetchSavedRoutes();
+      } else {
+        setRecordStatus(data.message || data.error || "No steps captured");
+      }
+    } catch (e: any) {
+      setIsRecording(false);
+      setRecordStatus(e.message || "Error saving route");
+    }
+  };
+
+  const handleDeleteRoute = async (routeName: string) => {
+    try {
+      await fetch("/api/hermes/record", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId, routeName }),
+      });
+      fetchSavedRoutes();
+    } catch {}
+  };
 
   const saveShortcuts = (updated: { label: string; url: string; color?: string }[]) => {
     setShortcuts(updated);
@@ -433,6 +502,13 @@ export function AgentTabs({
 
   // Tasks Tab state
   const [tasks, setTasks] = useState<any[]>([]);
+
+  // Golden Route Recorder state
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordRouteName, setRecordRouteName] = useState("");
+  const [savedRoutes, setSavedRoutes] = useState<any[]>([]);
+  const [showRoutes, setShowRoutes] = useState(false);
+  const [recordStatus, setRecordStatus] = useState("");
 
   // Chat Management & Deletion State
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
@@ -1258,6 +1334,69 @@ export function AgentTabs({
               </button>
             </div>
           </div>
+
+          {/* Golden Route Recorder */}
+          {agentId !== "master" && (
+            <div className="mt-3 p-3 bg-violet-50/60 dark:bg-violet-950/30 border border-violet-200/60 dark:border-violet-800/40 rounded-xl">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-violet-700 dark:text-violet-300 flex items-center gap-1.5">
+                  {isRecording ? "🔴" : "⚫"} Golden Route Recorder
+                </span>
+                <button
+                  onClick={() => { setShowRoutes(!showRoutes); if (!showRoutes) fetchSavedRoutes(); }}
+                  className="text-[10px] text-violet-500 hover:text-violet-700 dark:hover:text-violet-300 font-medium transition-colors"
+                >
+                  {savedRoutes.length} saved route(s) {showRoutes ? "▲" : "▼"}
+                </button>
+              </div>
+              {!isRecording ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    value={recordRouteName}
+                    onChange={e => setRecordRouteName(e.target.value)}
+                    placeholder="Route name (e.g. post_kenyan_traders)"
+                    className="flex-1 text-xs px-2.5 py-1.5 rounded-lg border border-violet-200 dark:border-violet-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-white outline-none focus:ring-1 focus:ring-violet-400"
+                  />
+                  <button
+                    onClick={handleStartRecording}
+                    className="px-3 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white text-xs font-bold flex items-center gap-1 transition-colors shrink-0"
+                  >
+                    🔴 Record
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleStopRecording}
+                  className="w-full py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors animate-pulse"
+                >
+                  ⏹ Stop &amp; Save Route
+                </button>
+              )}
+              {recordStatus && (
+                <p className="text-[10px] text-violet-600 dark:text-violet-400 mt-1.5 truncate">{recordStatus}</p>
+              )}
+              {showRoutes && (
+                <div className="mt-2 space-y-1">
+                  {savedRoutes.length === 0 ? (
+                    <p className="text-[10px] text-slate-400 text-center py-1">No routes saved yet</p>
+                  ) : (
+                    savedRoutes.map((r: any) => (
+                      <div key={r.key} className="flex items-center justify-between text-[10px] bg-white dark:bg-slate-900 px-2 py-1 rounded-lg border border-violet-100 dark:border-violet-900">
+                        <span className="font-semibold text-slate-700 dark:text-slate-200 truncate">📍 {r.routeName}</span>
+                        <span className="text-slate-400 shrink-0 mx-2">{r.steps} steps · {r.hits}x used</span>
+                        <button
+                          onClick={() => handleDeleteRoute(r.routeName)}
+                          className="text-red-400 hover:text-red-600 shrink-0 transition-colors"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Desktop Viewport */}
           <div className="flex-1 min-h-[300px] max-h-[460px] bg-slate-950 rounded-2xl border-2 border-slate-200 dark:border-slate-800 overflow-hidden relative shadow-md group">

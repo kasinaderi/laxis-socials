@@ -560,7 +560,8 @@ export async function runHermesTask(
   sb: any,
   task: string,
   timeoutMs: number = 180_000,
-  agentId?: string
+  agentId?: string,
+  useGoldenRoute: boolean = false   // true = autopilot (use saved route), false = explore freely
 ): Promise<{
   success: boolean;
   summary: string;
@@ -572,9 +573,41 @@ export async function runHermesTask(
     return { success: false, summary: "No sandbox available", screenshotB64: "", mode: "fallback_cdp" };
   }
 
+  // Prepend golden route instructions when autopilot calls us
+  let finalTask = task;
+  if (agentId && useGoldenRoute) {
+    try {
+      const routes = await getAgentHermesRoutes(agentId);
+      const goldenKeys = Object.keys(routes).filter(k => k.startsWith("golden_"));
+      if (goldenKeys.length > 0) {
+        const routeSummary = goldenKeys.map(k => {
+          const r = routes[k];
+          const urlSteps = (r.steps || [])
+            .filter((s: any) => s.action === "navigate")
+            .map((s: any) => s.url)
+            .join(" → ");
+          return `  Route "${k.replace("golden_", "")}": ${urlSteps} (used ${r.hits || 0}x)`;
+        }).join("\n");
+        finalTask = `AUTOPILOT MODE — USE GOLDEN ROUTES:
+You have ${goldenKeys.length} recorded golden route(s) for this agent. For posting tasks, prefer these exact navigation paths instead of exploring freely. They are the fastest and safest paths that the user has personally verified work:
+${routeSummary}
+
+--- YOUR TASK ---
+${task}`;
+      }
+    } catch { /* non-fatal */ }
+  } else if (!useGoldenRoute) {
+    // Manual/chat mode — Hermes explores freely, golden routes are for reference only
+    finalTask = `MANUAL MODE — EXPLORE FREELY:
+You are handling a one-off or exploratory task. Do NOT follow saved golden routes for this. Navigate intelligently based on what you see on screen.
+
+--- YOUR TASK ---
+${task}`;
+  }
+
   try {
-    console.log(`[Hermes] Running task in-VM: "${task.slice(0, 80)}..."`);
-    const safeTask = task.replace(/'/g, "'\\''").replace(/\n/g, " ");
+    console.log(`[Hermes] Running task in-VM: "${finalTask.slice(0, 80)}..." (mode: ${useGoldenRoute ? "autopilot/golden" : "manual/free"})`);
+    const safeTask = finalTask.replace(/'/g, "'\\''").replace(/\n/g, " ");
 
     const result = await sb.commands.run(
       `bash /home/user/hermes_task.sh '${safeTask}' 2>/dev/null`,

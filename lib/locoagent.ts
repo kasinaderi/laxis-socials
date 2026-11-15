@@ -355,7 +355,7 @@ Remember your learned routes — if you've posted here before, use the fast path
   // ── 6. Run Hermes ────────────────────────────────────────────────
   let hermesResult: { success: boolean; summary: string; screenshotB64: string; mode: string };
   try {
-    hermesResult = await runHermesTask(activeSandbox, hermesTask, 180_000, agentId);
+    hermesResult = await runHermesTask(activeSandbox, hermesTask, 180_000, agentId, true); // autopilot = use golden routes
     addLog(`Hermes result (${hermesResult.mode}): ${hermesResult.summary.slice(0, 200)}`);
   } catch (runErr: any) {
     addLog(`Hermes run error: ${runErr.message} — routing to Locoagent fallback.`);

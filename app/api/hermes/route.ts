@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "task is required for run action" }, { status: 400 });
       }
 
-      const result = await runHermesTask(sb, task, 120_000, agentId);
+      const result = await runHermesTask(sb, task, 120_000, agentId, false); // manual = explore freely
 
       return NextResponse.json({
         success: result.success,
