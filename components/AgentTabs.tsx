@@ -1338,7 +1338,7 @@ export function AgentTabs({
           {/* Golden Route Recorder */}
           {agentId !== "master" && (
             <div className="mt-3 p-3 bg-violet-50/60 dark:bg-violet-950/30 border border-violet-200/60 dark:border-violet-800/40 rounded-xl">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs font-bold text-violet-700 dark:text-violet-300 flex items-center gap-1.5">
                   {isRecording ? "🔴" : "⚫"} Golden Route Recorder
                 </span>
@@ -1349,6 +1349,9 @@ export function AgentTabs({
                   {savedRoutes.length} saved route(s) {showRoutes ? "▲" : "▼"}
                 </button>
               </div>
+              <p className="text-[10px] text-violet-600/80 dark:text-violet-400/80 mb-2">
+                Demonstrates your navigation &amp; posting method. In autopilot, Hermes reasons across relevant niche groups using this blueprint.
+              </p>
               {!isRecording ? (
                 <div className="flex items-center gap-2">
                   <input

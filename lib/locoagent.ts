@@ -318,7 +318,7 @@ export async function executeHermesPublish(postId: string): Promise<PublishResul
   const groupInfo =
     targetGroups.length > 0
       ? targetGroups.map((g: any) => g.groupName || g.targetUrl || "community").join(", ")
-      : "main profile timeline";
+      : "Relevant niche Facebook/Instagram community or group matching this post topic (or main profile timeline)";
 
   const imageInstruction = mediaUrls[0]
     ? `\n- Download this image first: ${mediaUrls[0]}\n- Then attach it to the post.`
@@ -339,15 +339,17 @@ ${imageInstruction}
 Steps:
 1. Open Chrome and go to the platform (Facebook or Instagram).
 2. Confirm you are logged in. If not, check saved credentials.
-3. Navigate to the target group/profile.
-4. Create a new post.
-5. Paste the caption text exactly as given above.
+3. Target Group / Page Reasoning:
+   - Identify or choose the most appropriate group or page that matches this specific post topic.
+   - If a Golden Route exists, use the navigational method demonstrated in that recording (e.g. how groups are accessed or searched), but adapt it to navigate to this topic's target group. Do not be stuck on one single group!
+4. Create a new post in that community.
+5. Paste the caption text cleanly.
 6. If there is an image, upload it.
 7. Click Publish / Share / Post.
 8. Confirm the post appeared on the feed.
 9. Report success.
 
-Remember your learned routes — if you've posted here before, use the fast path.
+Remember: Golden routes are workflow blueprints. Replicate the user's interaction cadence and posting method, while reasoning dynamically about which group fits this specific post.
 `.trim();
 
   addLog(`Sending publish task to Hermes (${fullCaption.length} chars)...`);

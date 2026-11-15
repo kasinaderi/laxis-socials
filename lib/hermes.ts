@@ -69,6 +69,42 @@ export async function saveAgentHermesRoutes(agentId: string, routes: Record<stri
 }
 
 /**
+ * Agent Niche & Target Topic Context for Adaptive Navigation Reasoning
+ */
+export const AGENT_NICHE_CONTEXT: Record<string, { name: string; niche: string; groupTypes: string; topics: string }> = {
+  fb_laxdollar: {
+    name: "Lax Dollar",
+    niche: "Deriv Synthetic Indices (Boom/Crash, Volatility 75), Forex Trading, Online Hustles",
+    groupTypes: "Kenyan forex trading groups, Deriv traders, Synthetic index communities, Make Money Online Kenya",
+    topics: "Deriv trading signals, Boom 1000/Crash 500 spikes, risk management, broker bonuses, trader mindset"
+  },
+  fb_jotrainer: {
+    name: "Jo Trainer",
+    niche: "Remotasks, Outlier AI Training, Online Freelancing, Digital Gigs & Micro-Work",
+    groupTypes: "Kenya freelancer groups, Remotasks Kenya, Outlier AI community, Campus Hustlers, Online Writers Kenya",
+    topics: "AI prompt annotation gigs, Outlier onboarding, task approval tips, weekly earnings proof, legit remote gigs"
+  },
+  fb_contentor: {
+    name: "Contentor",
+    niche: "Kenyan Youth Humor, Relatable Sheng Memes, Trending Nairobi Banter, Campus Comedy",
+    groupTypes: "Kenyan entertainment groups, campus banter hubs, meme communities, popular public discussion forums",
+    topics: "Nairobi dating life, campus struggles, funny relatable moments, sheng punchlines, trending Kenyan memes"
+  },
+  ig_shader: {
+    name: "Insta Shader",
+    niche: "Kenyan & Global Entertainment Gossip, Celebrity Tea, Trending Scoops",
+    groupTypes: "Entertainment hubs, gossip pages, celebrity news discussions",
+    topics: "Curated gossip from Nairobi Gossip Club, The Shade Room, Kenya Gossip Club with witty commentary"
+  },
+  ig_real: {
+    name: "Insta Real",
+    niche: "Anonymous Confessions, Relationship Dilemmas, Raw Life Stories",
+    groupTypes: "Confession forums, relationship advice groups, campus community pages",
+    topics: "Relationship dilemmas, anonymous confessions, life lessons, audience advice polls"
+  }
+};
+
+/**
  * Returns the assigned primary and failover keys for each agent
  */
 export function getDefaultHermesConfigForAgent(agentId: string): HermesAgentConfig {
@@ -318,7 +354,8 @@ CORE OPERATING PRINCIPLES:
 1. HUMAN-LIKE REASONING: Understand user intent deeply. If user asked to search "obinna", search "obinna" without conversational noise.
 2. DISMISS OBSTACLES: If any cookie banner, popup, sign-in prompt, or dialog appears, click Dismiss, Skip, Reject, or 'X'.
 3. MULTI-STEP BATCHES: For tasks like "follow 5 people" or "check 3 channels", complete one item per turn, track count in reason, and ONLY mark "done" when 100% complete!
-4. VERIFY BEFORE DONE: Only return action: "done" when the exact goal is clearly rendered and verified on screen."""
+4. VERIFY BEFORE DONE: Only return action: "done" when the exact goal is clearly rendered and verified on screen.
+5. ADAPTIVE METHODOLOGY REASONING: Recorded golden routes and learned paths demonstrate the user's approved interaction pattern (e.g. how to navigate to groups, open composers, enter text cleanly, attach media, and publish). NEVER rigidly lock to the exact group or page ID from a recording if the current post topic calls for a different group or page! Use the demonstrated navigation and posting method to reach the appropriate target group or page for this specific post topic, and then execute the learned posting steps."""
 
     for step in range(1, max_steps + 1):
         log(f"Step {step}/{max_steps}")
@@ -579,6 +616,11 @@ export async function runHermesTask(
     try {
       const routes = await getAgentHermesRoutes(agentId);
       const goldenKeys = Object.keys(routes).filter(k => k.startsWith("golden_"));
+      const niche = AGENT_NICHE_CONTEXT[agentId];
+      const nicheContext = niche
+        ? `AGENT PROFILE & TOPIC FOCUS (${niche.name}):\n- Niche: ${niche.niche}\n- Relevant Target Communities: ${niche.groupTypes}\n- Core Topics: ${niche.topics}\n`
+        : "";
+
       if (goldenKeys.length > 0) {
         const routeSummary = goldenKeys.map(k => {
           const r = routes[k];
@@ -588,9 +630,26 @@ export async function runHermesTask(
             .join(" → ");
           return `  Route "${k.replace("golden_", "")}": ${urlSteps} (used ${r.hits || 0}x)`;
         }).join("\n");
-        finalTask = `AUTOPILOT MODE — USE GOLDEN ROUTES:
-You have ${goldenKeys.length} recorded golden route(s) for this agent. For posting tasks, prefer these exact navigation paths instead of exploring freely. They are the fastest and safest paths that the user has personally verified work:
+
+        finalTask = `AUTOPILOT MODE — DEMONSTRATION-GUIDED REASONING (GOLDEN METHODOLOGIES):
+${nicheContext}
+The user has recorded ${goldenKeys.length} Golden Route(s) demonstrating their approved navigation & interaction method:
 ${routeSummary}
+
+REASONING DIRECTIVES (CRITICAL):
+1. METHOD AS BLUEPRINT: Treat the recorded route as an interaction blueprint showing HOW the user navigates (e.g. going to Groups feed, searching/browsing groups, opening the post composer, pasting text, adding media, and publishing).
+2. DYNAMIC TARGET REASONING: Do NOT rigidly freeze onto the exact group/page ID from the recording!
+   - Reason about the current post's topic and match it against the agent's target communities.
+   - If the post topic or task calls for a different group or page, use the user's recorded NAVIGATION METHOD to navigate to THAT group or page.
+   - Rotate across different relevant groups in your niche so you do not repeatedly spam the exact same group!
+3. REPLICATE POSTING CADENCE: Once you arrive at the appropriate group/page, execute the user's posting sequence: click the post creation box, cleanly paste the caption, attach the image if present, wait for preview, and click Post.
+
+--- YOUR TASK ---
+${task}`;
+      } else {
+        finalTask = `AUTOPILOT MODE — TOPIC-AWARE PUBLISHING:
+${nicheContext}
+Reason about the best matching group or page for this post's topic. Follow standard clean posting steps: navigate to the group/page, create post, paste caption, attach media if needed, and publish.
 
 --- YOUR TASK ---
 ${task}`;
