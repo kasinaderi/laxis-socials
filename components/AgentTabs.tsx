@@ -347,7 +347,7 @@ export function AgentTabs({
     setIsScreenPolling(false);
   };
 
-  // Send input to VM via screen API
+  // Send input to VM via screen API and immediately trigger visual refresh
   const sendScreenInput = async (action: string, params: Record<string, any>) => {
     try {
       await fetch("/api/sandbox/screen", {
@@ -355,29 +355,79 @@ export function AgentTabs({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agentId, campaignId, action, ...params }),
       });
+      // Fast refresh 200ms after user action to show visual feedback immediately
+      setTimeout(async () => {
+        try {
+          const url = `/api/sandbox/screen?agentId=${agentId}&campaignId=${campaignId}&t=${Date.now()}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const blob = await res.blob();
+            const objUrl = URL.createObjectURL(blob);
+            setScreenSrc((prev) => { if (prev) URL.revokeObjectURL(prev); return objUrl; });
+          }
+        } catch {}
+      }, 200);
     } catch {}
   };
 
-  // Screen click handler: map click coordinates to VM resolution (1920x1080)
-  const handleScreenClick = (e: React.MouseEvent<HTMLImageElement | HTMLDivElement>, dblClick = false) => {
-    const rect = (e.target as HTMLElement).getBoundingClientRect();
-    const scaleX = 1920 / rect.width;
-    const scaleY = 1080 / rect.height;
-    const x = Math.round((e.clientX - rect.left) * scaleX);
-    const y = Math.round((e.clientY - rect.top) * scaleY);
-    sendScreenInput(dblClick ? "dblclick" : "click", { x, y, button: e.button === 2 ? "right" : "left" });
+  // Screen click handler: map click coordinates to VM desktop (1280x800) with letterbox compensation
+  const handleScreenClick = (e: React.MouseEvent<HTMLImageElement>, dblClick = false) => {
+    const img = e.currentTarget;
+    const rect = img.getBoundingClientRect();
+    const naturalWidth = img.naturalWidth || 1280;
+    const naturalHeight = img.naturalHeight || 800;
+
+    const containerRatio = rect.width / rect.height;
+    const imageRatio = naturalWidth / naturalHeight;
+
+    let renderWidth = rect.width;
+    let renderHeight = rect.height;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (containerRatio > imageRatio) {
+      // Pillarbox (bars on left/right)
+      renderWidth = rect.height * imageRatio;
+      offsetX = (rect.width - renderWidth) / 2;
+    } else {
+      // Letterbox (bars on top/bottom)
+      renderHeight = rect.width / imageRatio;
+      offsetY = (rect.height - renderHeight) / 2;
+    }
+
+    const clickX = e.clientX - rect.left - offsetX;
+    const clickY = e.clientY - rect.top - offsetY;
+
+    if (clickX >= 0 && clickX <= renderWidth && clickY >= 0 && clickY <= renderHeight) {
+      const x = Math.round((clickX / renderWidth) * naturalWidth);
+      const y = Math.round((clickY / renderHeight) * naturalHeight);
+      sendScreenInput(dblClick ? "dblclick" : "click", { x, y, button: e.button === 2 ? "right" : "left" });
+    }
     lastActiveTimeRef.current = Date.now();
   };
 
-  // Start/stop polling when takeover modal opens/closes
+  // Start/stop polling when takeover modal opens/closes or when switching to computer tab
   useEffect(() => {
-    if (isFreestyleAgent && isFullscreenModal && !isPaused) {
-      startScreenPolling();
+    if (isFreestyleAgent && !isPaused) {
+      if (isFullscreenModal) {
+        startScreenPolling();
+      } else if (activeTab === "computer" && !screenSrc) {
+        // Fetch single preview shot for the mini viewport
+        fetch(`/api/sandbox/screen?agentId=${agentId}&campaignId=${campaignId}&t=${Date.now()}`)
+          .then((r) => r.ok ? r.blob() : null)
+          .then((blob) => {
+            if (blob) {
+              const objUrl = URL.createObjectURL(blob);
+              setScreenSrc((prev) => { if (prev) URL.revokeObjectURL(prev); return objUrl; });
+            }
+          })
+          .catch(() => {});
+      }
     } else {
       stopScreenPolling();
     }
     return () => stopScreenPolling();
-  }, [isFreestyleAgent, isFullscreenModal, isPaused, agentId]);
+  }, [isFreestyleAgent, isFullscreenModal, isPaused, activeTab, agentId]);
 
   // Host PC Clipboard Paste state
   const [pasteSuccessToast, setPasteSuccessToast] = useState<string | null>(null);
@@ -907,8 +957,23 @@ export function AgentTabs({
       });
       const data = await res.json();
       if (data) {
-        setSandboxInfo(data);
+        setSandboxInfo((prev: any) => ({ ...prev, ...data }));
         setIsPaused(data.status === "paused");
+        if (data.status === "running" && isFreestyleAgent) {
+          // Immediately refresh live desktop screenshot
+          fetch(`/api/sandbox/screen?agentId=${agentId}&campaignId=${campaignId}&t=${Date.now()}`)
+            .then((r) => (r.ok ? r.blob() : null))
+            .then((blob) => {
+              if (blob) {
+                const objUrl = URL.createObjectURL(blob);
+                setScreenSrc((prev) => {
+                  if (prev) URL.revokeObjectURL(prev);
+                  return objUrl;
+                });
+              }
+            })
+            .catch(() => {});
+        }
       }
     } catch (err) {
       console.error("Pause toggle error:", err);
@@ -1548,7 +1613,13 @@ export function AgentTabs({
 
           {/* Desktop Viewport */}
           <div className="flex-1 min-h-[300px] max-h-[460px] bg-slate-950 rounded-2xl border-2 border-slate-200 dark:border-slate-800 overflow-hidden relative shadow-md group">
-            {sandboxInfo?.previewImage ? (
+            {isFreestyleAgent && !isPaused && screenSrc ? (
+              <img
+                src={screenSrc}
+                alt="Cloud Desktop Live Preview"
+                className="w-full h-full object-contain bg-slate-950 select-none"
+              />
+            ) : sandboxInfo?.previewImage ? (
               <img
                 src={sandboxInfo.previewImage}
                 alt="Cloud Desktop Preview"
@@ -1978,6 +2049,9 @@ export function AgentTabs({
                         onClick={(e) => handleScreenClick(e)}
                         onDoubleClick={(e) => { e.preventDefault(); handleScreenClick(e, true); }}
                         onContextMenu={(e) => { e.preventDefault(); handleScreenClick(e); }}
+                        onWheel={(e) => {
+                          sendScreenInput("scroll", { scrollY: e.deltaY });
+                        }}
                       />
                     ) : (
                       <div className="flex flex-col items-center gap-3 text-white/70">

@@ -117,13 +117,26 @@ When the agent workstation wakes up, `initSandboxBrowserAndCdp(wrapper, agentId)
 ### 4. Desktop Streaming, Firewall & Edge Ingress
 - Port `5900`: `x11vnc` bound to `DISPLAY=:0`.
 - Port `6080`: `websockify` serving `/usr/share/novnc`.
-- Port `9222`: Google Chrome remote debugging.
+- Port `9222`: Google Chrome remote debugging (`CDP`).
+- Resolution: Native `1280x800` (`Xvfb :0 -screen 0 1280x800x24`).
 - **Inbound Firewall Rules**: Essential for edge access:
   - `freestyle firewall create --from public --to vm=<vmId>,port=6080,proto=tcp`
   - `freestyle firewall create --from public --to vm=<vmId>,port=5900,proto=tcp`
 - **TLS Ingress Rule**:
+  - Only created once on initial VM creation (never on wake calls, preventing duplicate rules):
   - `freestyle tls create --domain <slug>-vnc.style.dev --from public --to vm=<vmId>,port=6080`
-- **Vercel & Cloud Environment Configuration**:
-  - Always configure `FREESTYLE_API_KEY` in Vercel Project Settings (or embed fallback in `lib/freestyle-sandbox.ts`). Without this key, serverless routes return `Freestyle API key not configured` and fail to wake the VM.
-  - **Edge Connection Behavior**: When a VM is paused, the Freestyle edge proxy closes incoming connections immediately (`ERR_CONNECTION_CLOSED`). Waking the VM via "Turn On Pc" or autonomous API wakes the VM in <400ms, enabling `HTTP/2 200 OK` streaming.
-- User Take Over toggle gives instant mouse & keyboard control inside the dashboard iframe.
+
+### 5. Interactive Desktop Streaming Architecture (`/api/sandbox/screen`)
+- **Root Cause of `ERR_CONNECTION_CLOSED`**: The Freestyle edge router (`208.72.218.28`) drops external public WebSocket connections to `*.style.dev` domains. While connections succeed from inside the Freestyle network, public web browsers see `ERR_CONNECTION_CLOSED`.
+- **Solution — Native Screenshot-Stream Engine**:
+  - **GET `/api/sandbox/screen?agentId=xxx`**: Takes a snapshot via `DISPLAY=:0 scrot` inside the VM and returns raw PNG bytes via the authenticated Freestyle exec API (`api.freestyle.sh`).
+  - **POST `/api/sandbox/screen`**: Accepts `click`, `dblclick`, `move`, `scroll`, `key`, `type`, and `navigate` actions and injects them directly into X11 using `xdotool`.
+  - **Dynamic Scaling & Letterbox Compensation**: In `AgentTabs.tsx`, click coordinates are mapped from the rendered element to the native `1280x800` desktop taking letterbox / pillarbox black bars into account.
+  - **Sub-200ms Interactive Refresh**: Whenever the user clicks, types, or scrolls, the UI immediately re-fetches a fresh frame for near-instant visual feedback.
+  - **Automatic Fallback**: E2B agents continue using the standard noVNC iframe, while Freestyle agents automatically use the ultra-reliable screenshot-stream viewer.
+
+### 6. Git & Remote Deployment Configuration
+- When pushing to GitHub from Windows environments with multiple GitHub accounts, set the remote URL with the username:
+  `git remote set-url origin https://<username>@github.com/<org>/<repo>.git`
+  This prevents `git-credential-manager` from hanging background processes when switching accounts.
+- `FREESTYLE_API_KEY` is embedded as a fallback in `lib/freestyle-sandbox.ts` so Vercel serverless functions wake and control VMs seamlessly without requiring environment variable configuration.

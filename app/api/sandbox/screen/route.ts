@@ -1,15 +1,26 @@
 import { NextResponse } from "next/server";
-import { getOrCreateFreestyleSandbox } from "@/lib/freestyle-sandbox";
+import { isFreestyleAgent } from "@/lib/sandbox";
+import { getFreestyleConfigForAgent } from "@/lib/freestyle-sandbox";
 import { Freestyle } from "freestyle";
 
 const FREESTYLE_API_KEY =
   process.env.FREESTYLE_API_KEY ||
   "HJvPGG99GGP8NFW3auYy8o-5PBhkqJYwCsHPye82jT3ttbFs6E3eBdPmpMJaNCg37Bz";
 
-const VM_ID = "vm-3cb555595b524fd8939eee9e5200a353";
+const FALLBACK_VM_ID = "vm-3cb555595b524fd8939eee9e5200a353";
 
 function getFreestyleClient() {
   return new Freestyle({ apiKey: FREESTYLE_API_KEY });
+}
+
+async function getVmRef(freestyle: any, agentId: string) {
+  const { slug } = getFreestyleConfigForAgent(agentId);
+  try {
+    const list = await freestyle.vms.list();
+    const rawVm = list.vms.find((v: any) => v.slug === slug);
+    if (rawVm) return freestyle.vms.ref(rawVm.id);
+  } catch {}
+  return freestyle.vms.ref(FALLBACK_VM_ID);
 }
 
 // GET /api/sandbox/screen?agentId=ig_shader&campaignId=default_campaign
@@ -18,15 +29,13 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const agentId = searchParams.get("agentId") || "ig_shader";
-    const campaignId = searchParams.get("campaignId") || "default_campaign";
 
-    // Only handle Freestyle agents
-    if (!["ig_shader", "ig_real"].includes(agentId)) {
+    if (!isFreestyleAgent(agentId)) {
       return NextResponse.json({ error: "Not a Freestyle agent" }, { status: 400 });
     }
 
     const freestyle = getFreestyleClient();
-    const vm = freestyle.vms.ref(VM_ID);
+    const vm = await getVmRef(freestyle, agentId);
 
     // Take a screenshot via scrot and return raw PNG bytes
     const res = await vm.exec({
@@ -60,12 +69,12 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { agentId = "ig_shader", action, x, y, button, key, text, scrollY } = body;
 
-    if (!["ig_shader", "ig_real"].includes(agentId)) {
+    if (!isFreestyleAgent(agentId)) {
       return NextResponse.json({ error: "Not a Freestyle agent" }, { status: 400 });
     }
 
     const freestyle = getFreestyleClient();
-    const vm = freestyle.vms.ref(VM_ID);
+    const vm = await getVmRef(freestyle, agentId);
 
     let cmd = "";
 
