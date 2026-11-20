@@ -114,8 +114,16 @@ When the agent workstation wakes up, `initSandboxBrowserAndCdp(wrapper, agentId)
 - Restores learned navigation routes from Turso Cloud DB (`hermes_routes_${agentId}`) into `/home/user/.hermes/memory/learned_routes.json`.
 - Configures dedicated Gemini API keys and failover pools into `/home/user/.hermes/.env`.
 
-### 4. Desktop Streaming & User Take Over
+### 4. Desktop Streaming, Firewall & Edge Ingress
 - Port `5900`: `x11vnc` bound to `DISPLAY=:0`.
 - Port `6080`: `websockify` serving `/usr/share/novnc`.
 - Port `9222`: Google Chrome remote debugging.
+- **Inbound Firewall Rules**: Essential for edge access:
+  - `freestyle firewall create --from public --to vm=<vmId>,port=6080,proto=tcp`
+  - `freestyle firewall create --from public --to vm=<vmId>,port=5900,proto=tcp`
+- **TLS Ingress Rule**:
+  - `freestyle tls create --domain <slug>-vnc.style.dev --from public --to vm=<vmId>,port=6080`
+- **Vercel & Cloud Environment Configuration**:
+  - Always configure `FREESTYLE_API_KEY` in Vercel Project Settings (or embed fallback in `lib/freestyle-sandbox.ts`). Without this key, serverless routes return `Freestyle API key not configured` and fail to wake the VM.
+  - **Edge Connection Behavior**: When a VM is paused, the Freestyle edge proxy closes incoming connections immediately (`ERR_CONNECTION_CLOSED`). Waking the VM via "Turn On Pc" or autonomous API wakes the VM in <400ms, enabling `HTTP/2 200 OK` streaming.
 - User Take Over toggle gives instant mouse & keyboard control inside the dashboard iframe.
