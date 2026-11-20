@@ -50,7 +50,7 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
   let found: string | null = null;
   if (lower.includes("insta real") || lower.includes("instareal") || lower.includes("ig_real")) {
     found = "ig_real";
-  } else if (lower.includes("insta shader") || lower.includes("instashader") || lower.includes("ig_shader")) {
+  } else if (lower.includes("insta shader") || lower.includes("instashader") || lower.includes("ig_shader") || /\bshader\b/i.test(lower)) {
     found = "ig_shader";
   } else if (lower.includes("laxdollar fb") || lower.includes("fb_laxdollar") || (lower.includes("laxdollar") && !lower.includes("laxdollar.site") && !lower.includes("search"))) {
     found = "fb_laxdollar";
