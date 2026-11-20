@@ -11,6 +11,18 @@ import {
 
 const apiKey = process.env.E2B_API_KEY || "";
 
+/**
+ * Registry of agents migrated to Freestyle Persistent Sandbox VMs.
+ * Any agent added here automatically boots, streams, and hibernates in Freestyle with $0 idle compute cost.
+ */
+export const FREESTYLE_MIGRATED_AGENTS = new Set<string>([
+  "ig_shader",
+]);
+
+export function isFreestyleAgent(agentId: string): boolean {
+  return FREESTYLE_MIGRATED_AGENTS.has(agentId);
+}
+
 // In-memory active sandbox instances cache
 const activeSandboxes: Map<string, any> = new Map();
 (global as any).__activeSandboxes = activeSandboxes;
@@ -38,8 +50,8 @@ export async function getOrCreateAgentSandbox(
   agentId: string,
   launchIfMissing: boolean = false
 ): Promise<SandboxStatusInfo> {
-  // Route INSTA SHADER exclusively to its dedicated Freestyle VM with pause & persist capability
-  if (agentId === "ig_shader") {
+  // Route migrated agents to dedicated Freestyle persistent VMs ($0 compute when idle)
+  if (isFreestyleAgent(agentId)) {
     return getOrCreateFreestyleSandbox(campaignId, agentId, launchIfMissing);
   }
 
@@ -219,7 +231,7 @@ export async function getOrCreateAgentSandbox(
 }
 
 export async function pauseAgentSandbox(campaignId: string, agentId: string) {
-  if (agentId === "ig_shader") {
+  if (isFreestyleAgent(agentId)) {
     return pauseFreestyleSandbox(campaignId, agentId);
   }
 
@@ -275,7 +287,7 @@ export async function toggleUserTakeover(
   agentId: string,
   takeOver: boolean
 ) {
-  if (agentId === "ig_shader") {
+  if (isFreestyleAgent(agentId)) {
     return toggleFreestyleUserTakeover(campaignId, agentId, takeOver);
   }
 

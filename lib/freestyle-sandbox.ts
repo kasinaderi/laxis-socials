@@ -6,6 +6,15 @@ import { initSandboxBrowserAndCdp } from "./cdp";
 import { SandboxStatusInfo } from "./sandbox";
 
 const apiKey = process.env.FREESTYLE_API_KEY || "";
+
+export function getFreestyleConfigForAgent(agentId: string) {
+  const cleanId = agentId.replace(/_/g, "-");
+  const slug = `laxis-${cleanId}`;
+  const vncDomain = `${slug}-vnc.style.dev`;
+  const streamUrl = `https://${vncDomain}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+  return { slug, vncDomain, streamUrl };
+}
+
 export const FREESTYLE_SLUG = "laxis-ig-shader";
 export const FREESTYLE_VNC_DOMAIN = "laxis-ig-shader-vnc.style.dev";
 export const FREESTYLE_STREAM_URL = `https://${FREESTYLE_VNC_DOMAIN}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
@@ -46,7 +55,13 @@ function getFreestyleClient(): Freestyle | null {
   return new Freestyle({ apiKey });
 }
 
-export function createFreestyleWrapper(vmRef: any, vmId: string): FreestyleSandboxWrapper {
+export function createFreestyleWrapper(
+  vmRef: any,
+  vmId: string,
+  agentId: string = "ig_shader"
+): FreestyleSandboxWrapper {
+  const { vncDomain, streamUrl } = getFreestyleConfigForAgent(agentId);
+
   const wrapper: FreestyleSandboxWrapper = {
     sandboxId: vmId,
     provider: "freestyle",
@@ -109,7 +124,7 @@ export function createFreestyleWrapper(vmRef: any, vmId: string): FreestyleSandb
       }
     },
     stream: {
-      url: FREESTYLE_STREAM_URL,
+      url: streamUrl,
       start: async () => {
         try {
           await vmRef.exec({
@@ -123,7 +138,7 @@ export function createFreestyleWrapper(vmRef: any, vmId: string): FreestyleSandb
     },
     getHost: (port: number) => {
       if (port === 6080) {
-        return FREESTYLE_VNC_DOMAIN;
+        return vncDomain;
       }
       return `127.0.0.1:${port}`;
     },
@@ -185,6 +200,8 @@ export async function getOrCreateFreestyleSandbox(
   let wrapper = activeSandboxes.get(cacheKey) as FreestyleSandboxWrapper | undefined;
   const currentVmId = existing?.sandboxId || wrapper?.sandboxId;
 
+  const { slug, vncDomain, streamUrl } = getFreestyleConfigForAgent(agentId);
+
   // STRICTLY READ-ONLY on page loads: Do not wake or start VM if not requested
   if (!launchIfMissing && !wrapper) {
     return {
@@ -192,8 +209,8 @@ export async function getOrCreateFreestyleSandbox(
       sandboxId: currentVmId || undefined,
       status: existing?.status === "running" ? "running" : "paused",
       control: (existing?.control as "agent" | "user") || "agent",
-      streamUrl: FREESTYLE_STREAM_URL,
-      viewUrl: FREESTYLE_STREAM_URL,
+      streamUrl: streamUrl,
+      viewUrl: streamUrl,
       lastAction: currentVmId
         ? `Freestyle VM: ${currentVmId} (Paused · $0 cost)`
         : "Freestyle VM hibernated (Click 'Turn On' to launch)",
@@ -220,15 +237,15 @@ export async function getOrCreateFreestyleSandbox(
   try {
     // 1. Locate or create the Freestyle VM
     const list = await freestyle.vms.list();
-    const rawVm = list.vms.find((v) => v.slug === FREESTYLE_SLUG);
+    const rawVm = list.vms.find((v) => v.slug === slug);
     let vmRef: any = null;
     let vmId = currentVmId;
 
     if (!rawVm) {
-      console.log(`[Freestyle] Creating persistent VM '${FREESTYLE_SLUG}'...`);
+      console.log(`[Freestyle] Creating persistent VM '${slug}'...`);
       const created = await freestyle.vms.create({
         firewall: { rules: [{ action: "allow", source: {}, destination: { public: true } }] },
-        slug: FREESTYLE_SLUG,
+        slug,
         idleTimeoutSeconds: null,
       });
       vmRef = created.vm;
@@ -243,14 +260,14 @@ export async function getOrCreateFreestyleSandbox(
       }
     }
 
-    wrapper = createFreestyleWrapper(vmRef, vmId!);
+    wrapper = createFreestyleWrapper(vmRef, vmId!, agentId);
     activeSandboxes.set(cacheKey, wrapper);
 
     // 2. Ensure TLS routing rule is in place for port 6080
     try {
       await freestyle.tls.rules.create({
         action: "allow",
-        domain: FREESTYLE_VNC_DOMAIN,
+        domain: vncDomain,
         source: { public: true },
         destination: { vmId: vmId!, port: 6080 },
       });
@@ -298,8 +315,8 @@ export async function getOrCreateFreestyleSandbox(
           sandboxId: vmId,
           status: "running",
           control: "agent",
-          streamUrl: FREESTYLE_STREAM_URL,
-          viewUrl: FREESTYLE_STREAM_URL,
+          streamUrl: streamUrl,
+          viewUrl: streamUrl,
           activeAt: now,
           createdAt: now,
         })
@@ -311,8 +328,8 @@ export async function getOrCreateFreestyleSandbox(
           status: "running",
           activeAt: now,
           sandboxId: vmId,
-          streamUrl: FREESTYLE_STREAM_URL,
-          viewUrl: FREESTYLE_STREAM_URL,
+          streamUrl: streamUrl,
+          viewUrl: streamUrl,
         })
         .where(eq(agentSandboxes.id, existing.id))
         .run();
@@ -323,8 +340,8 @@ export async function getOrCreateFreestyleSandbox(
       sandboxId: vmId,
       status: "running",
       control: (existing?.control as "agent" | "user") || "agent",
-      streamUrl: FREESTYLE_STREAM_URL,
-      viewUrl: FREESTYLE_STREAM_URL,
+      streamUrl: streamUrl,
+      viewUrl: streamUrl,
       lastAction: `Active Freestyle Cloud Workstation (VM: ${vmId})`,
       previewImage: previewImage || getFreestylePreview(agentId),
       isRealE2B: true,
@@ -361,8 +378,9 @@ export async function pauseFreestyleSandbox(
     const freestyle = getFreestyleClient();
     if (freestyle) {
       try {
+        const { slug } = getFreestyleConfigForAgent(agentId);
         const list = await freestyle.vms.list();
-        const rawVm = list.vms.find((v) => v.slug === FREESTYLE_SLUG);
+        const rawVm = list.vms.find((v) => v.slug === slug);
         if (rawVm && rawVm.state !== "paused") {
           const vmRef = freestyle.vms.ref(rawVm.id);
           console.log(`[Freestyle] Pausing VM ${rawVm.id} directly...`);
