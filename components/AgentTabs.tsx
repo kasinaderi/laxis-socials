@@ -307,6 +307,78 @@ export function AgentTabs({
   const lastActiveTimeRef = useRef<number>(Date.now());
   const heartbeatTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Screenshot-based viewer state (for Freestyle agents: ig_shader, ig_real)
+  const isFreestyleAgent = ["ig_shader", "ig_real"].includes(agentId);
+  const [screenSrc, setScreenSrc] = useState<string>("");
+  const [screenError, setScreenError] = useState<string>("");
+  const [isScreenPolling, setIsScreenPolling] = useState(false);
+  const screenCanvasRef = useRef<HTMLCanvasElement>(null);
+  const screenPollRef = useRef<NodeJS.Timeout | null>(null);
+  const screenViewRef = useRef<HTMLDivElement>(null);
+
+  // Start/stop screenshot polling for Freestyle agents
+  const startScreenPolling = () => {
+    if (screenPollRef.current) return;
+    setIsScreenPolling(true);
+    setScreenError("");
+    const poll = async () => {
+      try {
+        const url = `/api/sandbox/screen?agentId=${agentId}&campaignId=${campaignId}&t=${Date.now()}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const blob = await res.blob();
+          const objUrl = URL.createObjectURL(blob);
+          setScreenSrc((prev) => { if (prev) URL.revokeObjectURL(prev); return objUrl; });
+          setScreenError("");
+        } else {
+          const err = await res.json().catch(() => ({ error: "Stream error" }));
+          setScreenError(err.error || "Screenshot failed");
+        }
+      } catch (e: any) {
+        setScreenError("Connection error");
+      }
+      screenPollRef.current = setTimeout(poll, 1200); // ~0.8 fps refresh
+    };
+    screenPollRef.current = setTimeout(poll, 300);
+  };
+
+  const stopScreenPolling = () => {
+    if (screenPollRef.current) { clearTimeout(screenPollRef.current); screenPollRef.current = null; }
+    setIsScreenPolling(false);
+  };
+
+  // Send input to VM via screen API
+  const sendScreenInput = async (action: string, params: Record<string, any>) => {
+    try {
+      await fetch("/api/sandbox/screen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId, campaignId, action, ...params }),
+      });
+    } catch {}
+  };
+
+  // Screen click handler: map click coordinates to VM resolution (1920x1080)
+  const handleScreenClick = (e: React.MouseEvent<HTMLImageElement | HTMLDivElement>, dblClick = false) => {
+    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    const scaleX = 1920 / rect.width;
+    const scaleY = 1080 / rect.height;
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+    sendScreenInput(dblClick ? "dblclick" : "click", { x, y, button: e.button === 2 ? "right" : "left" });
+    lastActiveTimeRef.current = Date.now();
+  };
+
+  // Start/stop polling when takeover modal opens/closes
+  useEffect(() => {
+    if (isFreestyleAgent && isFullscreenModal && !isPaused) {
+      startScreenPolling();
+    } else {
+      stopScreenPolling();
+    }
+    return () => stopScreenPolling();
+  }, [isFreestyleAgent, isFullscreenModal, isPaused, agentId]);
+
   // Host PC Clipboard Paste state
   const [pasteSuccessToast, setPasteSuccessToast] = useState<string | null>(null);
   const [isPasting, setIsPasting] = useState(false);
@@ -1860,12 +1932,12 @@ export function AgentTabs({
               )}
             </div>
 
-            {/* Real Interactive noVNC Cloud Stream */}
+            {/* Real Interactive Cloud Stream — Screenshot viewer for Freestyle, noVNC iframe for E2B */}
             <div
+              ref={screenViewRef}
               className="flex-1 bg-slate-950 relative overflow-hidden flex items-center justify-center"
               onMouseMove={() => (lastActiveTimeRef.current = Date.now())}
               onMouseEnter={() => (lastActiveTimeRef.current = Date.now())}
-              onClick={() => (lastActiveTimeRef.current = Date.now())}
             >
               {/* Host PC Paste Toast Notification */}
               {pasteSuccessToast && (
@@ -1893,7 +1965,54 @@ export function AgentTabs({
                     <span>Wake &amp; Connect Agent PC</span>
                   </button>
                 </div>
+              ) : isFreestyleAgent ? (
+                /* ── Freestyle Screenshot-Based Viewer ── */
+                isScreenPolling || screenSrc ? (
+                  <div className="relative w-full h-full flex items-center justify-center bg-black">
+                    {screenSrc ? (
+                      <img
+                        src={screenSrc}
+                        alt="Agent PC Desktop"
+                        className="max-w-full max-h-full object-contain cursor-crosshair select-none"
+                        draggable={false}
+                        onClick={(e) => handleScreenClick(e)}
+                        onDoubleClick={(e) => { e.preventDefault(); handleScreenClick(e, true); }}
+                        onContextMenu={(e) => { e.preventDefault(); handleScreenClick(e); }}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center gap-3 text-white/70">
+                        <RefreshCw className="w-8 h-8 animate-spin text-blue-400" />
+                        <p className="text-xs">Connecting to Agent PC...</p>
+                      </div>
+                    )}
+                    {screenError && (
+                      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-red-900/90 border border-red-700 text-red-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg flex items-center gap-2">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        <span>{screenError} — retrying...</span>
+                      </div>
+                    )}
+                    {/* Live indicator */}
+                    <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 backdrop-blur-sm px-2 py-1 rounded-lg">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="text-[10px] font-bold text-emerald-300">LIVE</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center text-white/70 text-xs p-6 text-center gap-3">
+                    <Monitor className="w-10 h-10 text-blue-400" />
+                    <p className="font-bold text-sm text-white">Agent PC is Paused</p>
+                    <p className="text-slate-400 max-w-xs">Click &ldquo;Turn On Pc&rdquo; first, then come back here to control the desktop.</p>
+                    <button
+                      onClick={async () => { await handleWakeAndReconnect(); startScreenPolling(); }}
+                      className="mt-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-bold text-white cursor-pointer shadow-md flex items-center gap-2"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-white" />
+                      Wake &amp; Connect
+                    </button>
+                  </div>
+                )
               ) : sandboxInfo?.streamUrl ? (
+                /* ── E2B/Other agents: standard noVNC iframe ── */
                 <iframe
                   key={`${sandboxInfo.streamUrl}_${streamKey}`}
                   src={sandboxInfo.streamUrl}

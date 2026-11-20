@@ -1,0 +1,100 @@
+import { NextResponse } from "next/server";
+import { getOrCreateFreestyleSandbox } from "@/lib/freestyle-sandbox";
+import { Freestyle } from "freestyle";
+
+const FREESTYLE_API_KEY =
+  process.env.FREESTYLE_API_KEY ||
+  "HJvPGG99GGP8NFW3auYy8o-5PBhkqJYwCsHPye82jT3ttbFs6E3eBdPmpMJaNCg37Bz";
+
+const VM_ID = "vm-3cb555595b524fd8939eee9e5200a353";
+
+function getFreestyleClient() {
+  return new Freestyle({ apiKey: FREESTYLE_API_KEY });
+}
+
+// GET /api/sandbox/screen?agentId=ig_shader&campaignId=default_campaign
+// Returns a live PNG screenshot of the VM desktop
+export async function GET(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const agentId = searchParams.get("agentId") || "ig_shader";
+    const campaignId = searchParams.get("campaignId") || "default_campaign";
+
+    // Only handle Freestyle agents
+    if (!["ig_shader", "ig_real"].includes(agentId)) {
+      return NextResponse.json({ error: "Not a Freestyle agent" }, { status: 400 });
+    }
+
+    const freestyle = getFreestyleClient();
+    const vm = freestyle.vms.ref(VM_ID);
+
+    // Take a screenshot via scrot and return raw PNG bytes
+    const res = await vm.exec({
+      command: "DISPLAY=:0 scrot -o /tmp/live_shot.png 2>/dev/null && base64 -w 0 /tmp/live_shot.png",
+      linuxUser: "root",
+      timeoutMs: 10_000,
+    });
+
+    const b64 = (res.stdout || "").trim();
+    if (!b64) {
+      return NextResponse.json({ error: "No screenshot available" }, { status: 503 });
+    }
+
+    const pngBuffer = Buffer.from(b64, "base64");
+    return new Response(pngBuffer, {
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "X-VM-State": "running",
+      },
+    });
+  } catch (err: any) {
+    console.error("[Screen] Screenshot error:", err?.message);
+    return NextResponse.json({ error: err?.message || "Screenshot failed" }, { status: 500 });
+  }
+}
+
+// POST /api/sandbox/screen — send mouse/keyboard input to the VM
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const { agentId = "ig_shader", action, x, y, button, key, text, scrollY } = body;
+
+    if (!["ig_shader", "ig_real"].includes(agentId)) {
+      return NextResponse.json({ error: "Not a Freestyle agent" }, { status: 400 });
+    }
+
+    const freestyle = getFreestyleClient();
+    const vm = freestyle.vms.ref(VM_ID);
+
+    let cmd = "";
+
+    if (action === "click" && x !== undefined && y !== undefined) {
+      const btn = button === "right" ? 3 : 1;
+      cmd = `DISPLAY=:0 xdotool mousemove ${Math.round(x)} ${Math.round(y)} click ${btn}`;
+    } else if (action === "move" && x !== undefined && y !== undefined) {
+      cmd = `DISPLAY=:0 xdotool mousemove ${Math.round(x)} ${Math.round(y)}`;
+    } else if (action === "dblclick" && x !== undefined && y !== undefined) {
+      cmd = `DISPLAY=:0 xdotool mousemove ${Math.round(x)} ${Math.round(y)} click --repeat 2 1`;
+    } else if (action === "scroll" && scrollY !== undefined) {
+      const btn = scrollY > 0 ? 5 : 4; // 4=up, 5=down
+      cmd = `DISPLAY=:0 xdotool click ${btn}`;
+    } else if (action === "key" && key) {
+      cmd = `DISPLAY=:0 xdotool key ${key}`;
+    } else if (action === "type" && text) {
+      const escaped = text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      cmd = `DISPLAY=:0 xdotool type --delay 10 "${escaped}"`;
+    } else if (action === "navigate" && text) {
+      // Open URL in Chrome on the VM
+      cmd = `DISPLAY=:0 nohup google-chrome --no-sandbox "${text.replace(/"/g, '\\"')}" >/dev/null 2>&1 &`;
+    } else {
+      return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+    }
+
+    await vm.exec({ command: cmd, linuxUser: "root", timeoutMs: 8_000 });
+    return NextResponse.json({ success: true, action });
+  } catch (err: any) {
+    console.error("[Screen] Input error:", err?.message);
+    return NextResponse.json({ error: err?.message || "Input failed" }, { status: 500 });
+  }
+}
