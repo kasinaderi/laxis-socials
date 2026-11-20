@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { posts, socialAccounts, agentSandboxes } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
-import { getOrCreateAgentSandbox, pauseAgentSandbox } from "./sandbox";
+import { getOrCreateAgentSandbox, pauseAgentSandbox, isFreestyleAgent } from "./sandbox";
 import {
   runHermesTask,
   installHermesInSandbox,
@@ -84,8 +84,8 @@ export async function executeLocoagentPublish(postId: string): Promise<PublishRe
 
     let activeSandbox: any = null;
 
-    if (existingSb && existingSb.sandboxId) {
-      addLog(`Connecting to dedicated persistent microVM: ${existingSb.sandboxId}...`);
+    if ((existingSb && existingSb.sandboxId) || isFreestyleAgent(agentId)) {
+      addLog(`Connecting to dedicated persistent ${isFreestyleAgent(agentId) ? "Freestyle" : "E2B"} workstation for ${agentId}...`);
       try {
         const sbInfo = await getOrCreateAgentSandbox(post.campaignId, agentId, true);
         const cacheKey = `${post.campaignId}_${agentId}`;

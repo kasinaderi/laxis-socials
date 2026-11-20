@@ -231,7 +231,7 @@ echo "PROVISIONING_COMPLETE"
   });
   console.log(`[4/6] ✓ Screenshot capture verified: ${shotRes.stdout.trim()}`);
 
-  // 5. Update lib/sandbox.ts registry
+  // 5. Update lib/sandbox.ts registry & Database
   console.log(`\n[5/6] Registering '${agentId}' in lib/sandbox.ts FREESTYLE_MIGRATED_AGENTS...`);
   const sandboxTsPath = path.resolve('lib/sandbox.ts');
   let sandboxTs = fs.readFileSync(sandboxTsPath, 'utf8');
@@ -251,6 +251,27 @@ echo "PROVISIONING_COMPLETE"
     console.log(`[5/6] ✓ Registered '${agentId}' in lib/sandbox.ts`);
   } else {
     console.log(`[5/6] ✓ '${agentId}' was already registered in lib/sandbox.ts`);
+  }
+
+  // Sync Turso Database record with the new Freestyle VM ID and stream URL
+  try {
+    const { createClient } = await import('@libsql/client');
+    const tursoUrl = (envContent.match(/TURSO_DATABASE_URL=(.*)/)?.[1] || '').trim();
+    const tursoToken = (envContent.match(/TURSO_AUTH_TOKEN=(.*)/)?.[1] || '').trim();
+    if (tursoUrl) {
+      const client = createClient({ url: tursoUrl, authToken: tursoToken });
+      const streamUrl = `https://${vncDomain}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+      const now = new Date().toISOString();
+      await client.execute({
+        sql: `INSERT INTO agent_sandboxes (id, campaign_id, agent_id, sandbox_id, status, control, stream_url, view_url, active_at, created_at)
+              VALUES (?, 'default_campaign', ?, ?, 'paused', 'agent', ?, ?, ?, ?)
+              ON CONFLICT(id) DO UPDATE SET sandbox_id = excluded.sandbox_id, stream_url = excluded.stream_url, view_url = excluded.view_url, status = 'paused', active_at = excluded.active_at`,
+        args: [`sb_default_campaign_${agentId}`, agentId, vm.id, streamUrl, streamUrl, now, now]
+      });
+      console.log(`[5/6] ✓ Database agent_sandboxes updated for '${agentId}' with VM ID: ${vm.id}`);
+    }
+  } catch (dbErr) {
+    console.log(`[5/6] Database notice: ${dbErr.message}`);
   }
 
   // 6. Pause VM to stop compute billing ($0 cost)

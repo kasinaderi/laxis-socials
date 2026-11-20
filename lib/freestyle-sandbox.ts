@@ -47,12 +47,19 @@ export interface FreestyleSandboxWrapper {
   setTimeout: (ms: number) => Promise<void>;
 }
 
-function getFreestyleClient(): Freestyle | null {
-  if (!apiKey) {
+async function getFreestyleClient(): Promise<any> {
+  const key = process.env.FREESTYLE_API_KEY || apiKey;
+  if (!key) {
     console.warn("[Freestyle] Missing FREESTYLE_API_KEY in environment");
     return null;
   }
-  return new Freestyle({ apiKey });
+  try {
+    const { Freestyle } = await import("freestyle");
+    return new Freestyle({ apiKey: key });
+  } catch (err: any) {
+    console.error("[Freestyle] Error instantiating client:", err?.message);
+    return null;
+  }
 }
 
 export function createFreestyleWrapper(
@@ -145,7 +152,7 @@ export function createFreestyleWrapper(
     open: async (url: string) => {
       try {
         await vmRef.exec({
-          command: `nohup google-chrome --no-sandbox "${url}" >/dev/null 2>&1 &`,
+          command: `DISPLAY=:0 nohup google-chrome --no-sandbox "${url}" >/dev/null 2>&1 &`,
           linuxUser: "root",
         });
       } catch (err: any) {
@@ -186,7 +193,6 @@ export async function getOrCreateFreestyleSandbox(
   agentId: string,
   launchIfMissing: boolean = false
 ): Promise<SandboxStatusInfo> {
-  const freestyle = getFreestyleClient();
   const cacheKey = `${campaignId}_${agentId}`;
   const activeSandboxes: Map<string, any> =
     (global as any).__activeSandboxes || ((global as any).__activeSandboxes = new Map());
@@ -204,20 +210,23 @@ export async function getOrCreateFreestyleSandbox(
 
   // STRICTLY READ-ONLY on page loads: Do not wake or start VM if not requested
   if (!launchIfMissing && !wrapper) {
+    const isRunning = existing?.status === "running";
     return {
       agentId,
       sandboxId: currentVmId || undefined,
-      status: existing?.status === "running" ? "running" : "paused",
+      status: isRunning ? "running" : "paused",
       control: (existing?.control as "agent" | "user") || "agent",
       streamUrl: streamUrl,
       viewUrl: streamUrl,
       lastAction: currentVmId
-        ? `Freestyle VM: ${currentVmId} (Paused · $0 cost)`
+        ? `Freestyle VM: ${currentVmId} (${isRunning ? "Active · Live" : "Paused · $0 cost"})`
         : "Freestyle VM hibernated (Click 'Turn On' to launch)",
-      previewImage: getFreestylePreview(agentId),
+      previewImage: getFreestylePreview(agentId, isRunning),
       isRealE2B: true,
     };
   }
+
+  const freestyle = await getFreestyleClient();
 
   if (!freestyle) {
     // Even without API key, return the fixed stream URL so the iframe renders
@@ -228,7 +237,7 @@ export async function getOrCreateFreestyleSandbox(
       streamUrl: streamUrl,
       viewUrl: streamUrl,
       lastAction: "Freestyle API key not configured",
-      previewImage: getFreestylePreview(agentId),
+      previewImage: getFreestylePreview(agentId, false),
       isRealE2B: false,
     };
   }
@@ -238,7 +247,7 @@ export async function getOrCreateFreestyleSandbox(
   try {
     // 1. Locate or create the Freestyle VM
     const list = await freestyle.vms.list();
-    const rawVm = list.vms.find((v) => v.slug === slug);
+    const rawVm = list.vms.find((v: any) => v.slug === slug);
     let vmRef: any = null;
     let vmId = currentVmId;
 
@@ -272,7 +281,7 @@ export async function getOrCreateFreestyleSandbox(
       destination: { vmId: vmId!, port: 6080 },
     }).catch(() => {}); // already exists is fine
 
-    // 3. Record / update DB state IMMEDIATELY — so streamUrl is persisted fast
+    // 3. Record / update DB state IMMEDIATELY — so streamUrl & running status are persisted
     const id = existing?.id || `sb_${campaignId}_${agentId}`;
     if (!existing) {
       await db.insert(agentSandboxes).values({
@@ -297,8 +306,16 @@ export async function getOrCreateFreestyleSandbox(
       }).where(eq(agentSandboxes.id, existing.id)).run();
     }
 
-    // 4. Kick off slow work (service checks + Hermes deploy) in the background
-    //    so we can return the stream URL to the client immediately.
+    // 4. Capture real desktop screenshot if possible
+    let previewImg = "";
+    try {
+      const shotBuffer = await wrapper.screenshot();
+      if (shotBuffer && shotBuffer.length > 0) {
+        previewImg = `data:image/png;base64,${shotBuffer.toString("base64")}`;
+      }
+    } catch {}
+
+    // 5. Kick off slow background tasks (service restart & Hermes deployment)
     Promise.resolve().then(async () => {
       try {
         await vmRef.exec({
@@ -320,7 +337,6 @@ export async function getOrCreateFreestyleSandbox(
       }
     });
 
-    // 5. Return immediately with stream URL — client iframe connects while VM warms up
     return {
       agentId,
       sandboxId: vmId,
@@ -329,12 +345,11 @@ export async function getOrCreateFreestyleSandbox(
       streamUrl: streamUrl,
       viewUrl: streamUrl,
       lastAction: `Active Freestyle Cloud Workstation (VM: ${vmId})`,
-      previewImage: getFreestylePreview(agentId),
+      previewImage: previewImg || getFreestylePreview(agentId, true),
       isRealE2B: true,
     };
   } catch (err: any) {
     console.error(`[Freestyle] Launch error for ${agentId}:`, err);
-    // Always return the stream URL so the iframe at least tries to connect
     return {
       agentId,
       sandboxId: currentVmId || undefined,
@@ -343,7 +358,7 @@ export async function getOrCreateFreestyleSandbox(
       streamUrl: streamUrl,
       viewUrl: streamUrl,
       lastAction: `Freestyle launch notice: ${err.message}`,
-      previewImage: getFreestylePreview(agentId),
+      previewImage: getFreestylePreview(agentId, false),
       isRealE2B: false,
     };
   }
@@ -364,12 +379,12 @@ export async function pauseFreestyleSandbox(
     activeSandboxes.delete(cacheKey);
   } else {
     // Check if we can pause via direct Freestyle API
-    const freestyle = getFreestyleClient();
+    const freestyle = await getFreestyleClient();
     if (freestyle) {
       try {
         const { slug } = getFreestyleConfigForAgent(agentId);
         const list = await freestyle.vms.list();
-        const rawVm = list.vms.find((v) => v.slug === slug);
+        const rawVm = list.vms.find((v: any) => v.slug === slug);
         if (rawVm && rawVm.state !== "paused") {
           const vmRef = freestyle.vms.ref(rawVm.id);
           console.log(`[Freestyle] Pausing VM ${rawVm.id} directly...`);
@@ -411,7 +426,12 @@ export async function toggleFreestyleUserTakeover(
   return { control };
 }
 
-export function getFreestylePreview(agentId: string): string {
+export function getFreestylePreview(agentId: string, isRunning: boolean = false): string {
+  const cleanId = agentId.replace(/_/g, " ").toUpperCase();
+  const statusBadge = isRunning
+    ? { text: "● ACTIVE · STREAM LIVE", fill: "%2310b981", bg: "%23064e3b", desc: "Display Server Active · Autopilot Ready", cta: "Click 'Take Over & Control' to interact" }
+    : { text: "● PAUSED · $0 COMPUTE", fill: "%23f59e0b", bg: "%23451a03", desc: "Session State & Logins Preserved", cta: "Click 'Turn On Pc' to wake & connect" };
+
   return `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480">
     <rect width="800" height="480" fill="%23090d16"/>
     <rect width="800" height="40" fill="%23131b2e"/>
@@ -419,26 +439,27 @@ export function getFreestylePreview(agentId: string): string {
     <circle cx="38" cy="20" r="6" fill="%23f59e0b"/>
     <circle cx="56" cy="20" r="6" fill="%2310b981"/>
     <rect x="80" y="8" width="600" height="24" rx="12" fill="%23090d16" stroke="%231e293b" stroke-width="1"/>
-    <text x="100" y="24" font-family="system-ui, sans-serif" font-size="11" fill="%2394a3b8">🔒 https://instagram.com/instashader_tea</text>
+    <text x="100" y="24" font-family="system-ui, sans-serif" font-size="11" fill="%2394a3b8">🔒 https://${encodeURIComponent(agentId)}.internal</text>
     <rect x="0" y="40" width="800" height="440" fill="%23050811"/>
     <rect x="30" y="60" width="740" height="390" rx="8" fill="%230c1220" stroke="%231e293b"/>
     <rect x="30" y="60" width="740" height="30" fill="%23131b2e"/>
-    <text x="45" y="80" font-family="system-ui, sans-serif" font-size="12" font-weight="bold" fill="%23a855f7">Freestyle VM · Dedicated Cloud PC (Status: Paused to Save Credit)</text>
+    <text x="45" y="80" font-family="system-ui, sans-serif" font-size="12" font-weight="bold" fill="${statusBadge.fill}">Freestyle Cloud Workstation · Status: ${statusBadge.text}</text>
     
     <rect x="50" y="110" width="220" height="160" rx="8" fill="%23131b2e"/>
     <rect x="65" y="125" width="190" height="70" rx="4" fill="%239333ea" opacity="0.4"/>
-    <text x="65" y="220" font-family="system-ui, sans-serif" font-size="12" font-weight="bold" fill="%23f8fafc">INSTA SHADER</text>
-    <text x="65" y="240" font-family="system-ui, sans-serif" font-size="10" fill="%23a855f7">● Persistent Freestyle Sandbox</text>
+    <text x="65" y="220" font-family="system-ui, sans-serif" font-size="12" font-weight="bold" fill="%23f8fafc">${cleanId}</text>
+    <text x="65" y="240" font-family="system-ui, sans-serif" font-size="10" fill="${statusBadge.fill}">${statusBadge.text}</text>
 
     <rect x="290" y="110" width="460" height="320" rx="8" fill="%23131b2e"/>
-    <text x="310" y="140" font-family="system-ui, sans-serif" font-size="14" font-weight="bold" fill="%23e2e8f0">Hermes Autonomous Instagram Poster</text>
+    <text x="310" y="140" font-family="system-ui, sans-serif" font-size="14" font-weight="bold" fill="%23e2e8f0">Autonomous Workstation Engine</text>
     <rect x="310" y="160" width="420" height="8" rx="2" fill="%23334155"/>
     <rect x="310" y="175" width="380" height="8" rx="2" fill="%23334155"/>
     <rect x="310" y="190" width="340" height="8" rx="2" fill="%23334155"/>
     <rect x="310" y="215" width="420" height="180" rx="6" fill="%23090d16"/>
-    <text x="330" y="270" font-family="system-ui, sans-serif" font-size="12" fill="%23a855f7">⚡ Freestyle High-Performance VM allocated</text>
-    <text x="330" y="295" font-family="system-ui, sans-serif" font-size="12" fill="%2322c55e">✓ Zero compute billed while paused</text>
-    <text x="330" y="320" font-family="system-ui, sans-serif" font-size="12" fill="%23f59e0b">● Click &apos;Turn On Sandbox&apos; to wake &amp; control</text>
+    <text x="330" y="260" font-family="system-ui, sans-serif" font-size="12" fill="%23a855f7">⚡ Freestyle High-Performance VM Ready</text>
+    <text x="330" y="285" font-family="system-ui, sans-serif" font-size="12" fill="${statusBadge.fill}">${statusBadge.desc}</text>
+    <text x="330" y="310" font-family="system-ui, sans-serif" font-size="12" fill="%2338bdf8">🌐 Port 6080 TLS Stream Active</text>
+    <text x="330" y="340" font-family="system-ui, sans-serif" font-size="12" fill="%23e2e8f0">● ${statusBadge.cta}</text>
 
     <polygon points="260,200 260,220 266,214 273,224 277,222 270,212 278,212" fill="%23ffffff" stroke="%23000000" stroke-width="1.5"/>
   </svg>`;

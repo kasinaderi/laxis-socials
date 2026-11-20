@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getAgentHermesRoutes, saveAgentHermesRoutes } from "@/lib/hermes";
+import { getOrCreateAgentSandbox } from "@/lib/sandbox";
 
 const campaignId = "default_campaign";
 
@@ -155,11 +156,17 @@ export async function POST(req: NextRequest) {
 
     if (!agentId) return NextResponse.json({ error: "agentId required" }, { status: 400 });
 
-    const sb = getActiveSandbox(agentId);
+    let sb = getActiveSandbox(agentId);
+    if (!sb) {
+      // Auto-wake the sandbox so the user doesn't have to manually click Turn On first
+      await getOrCreateAgentSandbox(campaignId, agentId, true);
+      sb = getActiveSandbox(agentId);
+    }
+
     if (!sb) {
       return NextResponse.json(
-        { error: `${agentId} sandbox is not active. Turn the PC on first.` },
-        { status: 409 }
+        { error: `${agentId} workstation could not be started. Check credentials.` },
+        { status: 500 }
       );
     }
 

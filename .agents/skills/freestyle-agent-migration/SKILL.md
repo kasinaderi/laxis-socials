@@ -48,7 +48,9 @@ The script automatically executes:
 3. **Headless Workstation Setup**: Installs Chrome Stable, Xvfb (`DISPLAY=:0`), Openbox, x11vnc, websockify, scrot, xdotool, and python3-websocket.
 4. **Service Configuration**: Starts systemd services for `xvfb`, `openbox`, `x11vnc`, `novnc`, and `chrome-cdp` (`127.0.0.1:9222`).
 5. **CDP & Screen Verification**: Confirms Chrome DevTools Protocol is responding and captures a test screenshot.
-6. **Code Registry Update**: Adds the `agentId` to `FREESTYLE_MIGRATED_AGENTS` in `lib/sandbox.ts`.
+6. **Code & Database Sync**:
+   - Adds the `agentId` to `FREESTYLE_MIGRATED_AGENTS` in `lib/sandbox.ts`.
+   - Updates the Turso SQLite `agent_sandboxes` table with the VM ID and Freestyle stream URL so UI tabs, Golden Route Recorder, and scheduled tasks connect instantly without old E2B references.
 7. **Pause to $0 Compute**: Pauses the VM immediately to protect free credits.
 
 ---
@@ -98,14 +100,21 @@ export function getFreestyleConfigForAgent(agentId: string) {
 }
 ```
 
-### 2. Hermes In-VM Deployment ([lib/cdp.ts](file:///c:/dev/SOCIAL%20MEDIA%20AGENT%20TEAM/lib/cdp.ts) & [lib/hermes.ts](file:///c:/dev/SOCIAL%20MEDIA%20AGENT%20TEAM/lib/hermes.ts))
+### 2. Instant Pre-Seeded Desktop Streaming & UI Controls
+- **Instant iframe loading**: The UI pre-seeds `streamUrl` on click, avoiding waiting on sequential VM initialization. noVNC automatically reconnects via `autoconnect=true&reconnect=true`.
+- **Dynamic Preview Badges**: `getFreestylePreview(agentId, isRunning)` renders an active status badge when running and a paused badge when sleeping.
+- **Power Toggle with Loading State**: `isTogglingPower` provides immediate visual spinner feedback on "Turn On Pc" and "Pause Pc".
+- **Golden Route Recorder Auto-Wake**: Recording requests to `/api/hermes/record` automatically wake the VM if paused.
+- **Autopilot & Automated Tasks**: `locoagent.ts` and `agency-actions.ts` check `isFreestyleAgent` to seamlessly wake the persistent VM for publishing and autonomous tasks.
+
+### 3. Hermes In-VM Deployment ([lib/cdp.ts](file:///c:/dev/SOCIAL%20MEDIA%20AGENT%20TEAM/lib/cdp.ts) & [lib/hermes.ts](file:///c:/dev/SOCIAL%20MEDIA%20AGENT%20TEAM/lib/hermes.ts))
 When the agent workstation wakes up, `initSandboxBrowserAndCdp(wrapper, agentId)`:
 - Sets up `/home/user/cdp_controller.py` for direct browser automation.
 - Deploys `/home/user/hermes_agent.py` and `/home/user/hermes_task.sh`.
 - Restores learned navigation routes from Turso Cloud DB (`hermes_routes_${agentId}`) into `/home/user/.hermes/memory/learned_routes.json`.
 - Configures dedicated Gemini API keys and failover pools into `/home/user/.hermes/.env`.
 
-### 3. Desktop Streaming & User Take Over
+### 4. Desktop Streaming & User Take Over
 - Port `5900`: `x11vnc` bound to `DISPLAY=:0`.
 - Port `6080`: `websockify` serving `/usr/share/novnc`.
 - Port `9222`: Google Chrome remote debugging.

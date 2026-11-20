@@ -1,7 +1,8 @@
 import { db } from "@/db";
 import { agents, posts, agentTasks, agentDeliverables, agentSandboxes } from "@/db/schema";
 import { eq, and, inArray, desc } from "drizzle-orm";
-import { getOrCreateAgentSandbox, pauseAgentSandbox } from "./sandbox";
+import { getOrCreateAgentSandbox, pauseAgentSandbox, isFreestyleAgent } from "./sandbox";
+import { pauseFreestyleSandbox } from "./freestyle-sandbox";
 import { Sandbox } from "@e2b/desktop";
 import { generateWithFallback } from "./ai";
 import {
@@ -724,7 +725,14 @@ export async function pauseAllAgentSandboxes(campaignId: string = "default_campa
   try {
     const allDbSandboxes = await db.select().from(agentSandboxes).all();
     for (const s of allDbSandboxes) {
-      if (s.sandboxId && apiKey) {
+      if (isFreestyleAgent(s.agentId)) {
+        try {
+          await pauseFreestyleSandbox(campaignId, s.agentId);
+          console.log(`[AgencyActions] Freestyle persistent VM (${s.agentId}) paused to $0 cost.`);
+        } catch (e: any) {
+          console.warn(`[AgencyActions] Freestyle pause notice for ${s.agentId}:`, e.message);
+        }
+      } else if (s.sandboxId && apiKey) {
         try {
           const sb = await Sandbox.connect(s.sandboxId, { apiKey });
           const isAlive = await sb.isRunning();

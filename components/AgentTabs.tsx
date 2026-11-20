@@ -129,6 +129,7 @@ export function AgentTabs({
   const [isTakeOver, setIsTakeOver] = useState(false);
   const [isFullscreenModal, setIsFullscreenModal] = useState(false);
   const [isPaused, setIsPaused] = useState(true); // Default to paused to protect credits!
+  const [isTogglingPower, setIsTogglingPower] = useState(false);
   const [sandboxInfo, setSandboxInfo] = useState<any>(null);
   const [isNavigating, setIsNavigating] = useState(false);
   const [customUrl, setCustomUrl] = useState("https://facebook.com");
@@ -183,7 +184,7 @@ export function AgentTabs({
 
   const handleStartRecording = async () => {
     if (!recordRouteName.trim()) { setRecordStatus("Enter a route name first"); return; }
-    setRecordStatus("Starting recorder...");
+    setRecordStatus("Waking Agent PC & starting recorder...");
     try {
       const res = await fetch("/api/hermes/record", {
         method: "POST",
@@ -193,6 +194,7 @@ export function AgentTabs({
       const data = await res.json();
       if (data.success) {
         setIsRecording(true);
+        setIsPaused(false);
         setRecordStatus(`Recording "${recordRouteName}" - navigate in Chrome above...`);
       } else {
         setRecordStatus(data.error || "Failed to start");
@@ -362,18 +364,15 @@ export function AgentTabs({
     lastActiveTimeRef.current = Date.now();
     setStreamKey((k) => k + 1);
 
-    // Pre-seed Freestyle stream URL immediately so the iframe renders right away
-    const freestyleAgents = ["ig_shader"];
-    if (freestyleAgents.includes(agentId)) {
-      const cleanId = agentId.replace(/_/g, "-");
-      const freestyleStreamUrl = `https://laxis-${cleanId}-vnc.style.dev/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
-      setSandboxInfo((prev: any) => ({
-        ...prev,
-        streamUrl: freestyleStreamUrl,
-        viewUrl: freestyleStreamUrl,
-        status: "running",
-      }));
-    }
+    // Pre-seed stream URL immediately so the iframe renders right away
+    const cleanId = agentId.replace(/_/g, "-");
+    const fallbackStreamUrl = `https://laxis-${cleanId}-vnc.style.dev/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+    setSandboxInfo((prev: any) => ({
+      ...prev,
+      streamUrl: prev?.streamUrl || fallbackStreamUrl,
+      viewUrl: prev?.viewUrl || fallbackStreamUrl,
+      status: "running",
+    }));
 
     try {
       const res = await fetch("/api/sandbox", {
@@ -731,23 +730,18 @@ export function AgentTabs({
     setIsTakeOver(nextState);
     if (nextState) {
       setIsFullscreenModal(true);
-      // For Freestyle agents: pre-seed the stream URL immediately so the
-      // iframe renders right away while the VM is waking up in the background.
-      // The noVNC client will auto-reconnect once Chrome is ready.
-      const freestyleAgents = ["ig_shader"];
-      if (freestyleAgents.includes(agentId)) {
-        const cleanId = agentId.replace(/_/g, "-");
-        const freestyleStreamUrl = `https://laxis-${cleanId}-vnc.style.dev/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
-        setSandboxInfo((prev: any) => ({
-          ...prev,
-          streamUrl: freestyleStreamUrl,
-          viewUrl: freestyleStreamUrl,
-          status: "running",
-        }));
-        setIsPaused(false);
-      }
+      setIsPaused(false);
+      // Pre-seed stream URL immediately so the iframe renders right away
+      const cleanId = agentId.replace(/_/g, "-");
+      const fallbackStreamUrl = `https://laxis-${cleanId}-vnc.style.dev/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+      setSandboxInfo((prev: any) => ({
+        ...prev,
+        streamUrl: prev?.streamUrl || fallbackStreamUrl,
+        viewUrl: prev?.viewUrl || fallbackStreamUrl,
+        status: "running",
+      }));
     }
-    // Wake the sandbox (async — stream URL is already shown above for Freestyle agents)
+    // Wake the sandbox (async — stream URL is already shown above)
     try {
       const res = await fetch("/api/sandbox", {
         method: "POST",
@@ -811,22 +805,44 @@ export function AgentTabs({
   };
 
   const handlePauseToggle = async () => {
+    if (isTogglingPower) return;
+    setIsTogglingPower(true);
     const nextPaused = !isPaused;
     setIsPaused(nextPaused);
     const action = nextPaused ? "pause" : "turn_on";
 
-    const res = await fetch("/api/sandbox", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action,
-        agentId,
-        campaignId,
-      }),
-    });
-    const data = await res.json();
-    setSandboxInfo(data);
-    setIsPaused(data.status === "paused");
+    if (!nextPaused) {
+      // Optimistically mark as active & pre-seed stream URL
+      const cleanId = agentId.replace(/_/g, "-");
+      const fallbackStreamUrl = `https://laxis-${cleanId}-vnc.style.dev/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+      setSandboxInfo((prev: any) => ({
+        ...prev,
+        status: "running",
+        streamUrl: prev?.streamUrl || fallbackStreamUrl,
+        viewUrl: prev?.viewUrl || fallbackStreamUrl,
+      }));
+    }
+
+    try {
+      const res = await fetch("/api/sandbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          agentId,
+          campaignId,
+        }),
+      });
+      const data = await res.json();
+      if (data) {
+        setSandboxInfo(data);
+        setIsPaused(data.status === "paused");
+      }
+    } catch (err) {
+      console.error("Pause toggle error:", err);
+    } finally {
+      setIsTogglingPower(false);
+    }
   };
 
   return (
@@ -851,15 +867,25 @@ export function AgentTabs({
               {/* Direct Agent PC On/Off Button near Agent Name */}
               <button
                 onClick={handlePauseToggle}
+                disabled={isTogglingPower}
                 title={isPaused ? "Click to wake Agent PC" : "Click to pause Agent PC"}
-                className={`flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold transition-all shadow-2xs cursor-pointer ${
+                className={`flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold transition-all shadow-2xs cursor-pointer disabled:opacity-60 ${
                   isPaused
                     ? "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 hover:text-emerald-700 dark:hover:text-emerald-400 border border-slate-200 dark:border-slate-700"
                     : "bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 shadow-emerald-500/10"
                 }`}
               >
-                <Power className={`w-3 h-3 ${isPaused ? "text-slate-400 dark:text-slate-500" : "text-emerald-600 dark:text-emerald-400 animate-pulse"}`} />
-                <span>{isPaused ? "PC Off (Click to On)" : "PC Active (Click to Pause)"}</span>
+                {isTogglingPower ? (
+                  <>
+                    <RefreshCw className="w-3 h-3 text-slate-400 animate-spin" />
+                    <span>{isPaused ? "Pausing..." : "Turning On..."}</span>
+                  </>
+                ) : (
+                  <>
+                    <Power className={`w-3 h-3 ${isPaused ? "text-slate-400 dark:text-slate-500" : "text-emerald-600 dark:text-emerald-400 animate-pulse"}`} />
+                    <span>{isPaused ? "PC Off (Click to On)" : "PC Active (Click to Pause)"}</span>
+                  </>
+                )}
               </button>
             </div>
             <p className="text-xs text-slate-400 dark:text-slate-500 font-medium truncate max-w-[240px] sm:max-w-xs">{agentRole}</p>
@@ -1352,14 +1378,24 @@ export function AgentTabs({
             <div className="flex items-center gap-2 flex-shrink-0">
               <button
                 onClick={handlePauseToggle}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer ${
+                disabled={isTogglingPower}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer disabled:opacity-60 ${
                   isPaused
                     ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-500/20"
                     : "bg-amber-600 hover:bg-amber-500 text-white shadow-amber-500/20"
                 }`}
               >
-                {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-                <span>{isPaused ? "Turn On Pc" : "Pause Pc"}</span>
+                {isTogglingPower ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>{isPaused ? "Pausing..." : "Turning On..."}</span>
+                  </>
+                ) : (
+                  <>
+                    {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                    <span>{isPaused ? "Turn On Pc" : "Pause Pc"}</span>
+                  </>
+                )}
               </button>
 
               <button
