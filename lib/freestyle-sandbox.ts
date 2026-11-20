@@ -5,7 +5,9 @@ import { eq, and } from "drizzle-orm";
 import { initSandboxBrowserAndCdp } from "./cdp";
 import { SandboxStatusInfo } from "./sandbox";
 
-const apiKey = process.env.FREESTYLE_API_KEY || "";
+const apiKey =
+  process.env.FREESTYLE_API_KEY ||
+  "HJvPGG99GGP8NFW3auYy8o-5PBhkqJYwCsHPye82jT3ttbFs6E3eBdPmpMJaNCg37Bz";
 
 export function getFreestyleConfigForAgent(agentId: string) {
   const cleanId = agentId.replace(/_/g, "-");
