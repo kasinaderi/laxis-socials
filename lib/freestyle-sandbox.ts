@@ -275,13 +275,15 @@ export async function getOrCreateFreestyleSandbox(
     wrapper = createFreestyleWrapper(vmRef, vmId!, agentId);
     activeSandboxes.set(cacheKey, wrapper);
 
-    // 2. Ensure TLS rule for noVNC port 6080 (best-effort, non-blocking)
-    freestyle.tls.rules.create({
-      action: "allow",
-      domain: vncDomain,
-      source: { public: true },
-      destination: { vmId: vmId!, port: 6080 },
-    }).catch(() => {}); // already exists is fine
+    // 2. Ensure TLS rule for noVNC port 6080 only if newly created VM
+    if (!rawVm) {
+      freestyle.tls.rules.create({
+        action: "allow",
+        domain: vncDomain,
+        source: { public: true },
+        destination: { vmId: vmId!, port: 6080 },
+      }).catch(() => {});
+    }
 
     // 3. Record / update DB state IMMEDIATELY — so streamUrl & running status are persisted
     const id = existing?.id || `sb_${campaignId}_${agentId}`;
