@@ -3,6 +3,11 @@ import { db } from "@/db";
 import { agentSandboxes } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { initSandboxBrowserAndCdp } from "./cdp";
+import {
+  getOrCreateFreestyleSandbox,
+  pauseFreestyleSandbox,
+  toggleFreestyleUserTakeover,
+} from "./freestyle-sandbox";
 
 const apiKey = process.env.E2B_API_KEY || "";
 
@@ -33,6 +38,11 @@ export async function getOrCreateAgentSandbox(
   agentId: string,
   launchIfMissing: boolean = false
 ): Promise<SandboxStatusInfo> {
+  // Route INSTA SHADER exclusively to its dedicated Freestyle VM with pause & persist capability
+  if (agentId === "ig_shader") {
+    return getOrCreateFreestyleSandbox(campaignId, agentId, launchIfMissing);
+  }
+
   const existing = await db
     .select()
     .from(agentSandboxes)
@@ -209,6 +219,10 @@ export async function getOrCreateAgentSandbox(
 }
 
 export async function pauseAgentSandbox(campaignId: string, agentId: string) {
+  if (agentId === "ig_shader") {
+    return pauseFreestyleSandbox(campaignId, agentId);
+  }
+
   const cacheKey = `${campaignId}_${agentId}`;
   let sb = activeSandboxes.get(cacheKey);
 
@@ -261,6 +275,10 @@ export async function toggleUserTakeover(
   agentId: string,
   takeOver: boolean
 ) {
+  if (agentId === "ig_shader") {
+    return toggleFreestyleUserTakeover(campaignId, agentId, takeOver);
+  }
+
   const control = takeOver ? "user" : "agent";
   await db.update(agentSandboxes)
     .set({
