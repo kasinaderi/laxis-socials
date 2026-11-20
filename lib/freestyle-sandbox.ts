@@ -220,19 +220,20 @@ export async function getOrCreateFreestyleSandbox(
   }
 
   if (!freestyle) {
+    // Even without API key, return the fixed stream URL so the iframe renders
     return {
       agentId,
       status: "paused",
       control: "agent",
+      streamUrl: streamUrl,
+      viewUrl: streamUrl,
       lastAction: "Freestyle API key not configured",
       previewImage: getFreestylePreview(agentId),
       isRealE2B: false,
     };
   }
 
-  // User or agent explicitly wants VM active
   const now = new Date().toISOString();
-  let previewImage = "";
 
   try {
     // 1. Locate or create the Freestyle VM
@@ -248,7 +249,7 @@ export async function getOrCreateFreestyleSandbox(
         slug,
         idleTimeoutSeconds: null,
       });
-      vmRef = created.vm;
+      vmRef = freestyle.vms.ref(created.vm.id);
       vmId = created.vm.id;
     } else {
       vmId = rawVm.id;
@@ -256,85 +257,70 @@ export async function getOrCreateFreestyleSandbox(
       if (rawVm.state === "paused") {
         console.log(`[Freestyle] Resuming paused VM ${vmId} for ${agentId}...`);
         await vmRef.start();
-        console.log(`[Freestyle] VM ${vmId} resumed and live!`);
+        console.log(`[Freestyle] VM ${vmId} resumed!`);
       }
     }
 
     wrapper = createFreestyleWrapper(vmRef, vmId!, agentId);
     activeSandboxes.set(cacheKey, wrapper);
 
-    // 2. Ensure TLS routing rule is in place for port 6080
-    try {
-      await freestyle.tls.rules.create({
-        action: "allow",
-        domain: vncDomain,
-        source: { public: true },
-        destination: { vmId: vmId!, port: 6080 },
-      });
-    } catch {
-      // Rule already exists
-    }
+    // 2. Ensure TLS rule for noVNC port 6080 (best-effort, non-blocking)
+    freestyle.tls.rules.create({
+      action: "allow",
+      domain: vncDomain,
+      source: { public: true },
+      destination: { vmId: vmId!, port: 6080 },
+    }).catch(() => {}); // already exists is fine
 
-    // 3. Ensure desktop services are active
-    await vmRef.exec({
-      command: `
-        systemctl is-active xvfb || systemctl restart xvfb
-        systemctl is-active openbox || systemctl restart openbox
-        systemctl is-active x11vnc || systemctl restart x11vnc
-        systemctl is-active novnc || systemctl restart novnc
-        systemctl is-active chrome-cdp || systemctl restart chrome-cdp
-      `,
-      linuxUser: "root",
-      timeoutMs: 30_000,
-    }).catch(() => {});
-
-    // 4. Deploy and verify Hermes Agent & CDP in VM
-    await initSandboxBrowserAndCdp(wrapper, agentId).catch((e: any) =>
-      console.warn(`[Freestyle] initSandboxBrowser notice:`, e?.message)
-    );
-
-    // 5. Capture live desktop screenshot
-    try {
-      const shotBuffer = await wrapper.screenshot();
-      if (shotBuffer && shotBuffer.length > 0) {
-        previewImage = `data:image/png;base64,${shotBuffer.toString("base64")}`;
-      }
-    } catch (shotErr) {
-      console.warn("[Freestyle] Screenshot capture notice:", shotErr);
-    }
-
-    // 6. Record or update database state
+    // 3. Record / update DB state IMMEDIATELY — so streamUrl is persisted fast
     const id = existing?.id || `sb_${campaignId}_${agentId}`;
     if (!existing) {
-      await db
-        .insert(agentSandboxes)
-        .values({
-          id,
-          campaignId,
-          agentId,
-          sandboxId: vmId,
-          status: "running",
-          control: "agent",
-          streamUrl: streamUrl,
-          viewUrl: streamUrl,
-          activeAt: now,
-          createdAt: now,
-        })
-        .run();
+      await db.insert(agentSandboxes).values({
+        id,
+        campaignId,
+        agentId,
+        sandboxId: vmId,
+        status: "running",
+        control: "agent",
+        streamUrl: streamUrl,
+        viewUrl: streamUrl,
+        activeAt: now,
+        createdAt: now,
+      }).run();
     } else {
-      await db
-        .update(agentSandboxes)
-        .set({
-          status: "running",
-          activeAt: now,
-          sandboxId: vmId,
-          streamUrl: streamUrl,
-          viewUrl: streamUrl,
-        })
-        .where(eq(agentSandboxes.id, existing.id))
-        .run();
+      await db.update(agentSandboxes).set({
+        status: "running",
+        activeAt: now,
+        sandboxId: vmId,
+        streamUrl: streamUrl,
+        viewUrl: streamUrl,
+      }).where(eq(agentSandboxes.id, existing.id)).run();
     }
 
+    // 4. Kick off slow work (service checks + Hermes deploy) in the background
+    //    so we can return the stream URL to the client immediately.
+    Promise.resolve().then(async () => {
+      try {
+        await vmRef.exec({
+          command: [
+            "systemctl is-active xvfb || systemctl restart xvfb",
+            "systemctl is-active openbox || systemctl restart openbox",
+            "systemctl is-active x11vnc || systemctl restart x11vnc",
+            "systemctl is-active novnc || systemctl restart novnc",
+            "systemctl is-active chrome-cdp || systemctl restart chrome-cdp",
+          ].join("\n"),
+          linuxUser: "root",
+          timeoutMs: 30_000,
+        });
+      } catch {}
+      try {
+        await initSandboxBrowserAndCdp(wrapper!, agentId);
+      } catch (e: any) {
+        console.warn(`[Freestyle] Background Hermes init notice:`, e?.message);
+      }
+    });
+
+    // 5. Return immediately with stream URL — client iframe connects while VM warms up
     return {
       agentId,
       sandboxId: vmId,
@@ -343,17 +329,20 @@ export async function getOrCreateFreestyleSandbox(
       streamUrl: streamUrl,
       viewUrl: streamUrl,
       lastAction: `Active Freestyle Cloud Workstation (VM: ${vmId})`,
-      previewImage: previewImage || getFreestylePreview(agentId),
+      previewImage: getFreestylePreview(agentId),
       isRealE2B: true,
     };
   } catch (err: any) {
     console.error(`[Freestyle] Launch error for ${agentId}:`, err);
+    // Always return the stream URL so the iframe at least tries to connect
     return {
       agentId,
       sandboxId: currentVmId || undefined,
       status: "paused",
       control: "agent",
-      lastAction: `Freestyle Launch notice: ${err.message}`,
+      streamUrl: streamUrl,
+      viewUrl: streamUrl,
+      lastAction: `Freestyle launch notice: ${err.message}`,
       previewImage: getFreestylePreview(agentId),
       isRealE2B: false,
     };

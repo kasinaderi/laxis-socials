@@ -361,6 +361,20 @@ export function AgentTabs({
     setIsPaused(false);
     lastActiveTimeRef.current = Date.now();
     setStreamKey((k) => k + 1);
+
+    // Pre-seed Freestyle stream URL immediately so the iframe renders right away
+    const freestyleAgents = ["ig_shader"];
+    if (freestyleAgents.includes(agentId)) {
+      const cleanId = agentId.replace(/_/g, "-");
+      const freestyleStreamUrl = `https://laxis-${cleanId}-vnc.style.dev/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+      setSandboxInfo((prev: any) => ({
+        ...prev,
+        streamUrl: freestyleStreamUrl,
+        viewUrl: freestyleStreamUrl,
+        status: "running",
+      }));
+    }
+
     try {
       const res = await fetch("/api/sandbox", {
         method: "POST",
@@ -372,7 +386,7 @@ export function AgentTabs({
         }),
       });
       const data = await res.json();
-      if (data.streamUrl) {
+      if (data?.streamUrl) {
         setSandboxInfo(data);
       }
     } catch (err) {
@@ -717,21 +731,42 @@ export function AgentTabs({
     setIsTakeOver(nextState);
     if (nextState) {
       setIsFullscreenModal(true);
+      // For Freestyle agents: pre-seed the stream URL immediately so the
+      // iframe renders right away while the VM is waking up in the background.
+      // The noVNC client will auto-reconnect once Chrome is ready.
+      const freestyleAgents = ["ig_shader"];
+      if (freestyleAgents.includes(agentId)) {
+        const cleanId = agentId.replace(/_/g, "-");
+        const freestyleStreamUrl = `https://laxis-${cleanId}-vnc.style.dev/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+        setSandboxInfo((prev: any) => ({
+          ...prev,
+          streamUrl: freestyleStreamUrl,
+          viewUrl: freestyleStreamUrl,
+          status: "running",
+        }));
+        setIsPaused(false);
+      }
     }
-    // Launch E2B sandbox on explicit user request
-    const res = await fetch("/api/sandbox", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "takeover",
-        agentId,
-        campaignId,
-        value: nextState,
-      }),
-    });
-    const data = await res.json();
-    setSandboxInfo(data);
-    setIsPaused(false);
+    // Wake the sandbox (async — stream URL is already shown above for Freestyle agents)
+    try {
+      const res = await fetch("/api/sandbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "takeover",
+          agentId,
+          campaignId,
+          value: nextState,
+        }),
+      });
+      const data = await res.json();
+      if (data?.streamUrl) {
+        setSandboxInfo(data);
+      }
+      setIsPaused(false);
+    } catch (err) {
+      console.warn("[Sandbox] Takeover fetch notice:", err);
+    }
   };
 
   const handleNavigate = async (targetUrl: string) => {
