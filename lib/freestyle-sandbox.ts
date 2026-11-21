@@ -9,8 +9,22 @@ const apiKey =
   process.env.FREESTYLE_API_KEY ||
   "HJvPGG99GGP8NFW3auYy8o-5PBhkqJYwCsHPye82jT3ttbFs6E3eBdPmpMJaNCg37Bz";
 
-export const DEFAULT_CF_STREAM_URL =
-  "https://link-million-retained-calendar.trycloudflare.com/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify";
+export function buildCfStreamUrl(cfBaseUrl: string): string {
+  // noVNC inside an iframe uses window.location.hostname as the WebSocket host
+  // unless we explicitly pass host, port, and encrypt params.
+  // Extract the hostname from the CF tunnel URL so noVNC connects to the correct host.
+  try {
+    const u = new URL(cfBaseUrl);
+    const host = u.hostname;
+    // port 443 (default HTTPS), encrypt=1 (wss://), path=websockify
+    return `${cfBaseUrl}/vnc.html?autoconnect=true&reconnect=true&resize=scale&host=${host}&port=443&encrypt=1&path=websockify`;
+  } catch {
+    return `${cfBaseUrl}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+  }
+}
+
+export const DEFAULT_CF_BASE_URL = "https://link-million-retained-calendar.trycloudflare.com";
+export const DEFAULT_CF_STREAM_URL = buildCfStreamUrl(DEFAULT_CF_BASE_URL);
 
 export function getFreestyleConfigForAgent(agentId: string) {
   const cleanId = agentId.replace(/_/g, "-");
@@ -306,7 +320,7 @@ export async function getOrCreateFreestyleSandbox(
       });
       const cfBase = (tunnelRes.stdout || "").trim();
       if (cfBase && cfBase.startsWith("https://")) {
-        liveStreamUrl = `${cfBase}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+        liveStreamUrl = buildCfStreamUrl(cfBase);
       }
     } catch {}
 

@@ -185,7 +185,7 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
-# 7. Service: x11vnc Server
+# 7. Service: x11vnc Server (with -noxdamage to prevent XDamage deadlocks with Xvfb)
 cat << 'EOF' > /etc/systemd/system/x11vnc.service
 [Unit]
 Description=x11vnc VNC Server
@@ -193,8 +193,11 @@ After=xvfb.service
 Requires=xvfb.service
 
 [Service]
-ExecStart=/usr/bin/x11vnc -display :0 -forever -shared -nopw -localhost -rfbport 5900
+ExecStart=/usr/bin/x11vnc -display :0 -forever -shared -nopw -localhost -rfbport 5900 -noxdamage -repeat -wait 10 -defer 10
 Restart=always
+RestartSec=2
+KillMode=mixed
+TimeoutStopSec=3
 
 [Install]
 WantedBy=multi-user.target

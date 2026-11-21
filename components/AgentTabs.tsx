@@ -1636,17 +1636,9 @@ export function AgentTabs({
             </div>
           )}
 
-          {/* Desktop Viewport */}
+          {/* Desktop Viewport (Lightweight Preview Badge / Screenshot — Click 'Open Interactive PC' for 60fps Stream) */}
           <div className="flex-1 min-h-[300px] max-h-[460px] bg-slate-950 rounded-2xl border-2 border-slate-200 dark:border-slate-800 overflow-hidden relative shadow-md group">
-            {isFreestyleAgent && !isPaused && sandboxInfo?.streamUrl && !sandboxInfo.streamUrl.includes("style.dev") ? (
-              /* ── Live noVNC mini-preview for Freestyle agents ── */
-              <iframe
-                src={sandboxInfo.streamUrl}
-                className="w-full h-full border-none pointer-events-none"
-                title="Agent PC Desktop Preview"
-                allow="autoplay"
-              />
-            ) : isFreestyleAgent && !isPaused && screenSrc ? (
+            {isFreestyleAgent && !isPaused && screenSrc ? (
               <img
                 src={screenSrc}
                 alt="Cloud Desktop Live Preview"
