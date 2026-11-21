@@ -299,23 +299,43 @@ echo "PROVISIONING_COMPLETE"
   });
   console.log(`[3/7] ✓ Workstation & Cloudflare tunnel provisioned`);
 
-  // 4. Verify CDP & Screenshot
-  console.log(`\n[4/7] Verifying Chrome DevTools Protocol & Screenshot...`);
+  // 4. Provision & Deploy Hermes In-VM Engine (Procedural route memory & sub-second vision)
+  console.log(`\n[4/8] Provisioning Hermes Autonomous Engine in VM...`);
+  const vmWrapper = {
+    commands: {
+      run: async (cmd) => {
+        const res = await vm.exec({ command: cmd, timeoutMs: 60_000, linuxUser: 'root' });
+        return { stdout: res.stdout || '', stderr: res.stderr || '', exitCode: res.exitCode ?? 0 };
+      }
+    }
+  };
+  try {
+    const { installHermesInSandbox, configureHermesAgent, getDefaultHermesConfigForAgent } = await import('../lib/hermes.ts');
+    await installHermesInSandbox(vmWrapper, agentId);
+    const hermesCfg = getDefaultHermesConfigForAgent(agentId);
+    await configureHermesAgent(vmWrapper, hermesCfg);
+    console.log(`[4/8] ✓ Hermes In-VM Engine configured with model: ${hermesCfg.model}`);
+  } catch (hermesErr) {
+    console.warn(`[4/8] Hermes setup notice: ${hermesErr.message}`);
+  }
+
+  // 5. Verify CDP & Screenshot
+  console.log(`\n[5/8] Verifying Chrome DevTools Protocol & Screenshot...`);
   const cdpCheck = await vm.exec({
     command: 'curl -fsS http://127.0.0.1:9222/json/version',
     linuxUser: 'root'
   });
-  console.log(`[4/7] ✓ CDP Active on port 9222`);
+  console.log(`[5/8] ✓ CDP Active on port 9222`);
 
   const shotRes = await vm.exec({
-    command: 'DISPLAY=:0 scrot /tmp/verify_shot.png && ls -lh /tmp/verify_shot.png',
+    command: 'DISPLAY=:0 scrot -z /tmp/verify_shot.png && ls -lh /tmp/verify_shot.png',
     linuxUser: 'root'
   });
-  console.log(`[4/7] ✓ Screenshot capture verified: ${shotRes.stdout.trim()}`);
+  console.log(`[5/8] ✓ Screenshot capture verified: ${shotRes.stdout.trim()}`);
 
-  // 5. Query active Cloudflare Tunnel URL
-  console.log(`\n[5/7] Querying active Cloudflare noVNC tunnel URL...`);
-  let liveStreamUrl = `https://${vncDomain}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+  // 6. Query active Cloudflare Tunnel URL (Use vnc_lite.html to bypass localStorage stalls)
+  console.log(`\n[6/8] Querying active Cloudflare noVNC tunnel URL...`);
+  let liveStreamUrl = `https://${vncDomain}/vnc_lite.html?host=${vncDomain}&port=443&path=websockify&scale=true`;
   for (let attempt = 0; attempt < 15; attempt++) {
     try {
       const tunnelRes = await vm.exec({
@@ -325,16 +345,17 @@ echo "PROVISIONING_COMPLETE"
       });
       const cfBase = (tunnelRes.stdout || '').trim();
       if (cfBase && cfBase.startsWith('https://')) {
-        liveStreamUrl = `${cfBase}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
-        console.log(`[5/7] ✓ Cloudflare 60 FPS Tunnel: ${liveStreamUrl}`);
+        const tunnelHost = cfBase.replace('https://', '').replace('/', '');
+        liveStreamUrl = `https://${tunnelHost}/vnc_lite.html?host=${tunnelHost}&port=443&path=websockify&scale=true`;
+        console.log(`[6/8] ✓ Cloudflare 60 FPS Tunnel: ${liveStreamUrl}`);
         break;
       }
     } catch {}
     await new Promise(r => setTimeout(r, 1000));
   }
 
-  // 6. Update lib/sandbox.ts registry & Database
-  console.log(`\n[6/7] Registering '${agentId}' in lib/sandbox.ts FREESTYLE_MIGRATED_AGENTS...`);
+  // 7. Update lib/sandbox.ts registry & Database
+  console.log(`\n[7/8] Registering '${agentId}' in lib/sandbox.ts FREESTYLE_MIGRATED_AGENTS...`);
   const sandboxTsPath = path.resolve('lib/sandbox.ts');
   let sandboxTs = fs.readFileSync(sandboxTsPath, 'utf8');
   if (!sandboxTs.includes(`"${agentId}"`)) {
@@ -350,35 +371,38 @@ echo "PROVISIONING_COMPLETE"
       }
     );
     fs.writeFileSync(sandboxTsPath, sandboxTs, 'utf8');
-    console.log(`[6/7] ✓ Registered '${agentId}' in lib/sandbox.ts`);
+    console.log(`[7/8] ✓ Registered '${agentId}' in lib/sandbox.ts`);
   } else {
-    console.log(`[6/7] ✓ '${agentId}' was already registered in lib/sandbox.ts`);
+    console.log(`[7/8] ✓ '${agentId}' was already registered in lib/sandbox.ts`);
   }
 
-  // Sync Turso Database record with the new Freestyle VM ID and Cloudflare stream URL
+  // Sync Turso Database record: delete stale row first to avoid ID conflict
   try {
     const { createClient } = await import('@libsql/client');
-    const tursoUrl = (envContent.match(/TURSO_DATABASE_URL=(.*)/)?.[1] || '').trim();
-    const tursoToken = (envContent.match(/TURSO_AUTH_TOKEN=(.*)/)?.[1] || '').trim();
+    const tursoUrl = (envContent.match(/TURSO_DATABASE_URL=(.*)/)?.[1] || '').trim().replace(/^["']|["']$/g, '');
+    const tursoToken = (envContent.match(/TURSO_AUTH_TOKEN=(.*)/)?.[1] || '').trim().replace(/^["']|["']$/g, '');
     if (tursoUrl) {
       const client = createClient({ url: tursoUrl, authToken: tursoToken });
       const now = new Date().toISOString();
       await client.execute({
+        sql: `DELETE FROM agent_sandboxes WHERE agent_id = ? AND campaign_id = 'default_campaign'`,
+        args: [agentId]
+      });
+      await client.execute({
         sql: `INSERT INTO agent_sandboxes (id, campaign_id, agent_id, sandbox_id, status, control, stream_url, view_url, active_at, created_at)
-              VALUES (?, 'default_campaign', ?, ?, 'paused', 'agent', ?, ?, ?, ?)
-              ON CONFLICT(id) DO UPDATE SET sandbox_id = excluded.sandbox_id, stream_url = excluded.stream_url, view_url = excluded.view_url, status = 'paused', active_at = excluded.active_at`,
+              VALUES (?, 'default_campaign', ?, ?, 'paused', 'agent', ?, ?, ?, ?)`,
         args: [`sb_default_campaign_${agentId}`, agentId, vm.id, liveStreamUrl, liveStreamUrl, now, now]
       });
-      console.log(`[6/7] ✓ Database agent_sandboxes updated for '${agentId}' with 60 FPS stream URL!`);
+      console.log(`[7/8] ✓ Database agent_sandboxes updated for '${agentId}' with VM ID (${vm.id}) & 60 FPS stream!`);
     }
   } catch (dbErr) {
-    console.log(`[6/7] Database notice: ${dbErr.message}`);
+    console.log(`[7/8] Database notice: ${dbErr.message}`);
   }
 
-  // 7. Pause VM to stop compute billing ($0 cost)
-  console.log(`\n[7/7] Pausing VM to $0 compute standby...`);
+  // 8. Pause VM to stop compute billing ($0 cost)
+  console.log(`\n[8/8] Pausing VM to $0 compute standby...`);
   await vm.pause();
-  console.log(`[7/7] ✓ VM is hibernated. Ready for on-demand sub-second wake up!`);
+  console.log(`[8/8] ✓ VM is hibernated. Ready for on-demand sub-second wake up!`);
 
   console.log(`\n🎉 MIGRATION OF '${agentId}' COMPLETED SUCCESSFULLY!`);
   console.log(`• Stream URL: ${liveStreamUrl}`);

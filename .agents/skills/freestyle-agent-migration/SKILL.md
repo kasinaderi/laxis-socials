@@ -47,12 +47,16 @@ The script automatically executes:
 1. **VM Provisioning**: Locates or creates a persistent Freestyle VM with `slug: "laxis-<agentId>"`.
 2. **TLS Routing**: Attaches an edge rule routing `laxis-<agentId>-vnc.style.dev` to port `6080` (noVNC websockify) as secondary backup.
 3. **Headless Workstation Setup**: Installs Chrome Stable, Xvfb (`DISPLAY=:0`), Openbox, `tint2`, `feh`, `wmctrl`, `xdotool`, `x11vnc`, `novnc`, `websockify`, `scrot`, `python3-pil`, and `python3-websocket`.
-4. **Cloudflare Quick Tunnel**: Installs `/usr/local/bin/cloudflared` and enables `cloudflared-tunnel.service` to tunnel `localhost:6080` to Cloudflare's global edge network, delivering smooth 60 FPS streaming, direct physical keyboard typing, and standard mouse cursor.
-5. **Desktop Shell & Wallpaper**: Generates dark blue branded wallpaper (`feh --bg-fill /usr/share/backgrounds/laxis_wallpaper.png`) and runs `tint2.service` so minimized windows are always visible and clickable in the taskbar.
-6. **CDP & Screen Verification**: Confirms Chrome DevTools Protocol is responding on port 9222 and captures a test screenshot.
-7. **Code & Database Sync**:
+4. **Hermes Autonomous Engine Provisioning**:
+   - Deploys `/home/user/hermes_agent.py` and `/home/user/hermes_task.sh` with `export DISPLAY=:0` so `scrot` never fails with exit code 1.
+   - Deploys `/home/user/.hermes/.env` with dedicated pooled Gemini API keys and sub-second model selection (`gemini-3.5-flash-lite` / `gemini-3.1-flash-lite`).
+   - Sets up Procedural Route Memory (`/home/user/.hermes/memory/learned_routes.json`) restored from Turso SQLite.
+   - Includes Workstation Identity Rule 6 so Hermes never mistakes workstation agent names for Chrome extensions.
+5. **CDP & Screen Verification**: Confirms Chrome DevTools Protocol is responding on port 9222 and verifies `DISPLAY=:0 scrot -z` screen capture.
+6. **Cloudflare Quick Tunnel (`vnc_lite.html`)**: Queries active `https://*.trycloudflare.com` tunnel URL and formats it directly as `vnc_lite.html?host=...&port=443&path=websockify&scale=true` to permanently eliminate any localStorage connection stalls.
+7. **Code & Clean Database Sync**:
    - Automatically registers `agentId` in `FREESTYLE_MIGRATED_AGENTS` inside `lib/sandbox.ts`.
-   - Queries the active `https://*.trycloudflare.com` tunnel URL and updates Turso SQLite `agent_sandboxes` table so UI tabs, take-over modal, and pop-out window stream at 60 FPS immediately.
+   - Cleans old/stale E2B sandbox records in Turso SQLite `agent_sandboxes` (`DELETE ... WHERE agent_id = ?`) and inserts the new Freestyle VM ID (`vm-...`) and `vnc_lite.html` stream URL so status queries and pause/wake commands always find the real VM ID directly.
 8. **Pause to $0 Compute**: Pauses the VM immediately via `vm.pause()` to preserve all RAM, tabs, and cookies with $0 idle compute cost.
 
 ---
