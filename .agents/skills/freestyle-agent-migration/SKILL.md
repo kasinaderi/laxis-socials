@@ -270,3 +270,77 @@ function getCleanStreamUrl(url?: string | null): string {
   `git remote set-url origin https://<username>@github.com/<org>/<repo>.git`
   This prevents `git-credential-manager` from hanging background processes when switching accounts.
 - `FREESTYLE_API_KEY` is embedded as a fallback in `lib/freestyle-sandbox.ts` so Vercel serverless functions wake and control VMs seamlessly without requiring environment variable configuration.
+
+---
+
+### 9. VM Pause Bounce-Back Fix — The Complete Solution
+
+> **Context:** `vm.pause()` returns `{state: "paused"}` immediately, but the VM bounces back to `"running"` within ~2 seconds. Setting `automaticRestart: false` alone does NOT fix it — the bounce-back is caused by `vm.exec()` calls from the screen-polling API hitting the paused VM and auto-waking it.
+
+#### Root Cause Chain
+
+```
+Kelvin says "close the vm"
+  → pauseFreestyleSandbox() calls vm.pause()          ✅ VM goes to "paused"
+  → 1200ms later, AgentTabs.tsx polls /api/sandbox/screen
+  → screen/route.ts calls vm.exec() on the paused VM  ❌ Freestyle auto-wakes VM!
+  → VM bounces back to "running" within 2s
+  → Kelvin sees VM still running in provider dashboard
+```
+
+#### The Three-Part Fix (committed in `main`)
+
+**Part 1 — `pauseFreestyleSandbox()` in `lib/freestyle-sandbox.ts`:**
+```typescript
+// 1. Disable automaticRestart FIRST (belt-and-suspenders)
+await vmRef.update({ automaticRestart: false });
+
+// 2. Pre-mark DB as "paused" BEFORE pause() — stops /api/sandbox/screen from exec()-waking it
+await db.update(agentSandboxes).set({ status: "paused" })...run();
+
+// 3. Wait 1.5s for in-flight exec() calls to drain
+await new Promise(r => setTimeout(r, 1500));
+
+// 4. Issue the actual pause
+await vmRef.pause();
+
+// 5. Verify after 3s — retry if bounced back
+const verify = await vmRef.data();
+if (verify?.state === "running") await vmRef.pause();
+```
+
+**Part 2 — `app/api/sandbox/screen/route.ts` (GET handler):**
+```typescript
+// FAST PATH: Check DB status first (no Freestyle API call needed)
+const dbRecord = await db.select({ status }).from(agentSandboxes).where(...).get();
+if (dbRecord?.status !== "running") {
+  return NextResponse.json({ error: "VM is paused" }, { status: 503 });
+}
+
+// SLOW PATH: Verify real VM state via Freestyle API
+const vmState = await vm.data();
+if (vmState?.state !== "running") {
+  return NextResponse.json({ error: "VM is paused" }, { status: 503 });
+}
+
+// ONLY THEN call vm.exec() for the screenshot
+```
+
+**Part 3 — `components/AgentTabs.tsx` (`startScreenPolling`):**
+```typescript
+// When screen API returns 503 (VM paused), STOP polling immediately
+if (res.status === 503) {
+  setIsScreenPolling(false);
+  screenPollRef.current = null;
+  setIsPaused(true); // Sync UI — shows "PC Off" badge
+  return; // Do NOT reschedule — this was causing the bounce-back loop
+}
+```
+
+**On wake:** `getOrCreateFreestyleSandbox()` re-enables `automaticRestart: true` before calling `vmRef.start()`.
+
+#### Key Insight for Future Migrations
+Any API route that calls `vm.exec()` on a Freestyle VM **will auto-wake a paused VM**. Always guard exec() calls with a DB status check or `vm.data()` check first. This applies to:
+- `/api/sandbox/screen` (GET + POST) — fixed ✅
+- `/api/sandbox` (the main sandbox action route) — review before adding new exec() calls
+- Any background service check that calls `wrapper.commands.run()` — these all go through `vmRef.exec()`

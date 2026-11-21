@@ -289,6 +289,10 @@ export async function getOrCreateFreestyleSandbox(
       vmRef = freestyle.vms.ref(rawVm.id);
       if (rawVm.state === "paused") {
         console.log(`[Freestyle] Resuming paused VM ${vmId} for ${agentId}...`);
+        // Re-enable automaticRestart before waking (pauseFreestyleSandbox disables it before pause)
+        try {
+          await vmRef.update({ automaticRestart: true });
+        } catch {}
         await vmRef.start();
         console.log(`[Freestyle] VM ${vmId} resumed!`);
       }
@@ -462,9 +466,42 @@ export async function pauseFreestyleSandbox(
         const vmRef = freestyle.vms.ref(vmId);
         const vmData = await vmRef.data().catch(() => null);
         if (vmData && vmData.state !== "paused") {
-          console.log(`[Freestyle] Pausing VM ${vmId} (${agentId}) directly...`);
+          console.log(`[Freestyle] Pausing VM ${vmId} (${agentId}) — disabling auto-restart first...`);
+
+          // Step 1: Disable automaticRestart so Freestyle won't bounce the VM back to "running"
+          // within 2s of pause(). Without this, the VM bounces back regardless of pause() return value.
+          try {
+            await vmRef.update({ automaticRestart: false });
+            console.log(`[Freestyle] automaticRestart disabled for VM ${vmId}`);
+          } catch (e: any) {
+            console.warn(`[Freestyle] Could not disable automaticRestart:`, e?.message);
+          }
+
+          // Step 2: Pre-mark DB as paused BEFORE the actual pause call.
+          // This stops /api/sandbox/screen from calling vm.exec() (which auto-wakes a paused VM)
+          // while the pause is in-flight. Screen API checks DB status before exec.
+          await db
+            .update(agentSandboxes)
+            .set({ status: "paused", activeAt: new Date().toISOString() })
+            .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agentId)))
+            .run().catch(() => {});
+
+          // Step 3: Wait for any in-flight exec() calls (screen polls) to drain
+          await new Promise(r => setTimeout(r, 1500));
+
+          // Step 4: Issue the actual pause
           await vmRef.pause();
           console.log(`[Freestyle] VM ${vmId} paused successfully!`);
+
+          // Step 5: Verify it stayed paused (the bounce-back takes ~2s)
+          await new Promise(r => setTimeout(r, 3000));
+          const verifyData = await vmRef.data().catch(() => null);
+          if (verifyData?.state === "running") {
+            console.warn(`[Freestyle] VM ${vmId} bounced back to running — retrying pause...`);
+            await vmRef.pause();
+          } else {
+            console.log(`[Freestyle] VM ${vmId} confirmed state: ${verifyData?.state}`);
+          }
         } else if (vmData?.state === "paused") {
           console.log(`[Freestyle] VM ${vmId} already paused.`);
         }

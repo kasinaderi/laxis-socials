@@ -360,6 +360,17 @@ export function AgentTabs({
           setScreenSrc((prev) => { if (prev) URL.revokeObjectURL(prev); return objUrl; });
           setScreenError("");
         } else {
+          // ⚠️ 503 means VM is paused — stop polling immediately so we don't keep waking it
+          if (res.status === 503) {
+            const vmState = res.headers.get("X-VM-State") || "paused";
+            setScreenError("");
+            setIsScreenPolling(false);
+            screenPollRef.current = null;
+            // Sync UI state if the VM is externally paused (e.g. by AGENTLAX via Telegram)
+            setIsPaused(true);
+            console.log(`[Screen] VM is ${vmState} — stopping screen poll to prevent auto-wake`);
+            return; // Do NOT reschedule
+          }
           const err = await res.json().catch(() => ({ error: "Stream error" }));
           setScreenError(err.error || "Screenshot failed");
         }

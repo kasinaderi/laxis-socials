@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { isFreestyleAgent } from "@/lib/sandbox";
 import { getFreestyleConfigForAgent } from "@/lib/freestyle-sandbox";
 import { Freestyle } from "freestyle";
+import { db } from "@/db";
+import { agentSandboxes } from "@/db/schema";
+import { eq, and } from "drizzle-orm";
 
 const FREESTYLE_API_KEY =
   process.env.FREESTYLE_API_KEY ||
@@ -29,13 +32,53 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const agentId = searchParams.get("agentId") || "ig_shader";
+    const campaignId = searchParams.get("campaignId") || "default_campaign";
 
     if (!isFreestyleAgent(agentId)) {
       return NextResponse.json({ error: "Not a Freestyle agent" }, { status: 400 });
     }
 
+    // ⚡ FAST PATH: Check DB status first (no network round-trip to Freestyle API).
+    // pauseFreestyleSandbox() pre-marks DB as "paused" before the actual pause() call,
+    // so this check stops screen polling from waking a VM that is being (or has been) paused.
+    try {
+      const dbRecord = await db
+        .select({ status: agentSandboxes.status })
+        .from(agentSandboxes)
+        .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agentId)))
+        .get();
+      if (dbRecord?.status && dbRecord.status !== "running") {
+        return NextResponse.json(
+          { error: "VM is paused", state: dbRecord.status },
+          { status: 503, headers: { "X-VM-State": dbRecord.status, "Cache-Control": "no-store" } }
+        );
+      }
+    } catch {
+      // DB check failed — fall through to API state check
+    }
+
     const freestyle = getFreestyleClient();
     const vm = await getVmRef(freestyle, agentId);
+
+    // ⚠️ CRITICAL: Check VM state BEFORE exec — calling exec on a paused VM auto-wakes it.
+    // We must bail out early if the VM is not running to prevent the pause-bounce-back bug.
+    try {
+      const vmState = await vm.data();
+      if (vmState?.state && vmState.state !== "running") {
+        return NextResponse.json(
+          { error: "VM is paused", state: vmState.state },
+          {
+            status: 503,
+            headers: {
+              "X-VM-State": vmState.state,
+              "Cache-Control": "no-store, no-cache, must-revalidate",
+            },
+          }
+        );
+      }
+    } catch {
+      // If we can't check state, skip — better to try screenshot than to block forever
+    }
 
     // Take a screenshot via scrot and return raw PNG bytes
     const res = await vm.exec({
@@ -75,6 +118,15 @@ export async function POST(req: Request) {
 
     const freestyle = getFreestyleClient();
     const vm = await getVmRef(freestyle, agentId);
+
+    // ⚠️ CRITICAL: Do NOT send input to a paused VM — exec auto-wakes it
+    try {
+      const vmState = await vm.data();
+      if (vmState?.state && vmState.state !== "running") {
+        return NextResponse.json({ error: "VM is paused", state: vmState.state }, { status: 503 });
+      }
+    } catch {}
+
 
     let cmd = "";
 
