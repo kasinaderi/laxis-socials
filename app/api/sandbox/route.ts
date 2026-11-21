@@ -157,7 +157,7 @@ export async function POST(req: Request) {
       }
       return NextResponse.json({ success: true, url: url || "https://google.com" });
     } else if (action === "restore_chrome") {
-      const sandbox = await getOrCreateAgentSandbox(campaignId, agentId, true);
+      // DO NOT wake the VM here — it's already running when user clicks Restore Chrome
       const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
       if (activeSb && activeSb.commands?.run) {
         await activeSb.commands.run(`

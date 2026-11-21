@@ -415,9 +415,16 @@ export function AgentTabs({
   };
 
   // Start/stop polling when takeover modal opens/closes or when switching to computer tab
+  // IMPORTANT: Only fall back to screenshot polling if we have no valid Cloudflare stream URL.
+  // When streamUrl is a valid CF URL (not style.dev), the noVNC iframe handles everything natively.
   useEffect(() => {
+    const hasValidStream = sandboxInfo?.streamUrl && !sandboxInfo.streamUrl.includes("style.dev");
     if (isFreestyleAgent && !isPaused) {
-      if (isFullscreenModal) {
+      if (hasValidStream) {
+        // Valid noVNC stream URL exists — stop screenshot polling so iframe mode takes over
+        stopScreenPolling();
+      } else if (isFullscreenModal) {
+        // No stream URL yet — fall back to screenshot polling
         startScreenPolling();
       } else if (activeTab === "computer" && !screenSrc) {
         // Fetch single preview shot for the mini viewport
@@ -435,7 +442,7 @@ export function AgentTabs({
       stopScreenPolling();
     }
     return () => stopScreenPolling();
-  }, [isFreestyleAgent, isFullscreenModal, isPaused, activeTab, agentId]);
+  }, [isFreestyleAgent, isFullscreenModal, isPaused, activeTab, agentId, sandboxInfo?.streamUrl]);
 
   // Host PC Clipboard Paste state
   const [pasteSuccessToast, setPasteSuccessToast] = useState<string | null>(null);
@@ -514,9 +521,13 @@ export function AgentTabs({
         }),
       });
       const data = await res.json();
-      if (data?.streamUrl) {
-        setSandboxInfo(data);
-      }
+      // Merge but always preserve a valid CF stream URL — don't overwrite with null/style.dev
+      setSandboxInfo((prev: any) => ({
+        ...prev,
+        ...data,
+        streamUrl: getCleanStreamUrl(data?.streamUrl || prev?.streamUrl),
+        viewUrl: getCleanStreamUrl(data?.viewUrl || prev?.viewUrl),
+      }));
     } catch (err) {
       console.error("Wake and reconnect error:", err);
     }
@@ -782,7 +793,12 @@ export function AgentTabs({
     try {
       const res = await fetch(`/api/sandbox?agentId=${agentId}&campaignId=${campaignId}`);
       const data = await res.json();
-      setSandboxInfo(data);
+      // Always sanitize stream URL — replace style.dev with the working Cloudflare tunnel
+      setSandboxInfo((prev: any) => ({
+        ...data,
+        streamUrl: getCleanStreamUrl(data?.streamUrl || prev?.streamUrl),
+        viewUrl: getCleanStreamUrl(data?.viewUrl || prev?.viewUrl),
+      }));
       if (data.control === "user") setIsTakeOver(true);
       setIsPaused(data.status === "paused" || data.status === "none");
     } catch (err) {
@@ -882,9 +898,13 @@ export function AgentTabs({
         }),
       });
       const data = await res.json();
-      if (data?.streamUrl) {
-        setSandboxInfo(data);
-      }
+      // Merge API response but ALWAYS preserve a valid streamUrl — don't overwrite CF URL with null/style.dev
+      setSandboxInfo((prev: any) => ({
+        ...prev,
+        ...data,
+        streamUrl: getCleanStreamUrl(data?.streamUrl || prev?.streamUrl),
+        viewUrl: getCleanStreamUrl(data?.viewUrl || prev?.viewUrl),
+      }));
       setIsPaused(false);
     } catch (err) {
       console.warn("[Sandbox] Takeover fetch notice:", err);
@@ -1618,7 +1638,15 @@ export function AgentTabs({
 
           {/* Desktop Viewport */}
           <div className="flex-1 min-h-[300px] max-h-[460px] bg-slate-950 rounded-2xl border-2 border-slate-200 dark:border-slate-800 overflow-hidden relative shadow-md group">
-            {isFreestyleAgent && !isPaused && screenSrc ? (
+            {isFreestyleAgent && !isPaused && sandboxInfo?.streamUrl && !sandboxInfo.streamUrl.includes("style.dev") ? (
+              /* ── Live noVNC mini-preview for Freestyle agents ── */
+              <iframe
+                src={sandboxInfo.streamUrl}
+                className="w-full h-full border-none pointer-events-none"
+                title="Agent PC Desktop Preview"
+                allow="autoplay"
+              />
+            ) : isFreestyleAgent && !isPaused && screenSrc ? (
               <img
                 src={screenSrc}
                 alt="Cloud Desktop Live Preview"
