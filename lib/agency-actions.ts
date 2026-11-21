@@ -646,9 +646,11 @@ Respond with JSON only.`;
  */
 export async function analyzeWorkstationScreenshot(
   screenshotBuffer: Buffer | Uint8Array,
-  queryOrTopic: string
+  queryOrTopic: string,
+  userObjective?: string
 ): Promise<string> {
   try {
+    const effectiveObjective = userObjective || queryOrTopic;
     const isChart = /(chart|graph|trend|forex|trade|trading|gbp|usd|eur|btc|gold|xau|crypto|boom|crash|deriv|candlestick|stock)/i.test(
       queryOrTopic
     );
@@ -660,13 +662,21 @@ ACTIVE MONITORING & INTEGRITY DIRECTIVE:
 Examine the live screen pixels critically:
 1. Did the page load the genuine requested content, or is it blocked by a network security block (e.g. "blocked by network security", "access denied", Cloudflare turnstile, CAPTCHA, or mandatory login screen)?
 2. If BLOCKED or CHALLENGED: Explicitly state "Status: BLOCKED_BY_PLATFORM (Security Challenge Detected)" and specify the exact blocker text.
-3. If the requested platform or topic is NOT visible (e.g. wrong browser, wrong website, empty history, or desktop wallpaper): Explicitly state "Status: NOT_VERIFIED (Reason why screen does not match requested objective)".
-4. If VERIFIED: State "Status: VERIFIED (Objective fulfilled on live screen)".
-Be completely truthful, concise, and razor-sharp.`;
+3. If the user asked to CLICK, PLAY, or WATCH a video (e.g. "click first video", "play video", "watch video"):
+   - Check if video playback is active (e.g. URL containing /watch?v=, video player element, timeline/scrubber, play/pause controls, large video screen).
+   - If only search results or autocomplete suggestions are visible: Explicitly state "Status: NOT_VERIFIED (User requested clicking the first video, but screen only shows search results/suggestions and video is not playing)".
+4. If an autocomplete dropdown or suggestion overlay is covering the screen and obstructing results:
+   - Explicitly state "Status: NOT_VERIFIED (Search suggestion dropdown is obstructing results; target item was not clicked)".
+5. If the requested platform or topic is NOT visible (e.g. wrong browser, wrong website, empty history, or desktop wallpaper):
+   - Explicitly state "Status: NOT_VERIFIED (Reason why screen does not match requested objective)".
+6. If and ONLY IF the genuine requested content is rendered and all requested actions (such as clicking the target video/item) are verified on screen:
+   - State "Status: VERIFIED (Objective fulfilled on live screen)".
+Be completely truthful, concise, and razor-sharp. Never hallucinate completion.`;
 
     let promptText = "";
     if (isChart) {
       promptText = `You are an elite quantitative chart analyst and workstation monitor. Inspect this live workstation screenshot for "${queryOrTopic}".
+ORIGINAL OBJECTIVE: "${effectiveObjective}"
 Self-verify what is visible on the screen.
 Provide a razor-sharp technical breakdown:
 1. Chart & Instrument Verification: (Confirm symbol, timeframe, and current price shown on screen)
@@ -676,14 +686,18 @@ Provide a razor-sharp technical breakdown:
 ${monitoringDirective}
 Format concisely with bullet points.`;
     } else if (isTwitterOrX) {
-      promptText = `You are AGENTLAX, an elite autonomous computer-use agent and workstation monitor. Inspect this live workstation browser screenshot on X (Twitter) for "${queryOrTopic}".
+      promptText = `You are AGENTLAX, an elite autonomous computer-use agent and workstation monitor. Inspect this live workstation browser screenshot on X (Twitter).
+ORIGINAL OBJECTIVE: "${effectiveObjective}"
+TOPIC / QUERY: "${queryOrTopic}"
 State facts only based on the visible pixels:
 1. Rendered Platform: X (Twitter)
 2. Search Query & Category: (e.g. "${queryOrTopic}" under Accounts / People tab)
 3. Accounts Visible: (List specific account names, @handles, bio details, or follow status visible on screen)
 ${monitoringDirective}`;
     } else if (isInstagram) {
-      promptText = `You are AGENTLAX, an elite autonomous computer-use agent and workstation monitor. Inspect this live workstation browser screenshot on Instagram for "${queryOrTopic}".
+      promptText = `You are AGENTLAX, an elite autonomous computer-use agent and workstation monitor. Inspect this live workstation browser screenshot on Instagram.
+ORIGINAL OBJECTIVE: "${effectiveObjective}"
+TOPIC / QUERY: "${queryOrTopic}"
 State facts only based on the visible pixels:
 1. Rendered Platform: Instagram
 2. Profile / Account Name: (Name and @handle displayed)
@@ -691,12 +705,14 @@ State facts only based on the visible pixels:
 4. Visual Elements: (Profile photo, bio, or grid posts visible)
 ${monitoringDirective}`;
     } else {
-      promptText = `You are AGENTLAX, an elite autonomous computer-use agent and workstation monitor. Inspect this live workstation browser screenshot for "${queryOrTopic}".
+      promptText = `You are AGENTLAX, an elite autonomous computer-use agent and workstation monitor. Inspect this live workstation browser screenshot.
+ORIGINAL OBJECTIVE: "${effectiveObjective}"
+TOPIC / QUERY: "${queryOrTopic}"
 Verify what window, website, and content is actually rendered on screen.
 State facts only based on the visible pixels:
 1. Rendered Website & URL: (e.g. GitHub.com, YouTube.com, Facebook.com, Reddit.com)
-2. Verified Search Query & Content: (e.g. GitHub repository search for "laxdollar", YouTube results for "laxis music")
-3. Findings / Results: (e.g. Exact number of repositories found, first video title/channel, or exact results rendered)
+2. Verified Search Query & Content: (e.g. GitHub repository search for "laxdollar", YouTube results for "mausbot", or video playback page)
+3. Findings / Results: (e.g. Exact video playing with title/channel, or search results rendered, or state of player)
 ${monitoringDirective}`;
     }
 
@@ -1061,7 +1077,7 @@ export async function executeAgentChromeTask(
           } catch {}
         }
         cleanHermesTask = `${cleanHermesTask}. Verify results and capture screenshot.`;
-        const hermesResult = await runHermesTask(activeSb, cleanHermesTask, 90_000, agentId);
+        const hermesResult = await runHermesTask(activeSb, cleanHermesTask, 120_000, agentId);
         if (hermesResult.mode === "hermes" && hermesResult.success) {
           let mediaUrl = hermesResult.screenshotB64 ? `data:image/png;base64,${hermesResult.screenshotB64}` : undefined;
           if (!mediaUrl && typeof activeSb.screenshot === "function") {
@@ -1133,7 +1149,22 @@ export async function executeAgentChromeTask(
         console.log(`[AgencyActions] Executing CDP Smart Search for "${searchQuery}" (targetTab: ${targetTab || "all"})...`);
         await cdpSearch(activeSb, searchQuery, targetTab);
         actionHistory.push(`CDP Smart Search: typed "${searchQuery}" into search box, submitted${targetTab && targetTab !== "all" ? ` & clicked ${targetTab} tab` : ""}`);
-        await new Promise((r) => setTimeout(r, 3000));
+        await new Promise((r) => setTimeout(r, 2500));
+
+        // Auto-click first video or result if instructed by user
+        const wantsFirstVideo = /(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+video/i.test(rawPrompt);
+        const wantsFirstResult = /(?:click|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+(?:result|item|link)/i.test(rawPrompt);
+        if (wantsFirstVideo) {
+          console.log(`[AgencyActions] Auto-clicking first video result for: "${rawPrompt}"...`);
+          await cdpClickOrdinal(activeSb, "video", 1);
+          actionHistory.push(`CDP Click: clicked 1st video result`);
+          await new Promise((r) => setTimeout(r, 3000));
+        } else if (wantsFirstResult) {
+          console.log(`[AgencyActions] Auto-clicking first search result for: "${rawPrompt}"...`);
+          await cdpClickOrdinal(activeSb, "result", 1);
+          actionHistory.push(`CDP Click: clicked 1st search result`);
+          await new Promise((r) => setTimeout(r, 3000));
+        }
       } else if (intentType === "unfollow" && searchQuery) {
         await cdpClickText(activeSb, "Following");
         actionHistory.push(`CDP Click: clicked 'Following'`);
@@ -1280,7 +1311,7 @@ export async function executeAgentChromeTask(
       }
 
       if (finalShot && finalShot.length > 0) {
-        visualAnalysis = await analyzeWorkstationScreenshot(finalShot, cleanTopic);
+        visualAnalysis = await analyzeWorkstationScreenshot(finalShot, cleanTopic, rawPrompt);
 
         // If vision detects it's only desktop wallpaper with no window, force window activation & retry
         if (
@@ -1297,7 +1328,7 @@ export async function executeAgentChromeTask(
           const retryBuffer = await activeSb.screenshot();
           if (retryBuffer && retryBuffer.length > 0) {
             finalShot = retryBuffer;
-            visualAnalysis = await analyzeWorkstationScreenshot(retryBuffer, cleanTopic);
+            visualAnalysis = await analyzeWorkstationScreenshot(retryBuffer, cleanTopic, rawPrompt);
           }
         }
 
@@ -1310,21 +1341,29 @@ export async function executeAgentChromeTask(
     }
   }
 
-  const isBlocked =
+  const hasSecurityBarrier =
     visualAnalysis.toLowerCase().includes("blocked_by_platform") ||
     visualAnalysis.toLowerCase().includes("security challenge") ||
     visualAnalysis.toLowerCase().includes("blocked by network security") ||
     visualAnalysis.toLowerCase().includes("access denied") ||
+    visualAnalysis.toLowerCase().includes("captcha");
+
+  const isNotVerified =
     visualAnalysis.toLowerCase().includes("not verified") ||
-    visualAnalysis.toLowerCase().includes("not_verified") ||
-    visualAnalysis.toLowerCase().includes("firefox");
+    visualAnalysis.toLowerCase().includes("not_verified");
+
+  const isBlocked = hasSecurityBarrier || isNotVerified || visualAnalysis.toLowerCase().includes("firefox");
 
   // 3. Update agent status in database
   await db
     .update(agents)
     .set({
       status: isBlocked ? "idle" : "done",
-      currentTask: isBlocked ? `Challenge detected: ${cleanTopic}` : `Completed: ${cleanTopic}`
+      currentTask: hasSecurityBarrier
+        ? `Challenge detected: ${cleanTopic}`
+        : isNotVerified
+        ? `Notice: ${cleanTopic}`
+        : `Completed: ${cleanTopic}`,
     })
     .where(eq(agents.id, agentId))
     .run();
@@ -1360,12 +1399,18 @@ export async function executeAgentChromeTask(
   const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
 
   let replyText = "";
-  if (isBlocked) {
+  if (hasSecurityBarrier) {
     replyText = `⚠️ **Active Monitoring Alert: ${displayName} Workstation Challenge**\n\n`;
     if (visualAnalysis) {
       replyText += `${visualAnalysis}\n\n`;
     }
     replyText += `• **Active Platform:** \`${baseUrl}\`\n• **Subject:** ${cleanTopic}\n• **Monitoring Observation:** Platform security barrier detected on live screen.\n• **Status:** ACTION REQUIRED (Take over via Live VNC)\n• **Workstation:** Live VNC connected (Click to solve or log in)`;
+  } else if (isNotVerified) {
+    replyText = `⚠️ **Workstation Observation: ${displayName} Action Incomplete**\n\n`;
+    if (visualAnalysis) {
+      replyText += `${visualAnalysis}\n\n`;
+    }
+    replyText += `• **Active Platform:** \`${baseUrl}\`\n• **Subject:** ${cleanTopic}\n• **Monitoring Observation:** Requested action was not fully completed on live screen.\n• **Status:** ACTION INCOMPLETE (Review live screenshot)\n• **Workstation:** Live VNC connected`;
   } else {
     replyText = `🎯 **Task Verified: ${displayName} Live Workstation Execution**\n\n`;
     if (visualAnalysis) {

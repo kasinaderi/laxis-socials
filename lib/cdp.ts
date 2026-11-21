@@ -59,7 +59,11 @@ class CDPClient:
             "returnByValue": True,
             "awaitPromise": True
         })
-        return res.get("result", {}).get("value")
+        val = res.get("result", {}).get("value")
+        if val is None:
+            # If expression executed without explicit return value or during page transition
+            return {"success": True, "evaluated": True}
+        return val
 
     def get_info(self):
         js = """(() => {
@@ -203,6 +207,32 @@ class CDPClient:
         # Wait for page to process the search submission
         time.sleep(2.0)
 
+        # Definitively blur search input and close YouTube/Google autocomplete dropdown
+        js_dismiss = """(() => {
+            if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+                document.activeElement.blur();
+            }
+            const popups = document.querySelectorAll('.sbsb_a, .gstl_50, #search-suggestions, ytd-searchbox #search-container, .ytSearchboxComponentSuggestionsContainer');
+            popups.forEach(p => { p.style.display = 'none'; });
+            return { dismissed: true };
+        })()"""
+        try:
+            self.evaluate(js_dismiss)
+            self.send("Input.dispatchKeyEvent", {
+                "type": "rawKeyDown",
+                "windowsVirtualKeyCode": 27,
+                "key": "Escape",
+                "code": "Escape"
+            })
+            self.send("Input.dispatchKeyEvent", {
+                "type": "keyUp",
+                "windowsVirtualKeyCode": 27,
+                "key": "Escape",
+                "code": "Escape"
+            })
+        except Exception:
+            pass
+
         # If a target category tab was requested (e.g. "repositories", "people", "groups")
         if target_tab and target_tab != "all":
             time.sleep(1.5)
@@ -302,6 +332,9 @@ class CDPClient:
                     'ytd-video-renderer a#video-title',
                     'ytd-video-renderer a#thumbnail',
                     'ytd-rich-item-renderer a#video-title',
+                    'ytd-compact-video-renderer a#video-title',
+                    '#contents ytd-video-renderer a#video-title',
+                    'a[href*="/watch?v="]',
                     'a[href*="watch?v="]',
                     'article a'
                 ];
@@ -323,7 +356,7 @@ class CDPClient:
             for (const sel of selectors) {{
                 const els = Array.from(document.querySelectorAll(sel)).filter(el => {{
                     const rect = el.getBoundingClientRect();
-                    return rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= (window.innerHeight * 2.5);
+                    return rect.width > 0 && rect.height > 0 && rect.top >= -150 && rect.bottom <= (window.innerHeight * 3);
                 }});
                 if (els.length > 0) {{
                     candidates = els;
@@ -343,16 +376,32 @@ class CDPClient:
                 target.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
                 target.focus();
                 target.click();
+                try {{
+                    target.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
+                    target.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
+                    target.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true, view: window }}));
+                }} catch(e) {{}}
+                const href = target.href || target.closest('a')?.href;
+                if (href && (href.includes('/watch?v=') || href.includes('watch?v='))) {{
+                    setTimeout(() => {{
+                        if (!window.location.href.includes('watch?v=')) {{
+                            window.location.href = href;
+                        }}
+                    }}, 400);
+                }}
                 return {{
                     success: true,
                     clicked: (target.innerText || target.getAttribute('aria-label') || target.getAttribute('href') || 'item').trim(),
                     index: idx + 1,
-                    totalFound: candidates.length
+                    totalFound: candidates.length,
+                    href: href || ''
                 }};
             }}
             return {{ success: false, reason: f"Target item at position {index} not found. Found {{len(candidates)}} items." }};
         }})()"""
-        return self.evaluate(js)
+        res = self.evaluate(js)
+        time.sleep(2.0)
+        return res
 
     def scroll(self, direction="down", amount=600):
         dy = amount if direction == "down" else -amount
@@ -368,7 +417,7 @@ class CDPClient:
         }})()"""
         return self.evaluate(js)
 
-    def type_into_input(self, text):
+    def type_into_input(self, text, press_enter=False):
         clean = text.strip().replace('"', '\\"')
         js = f"""(() => {{
             const val = "{clean}";
@@ -382,6 +431,9 @@ class CDPClient:
                 'input[name="text"]',
                 'input[name="username"]',
                 'input[placeholder*="phone" i]',
+                'input[type="search"]',
+                'input#search',
+                'input[name="search_query"]',
                 'input[type="text"]',
                 'input:not([type="hidden"])',
                 'textarea'
@@ -393,12 +445,42 @@ class CDPClient:
                     el.value = val;
                     el.dispatchEvent(new Event('input', {{ bubbles: true }}));
                     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    return {{ success: true, selector: s, value: el.value }};
+                    const isSearch = el.type === 'search' || el.name === 'search_query' || el.id === 'search' || (el.placeholder || '').toLowerCase().includes('search') || (el.getAttribute('aria-label') || '').toLowerCase().includes('search');
+                    if (isSearch && el.form) {{
+                        try {{ el.form.dispatchEvent(new Event('submit', {{ bubbles: true, cancelable: true }})); }} catch(e) {{}}
+                    }}
+                    return {{ success: true, selector: s, value: el.value, isSearch: isSearch }};
                 }}
             }}
             return {{ success: false, reason: "No visible input element found" }};
         }})()"""
-        return self.evaluate(js)
+        res = self.evaluate(js)
+        if isinstance(res, dict) and (res.get("isSearch") or press_enter):
+            time.sleep(0.3)
+            self.press_enter()
+            js_submit = """(() => {
+                const ytBtn = document.querySelector('button#search-icon-legacy, button[aria-label="Search"], button[title="Search"], #search-button-narrow button');
+                if (ytBtn && ytBtn.offsetParent !== null) { ytBtn.click(); return true; }
+                return false;
+            })()"""
+            try:
+                self.evaluate(js_submit)
+            except Exception:
+                pass
+            time.sleep(1.5)
+            # Dismiss suggestion dropdown
+            js_blur = """(() => {
+                if (document.activeElement) document.activeElement.blur();
+                const popups = document.querySelectorAll('.sbsb_a, .gstl_50, #search-suggestions, .ytSearchboxComponentSuggestionsContainer');
+                popups.forEach(p => { p.style.display = 'none'; });
+            })()"""
+            try:
+                self.evaluate(js_blur)
+                self.send("Input.dispatchKeyEvent", {"type": "rawKeyDown", "windowsVirtualKeyCode": 27, "key": "Escape", "code": "Escape"})
+                self.send("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 27, "key": "Escape", "code": "Escape"})
+            except Exception:
+                pass
+        return res
 
     def close(self):
         try:

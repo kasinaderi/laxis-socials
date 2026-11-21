@@ -312,7 +312,7 @@ def main():
     learned_routes = load_routes()
 
     action_history = []
-    max_steps = 25  # Full uncapped horizon for complex, multi-step tasks
+    max_steps = 15  # Efficient horizon (up to 15 targeted visual decisions per mission)
     last_b64 = ""
     route_used = None
 
@@ -339,6 +339,11 @@ def main():
             time.sleep(2.0)
             action_history.append(f"Fast-Track Route: submitted '{q_match}' via learned route for {domain}")
             route_used = route_key
+            if re.search(r'(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+video', raw_task, re.IGNORECASE):
+                time.sleep(1.5)
+                log("Fast-Track auto-clicking first video result")
+                run_cdp(["ordinal", "video", "1"])
+                action_history.append("Fast-Track Route: clicked 1st video result")
 
     # System instruction including Procedural Memory context
     routes_context = json.dumps(learned_routes, indent=1) if learned_routes else "(No routes learned yet — explore freely)"
@@ -352,24 +357,28 @@ PROCEDURAL MEMORY (Known Working Routes):
 Analyze the current live screen state and decide the NEXT SINGLE action.
 Return JSON ONLY:
 {{
-  "action": "done" | "search" | "click" | "type" | "scroll" | "enter" | "ordinal" | "wait",
+  "action": "done" | "search" | "ordinal" | "click" | "type" | "scroll" | "enter" | "wait",
   "query": "<clean search query ONLY, stripped of instructions>",
   "text": "<text to type into input or button text>",
   "target": "<button, link, channel, or tab text to click>",
-  "target_type": "result" | "channel" | "account" | "video",
+  "target_type": "video" | "result" | "channel" | "account",
   "index": <1 for 1st item, 2 for 2nd item>,
   "direction": "down" | "up" | "top" | "bottom",
   "reason": "<what you see and why this action is next>",
   "summary": "<only if action is done: detailed verification summary of everything fulfilled>"
 }}
 
-CORE OPERATING PRINCIPLES:
-1. HUMAN-LIKE REASONING: Understand user intent deeply. If user asked to search "obinna", search "obinna" without conversational noise.
-2. DISMISS OBSTACLES: If any cookie banner, popup, sign-in prompt, or dialog appears, click Dismiss, Skip, Reject, or 'X'.
-3. MULTI-STEP BATCHES: For tasks like "follow 5 people" or "check 3 channels", complete one item per turn, track count in reason, and ONLY mark "done" when 100% complete!
-4. VERIFY BEFORE DONE: Only return action: "done" when the exact goal is clearly rendered and verified on screen.
-5. ADAPTIVE METHODOLOGY REASONING: Recorded golden routes and learned paths demonstrate the user's approved interaction pattern (e.g. how to navigate to groups, open composers, enter text cleanly, attach media, and publish). NEVER rigidly lock to the exact group or page ID from a recording if the current post topic calls for a different group or page! Use the demonstrated navigation and posting method to reach the appropriate target group or page for this specific post topic, and then execute the learned posting steps.
-6. AGENT WORKSTATION IDENTITY: Names like 'instashader', 'laxdollar', 'pintr', 'contentor', 'instareal' are names of this AI agent workstation, NOT Chrome extensions or browser add-ons! NEVER navigate to chrome://extensions or try to toggle browser extensions for them. Directly execute the requested web action (e.g. go to github.com and search for mausbot)."""
+CRITICAL OPERATING DIRECTIVES:
+1. SEARCHING: ALWAYS use action: "search" with "query": "<term>". NEVER use action: "type" to search!
+   "search" types into the search box, presses Enter, submits the search, and closes suggestion popups in one step.
+2. CLICKING VIDEOS / RESULTS: To click the first video or result, ALWAYS use action: "ordinal" with "target_type": "video" (or "result"), "index": 1.
+   If the user asked to search and click the first video, your next action after searching MUST be clicking the first video!
+3. VERIFICATION BEFORE DONE: ONLY return action: "done" when the user's FULL objective is achieved and verified on screen!
+   - If user asked to click/watch a video: DO NOT return "done" until the video playback page (/watch?v=) is open and video player is active!
+   - If only search results or autocomplete suggestions are visible, do NOT mark "done"! Click the target video first.
+4. DISMISS OBSTACLES: If any popup, notification prompt ("wants to Show notifications"), cookie banner, or dropdown covers the screen, click Dismiss, Block, 'X', or send Escape.
+5. WORKSTATION IDENTITY: Names like 'instashader', 'laxdollar', 'pintr', 'contentor', 'instareal' are names of this AI agent workstation.
+   Never navigate to chrome://extensions."""
 
     for step in range(1, max_steps + 1):
         log(f"Step {step}/{max_steps}")
@@ -468,8 +477,14 @@ Look at the current live screen. What is the next logical step to complete the o
         elif action == "type":
             txt = decision.get("text") or ""
             if txt:
-                run_cdp(["type", txt])
-                action_history.append(f"Typed '{txt}'")
+                # If typing in a search context, automatically promote to search action
+                if "search" in raw_task.lower() or "find" in raw_task.lower() or "video" in raw_task.lower():
+                    log(f"Auto-promoting 'type' action to full 'search' for: {txt}")
+                    res = run_cdp(["search", txt])
+                    action_history.append(f"Searched for '{txt}': {res.get('mode', 'executed')}")
+                else:
+                    run_cdp(["type", txt])
+                    action_history.append(f"Typed '{txt}'")
         elif action == "enter":
             run_cdp(["enter"])
             action_history.append("Pressed Enter")
@@ -483,12 +498,12 @@ Look at the current live screen. What is the next logical step to complete the o
         # Fast, responsive cadence backed by our 3-key failover pool (45 RPM total capacity!)
         time.sleep(1.8)
 
-    # Final step reached
+    # Final step reached without action: "done"
     final_b64 = take_screenshot() or last_b64
-    summary = f"Completed {len(action_history)} autonomous steps on workstation: " + "; ".join(action_history[-3:])
+    summary = f"Reached maximum steps ({max_steps}) without full verification. Last actions: " + "; ".join(action_history[-3:])
     routes_dump = load_routes()
     print(json.dumps({
-        "success": True,
+        "success": False,
         "summary": summary,
         "screenshot_b64": final_b64,
         "steps_taken": len(action_history),

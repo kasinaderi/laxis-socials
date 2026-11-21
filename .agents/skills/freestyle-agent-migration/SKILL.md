@@ -325,3 +325,32 @@ When Kelvin commands AGENTLAX on Telegram (`"power it off"`, `"close the vm"`), 
 #### Key Insight for Future Migrations
 Any persistent daemon maintaining an open connection to an external edge router (Cloudflare, ngrok, reverse SSH tunnels) **must be stopped before pausing a Freestyle VM**. Failing to stop it will cause the edge router's heartbeats to wake the VM continuously.
 - Any background service check that calls `wrapper.commands.run()` — these all go through `vmRef.exec()`
+
+---
+
+### 10. Browser Search & Sub-Action Execution (Search Submission, Autocomplete Dismissal, Ordinal Click & Strict Vision Verification)
+
+#### The Problem
+When the user sends a compound browser command (e.g., `"search mausbot click on the first video and take a screenshot"`):
+1. **Typing loop**: Hermes or the agent selected `action: "type"`, which only set the DOM input's value without submitting or pressing Enter. The suggestions dropdown remained open, and the LLM looped up to 25 times re-typing.
+2. **Autocomplete dropdown blocking screen**: YouTube/Google search inputs left focused kept the suggestions dropdown (`#search-suggestions`, `.sbsb_a`) rendered at `z-index: 2000`, blocking the actual search results and preventing clicks.
+3. **Sub-action dropped**: The first video was never clicked because the model stalled on typing or the dropdown covered it.
+4. **False Positive Vision Verification**: `analyzeWorkstationScreenshot` saw the search term inside the autocomplete dropdown and hallucinated `Status: VERIFIED (Objective fulfilled on live screen)` even though the video was never clicked or played.
+5. **False Success at Step Limit**: In `hermes_agent.py`, reaching `max_steps` printed `{"success": True}`, leading the caller to believe the task succeeded.
+
+#### The Complete Solution
+1. **Search Submission & Autocomplete Dismissal (`lib/cdp.ts`)**:
+   - In `smart_search` and `type_into_input`: After entering text, dispatch `input`/`change`, submit the form, press `Enter`, click the native search icon (`button#search-icon-legacy`), blur the active input (`document.activeElement.blur()`), hide `.sbsb_a, #search-suggestions`, and dispatch `Escape` key (`windowsVirtualKeyCode: 27`).
+2. **Robust Ordinal Click (`lib/cdp.ts`)**:
+   - In `click_ordinal`: Include selectors `ytd-video-renderer a#video-title`, `ytd-video-renderer a#thumbnail`, `ytd-rich-item-renderer a#video-title`, `a[href*="/watch?v="]`.
+   - Dispatch `mousedown`, `mouseup`, `click`, and navigate to `href` if it's a `/watch?v=` link. Wait 2.0s for the video page transition.
+3. **Compound Task Auto-Click in Fallback CDP (`lib/agency-actions.ts`)**:
+   - In Step E: If `rawPrompt` matches `click.*(?:first|1st).*video`, immediately invoke `cdpClickOrdinal(activeSb, "video", 1)` after the search finishes.
+4. **In-VM Hermes System Prompt & Type Auto-Promotion (`lib/hermes.ts`)**:
+   - Instruct Hermes in system prompt: ALWAYS use `action: "search"` to search (NEVER `type`), use `action: "ordinal"` to click the first video, and ONLY mark `done` when video playback is active (`/watch?v=`).
+   - If Hermes emits `action: "type"` in a search context, auto-promote it to `run_cdp(["search", txt])`.
+   - If `max_steps` (now 15) is reached without `action: "done"`, return `{"success": False}`.
+5. **Strict Multimodal Vision Verification (`lib/agency-actions.ts`)**:
+   - `analyzeWorkstationScreenshot(screenshotBuffer, queryOrTopic, userObjective)` takes the full user instruction (`rawPrompt`).
+   - If the user instructed to click/watch a video: verify active video playback (`/watch?v=`, video player controls, scrubber). If only search results or autocomplete suggestions are visible, return `Status: NOT_VERIFIED`.
+   - Distinguish `hasSecurityBarrier` (Cloudflare/CAPTCHA), `isNotVerified` (incomplete actions), and `VERIFIED`. Never claim a task is verified when a dropdown covers the screen or sub-actions were skipped.
