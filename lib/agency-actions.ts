@@ -1971,16 +1971,8 @@ export async function handleAgencyExecutiveCommand(
 
     const pausedNames: string[] = [];
     for (const agId of targets) {
-      if (isFreestyleAgent(agId)) {
-        const existing = await db
-          .select({ sandboxId: agentSandboxes.sandboxId })
-          .from(agentSandboxes)
-          .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agId)))
-          .get();
-        await pauseFreestyleSandbox(campaignId, agId, existing?.sandboxId || undefined);
-      } else {
-        await pauseAgentSandbox(campaignId, agId);
-      }
+      // Use the exact same pauseAgentSandbox function that the UI "Power Off" button in the Computer section calls
+      await pauseAgentSandbox(campaignId, agId);
       pausedNames.push(getAgentDisplayName(agId));
       if (contextId && lastActiveAgentByContext.get(contextId) === agId) {
         lastActiveAgentByContext.delete(contextId);

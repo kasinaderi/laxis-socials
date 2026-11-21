@@ -401,6 +401,9 @@ echo "PROVISIONING_COMPLETE"
 
   // 8. Pause VM to stop compute billing ($0 cost)
   console.log(`\n[8/8] Pausing VM to $0 compute standby...`);
+  // ⚠️ CRITICAL: Must stop cloudflared-tunnel before pause, otherwise Cloudflare edge heartbeats auto-wake it within 2s
+  await vm.exec({ command: 'systemctl stop cloudflared-tunnel', linuxUser: 'root', timeoutMs: 5000 }).catch(() => {});
+  await vm.update({ automaticRestart: false }).catch(() => {});
   await vm.pause();
   console.log(`[8/8] ✓ VM is hibernated. Ready for on-demand sub-second wake up!`);
 

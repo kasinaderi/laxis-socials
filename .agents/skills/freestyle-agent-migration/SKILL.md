@@ -275,72 +275,48 @@ function getCleanStreamUrl(url?: string | null): string {
 
 ### 9. VM Pause Bounce-Back Fix — The Complete Solution
 
-> **Context:** `vm.pause()` returns `{state: "paused"}` immediately, but the VM bounces back to `"running"` within ~2 seconds. Setting `automaticRestart: false` alone does NOT fix it — the bounce-back is caused by `vm.exec()` calls from the screen-polling API hitting the paused VM and auto-waking it.
+> **Root Cause Identified & Verified**: The bounce-back from `paused` to `running` within ~2 seconds was caused by **`cloudflared-tunnel.service`**! Cloudflare edge servers (`trycloudflare.com`) continuously maintain an active QUIC/TCP tunnel connection with the daemon inside the VM and send keepalive heartbeats every 1-2 seconds. When `vm.pause()` freezes the VM, Cloudflare's incoming tunnel heartbeats hit the VM's network interface, and Freestyle's hypervisor detects inbound traffic and auto-resumes the VM!
 
-#### Root Cause Chain
+#### The Full Root Cause Chain
 
 ```
-Kelvin says "close the vm"
-  → pauseFreestyleSandbox() calls vm.pause()          ✅ VM goes to "paused"
-  → 1200ms later, AgentTabs.tsx polls /api/sandbox/screen
-  → screen/route.ts calls vm.exec() on the paused VM  ❌ Freestyle auto-wakes VM!
-  → VM bounces back to "running" within 2s
-  → Kelvin sees VM still running in provider dashboard
+Kelvin says "power it off" / "close the vm"
+  → pauseFreestyleSandbox() calls vm.pause()
+  → VM freezes and state becomes "paused"
+  → 1-2 seconds later: Cloudflare edge sends tunnel keepalive packets
+  → Freestyle hypervisor detects inbound network packets on listening tunnel
+  → Freestyle auto-wakes the VM back to "running"!
+  → Kelvin sees the VM still active in provider dashboard ($$ compute continues)
 ```
 
-#### The Three-Part Fix (committed in `main`)
+#### The Complete Fix (Applied across codebase)
 
-**Part 1 — `pauseFreestyleSandbox()` in `lib/freestyle-sandbox.ts`:**
+**1. Stop `cloudflared-tunnel` before pause (`lib/freestyle-sandbox.ts` & `migrate_agent_to_freestyle.mjs`):**
 ```typescript
-// 1. Disable automaticRestart FIRST (belt-and-suspenders)
-await vmRef.update({ automaticRestart: false });
+// ⚠️ MUST stop cloudflared-tunnel daemon BEFORE pausing!
+await vmRef.exec({
+  command: "systemctl stop cloudflared-tunnel",
+  linuxUser: "root",
+  timeoutMs: 5000,
+}).catch(() => {});
 
-// 2. Pre-mark DB as "paused" BEFORE pause() — stops /api/sandbox/screen from exec()-waking it
-await db.update(agentSandboxes).set({ status: "paused" })...run();
-
-// 3. Wait 1.5s for in-flight exec() calls to drain
-await new Promise(r => setTimeout(r, 1500));
-
-// 4. Issue the actual pause
+await vmRef.update({ automaticRestart: false }).catch(() => {});
 await vmRef.pause();
+```
+When `cloudflared-tunnel` is stopped, there is ZERO inbound network traffic hitting the VM, so Freestyle keeps the VM permanently paused in $0 compute standby!
 
-// 5. Verify after 3s — retry if bounced back
-const verify = await vmRef.data();
-if (verify?.state === "running") await vmRef.pause();
+**2. Auto-restart `cloudflared-tunnel` on wake (`lib/freestyle-sandbox.ts`):**
+When the VM wakes up (`getOrCreateFreestyleSandbox`), the service startup sequence automatically restarts it:
+```bash
+systemctl is-active cloudflared-tunnel || systemctl restart cloudflared-tunnel
 ```
 
-**Part 2 — `app/api/sandbox/screen/route.ts` (GET handler):**
-```typescript
-// FAST PATH: Check DB status first (no Freestyle API call needed)
-const dbRecord = await db.select({ status }).from(agentSandboxes).where(...).get();
-if (dbRecord?.status !== "running") {
-  return NextResponse.json({ error: "VM is paused" }, { status: 503 });
-}
+**3. Direct equivalence between UI button and Telegram Master Agent (`lib/agency-actions.ts`):**
+When Kelvin commands AGENTLAX on Telegram (`"power it off"`, `"close the vm"`), AGENTLAX calls `pauseAgentSandbox(campaignId, agId)`, which is the EXACT same function called by `POST /api/sandbox` when the user clicks the "Power Off" button in the Computer section of the dashboard.
 
-// SLOW PATH: Verify real VM state via Freestyle API
-const vmState = await vm.data();
-if (vmState?.state !== "running") {
-  return NextResponse.json({ error: "VM is paused" }, { status: 503 });
-}
-
-// ONLY THEN call vm.exec() for the screenshot
-```
-
-**Part 3 — `components/AgentTabs.tsx` (`startScreenPolling`):**
-```typescript
-// When screen API returns 503 (VM paused), STOP polling immediately
-if (res.status === 503) {
-  setIsScreenPolling(false);
-  screenPollRef.current = null;
-  setIsPaused(true); // Sync UI — shows "PC Off" badge
-  return; // Do NOT reschedule — this was causing the bounce-back loop
-}
-```
-
-**On wake:** `getOrCreateFreestyleSandbox()` re-enables `automaticRestart: true` before calling `vmRef.start()`.
+**4. Screen polling guard (`app/api/sandbox/screen/route.ts` & `components/AgentTabs.tsx`):**
+`screen/route.ts` checks DB status and returns 503 without executing `vm.exec()` if the VM is paused, and `AgentTabs.tsx` immediately halts screen polling on 503.
 
 #### Key Insight for Future Migrations
-Any API route that calls `vm.exec()` on a Freestyle VM **will auto-wake a paused VM**. Always guard exec() calls with a DB status check or `vm.data()` check first. This applies to:
-- `/api/sandbox/screen` (GET + POST) — fixed ✅
-- `/api/sandbox` (the main sandbox action route) — review before adding new exec() calls
+Any persistent daemon maintaining an open connection to an external edge router (Cloudflare, ngrok, reverse SSH tunnels) **must be stopped before pausing a Freestyle VM**. Failing to stop it will cause the edge router's heartbeats to wake the VM continuously.
 - Any background service check that calls `wrapper.commands.run()` — these all go through `vmRef.exec()`

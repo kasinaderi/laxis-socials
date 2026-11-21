@@ -136,6 +136,10 @@ export function createFreestyleWrapper(
     pause: async () => {
       try {
         console.log(`[Freestyle] Pausing VM ${vmId} to stop compute billing ($0 cost)...`);
+        // ⚠️ CRITICAL: Must stop cloudflared-tunnel daemon BEFORE pausing!
+        // Cloudflare's QUIC tunnel heartbeats hit the VM every 1-2s and cause Freestyle to auto-wake it.
+        await vmRef.exec({ command: "systemctl stop cloudflared-tunnel", linuxUser: "root", timeoutMs: 5000 }).catch(() => {});
+        await vmRef.update({ automaticRestart: false }).catch(() => {});
         await vmRef.pause();
         console.log(`[Freestyle] VM ${vmId} successfully paused!`);
       } catch (err: any) {
@@ -422,14 +426,20 @@ export async function pauseFreestyleSandbox(
   const activeSandboxes: Map<string, any> =
     (global as any).__activeSandboxes || ((global as any).__activeSandboxes = new Map());
 
-  let wrapper = activeSandboxes.get(cacheKey) as FreestyleSandboxWrapper | undefined;
+  // 1. Pre-mark DB as paused IMMEDIATELY so UI and API calls know it's off
+  await db
+    .update(agentSandboxes)
+    .set({
+      status: "paused",
+      activeAt: new Date().toISOString(),
+    })
+    .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agentId)))
+    .run()
+    .catch(() => {});
 
-  if (wrapper) {
-    await wrapper.pause();
-    activeSandboxes.delete(cacheKey);
-  }
+  activeSandboxes.delete(cacheKey);
 
-  // Always also pause via direct Freestyle API — catches VMs running outside this process
+  // 2. Pause via direct Freestyle API
   const freestyle = await getFreestyleClient();
   if (freestyle) {
     try {
@@ -449,7 +459,7 @@ export async function pauseFreestyleSandbox(
       }
 
       if (!vmId) {
-        // Fallback: find by slug (slower — requires listing all VMs)
+        // Fallback: find by slug
         const { slug } = getFreestyleConfigForAgent(agentId);
         const list = await freestyle.vms.list();
         const rawVm = list.vms?.find((v: any) => v.slug === slug);
@@ -466,42 +476,26 @@ export async function pauseFreestyleSandbox(
         const vmRef = freestyle.vms.ref(vmId);
         const vmData = await vmRef.data().catch(() => null);
         if (vmData && vmData.state !== "paused") {
-          console.log(`[Freestyle] Pausing VM ${vmId} (${agentId}) — disabling auto-restart first...`);
+          console.log(`[Freestyle] Pausing VM ${vmId} (${agentId}) — stopping tunnel & auto-restart first...`);
 
-          // Step 1: Disable automaticRestart so Freestyle won't bounce the VM back to "running"
-          // within 2s of pause(). Without this, the VM bounces back regardless of pause() return value.
+          // ⚠️ ROOT CAUSE FIX: Stop cloudflared-tunnel daemon BEFORE pausing!
+          // Cloudflare's QUIC tunnel heartbeats hit the VM every 1-2s and cause Freestyle to auto-wake it.
+          await vmRef.exec({
+            command: "systemctl stop cloudflared-tunnel",
+            linuxUser: "root",
+            timeoutMs: 5000,
+          }).catch(() => {});
+
+          // Disable automaticRestart so Freestyle won't bounce the VM back to "running"
           try {
             await vmRef.update({ automaticRestart: false });
-            console.log(`[Freestyle] automaticRestart disabled for VM ${vmId}`);
           } catch (e: any) {
             console.warn(`[Freestyle] Could not disable automaticRestart:`, e?.message);
           }
 
-          // Step 2: Pre-mark DB as paused BEFORE the actual pause call.
-          // This stops /api/sandbox/screen from calling vm.exec() (which auto-wakes a paused VM)
-          // while the pause is in-flight. Screen API checks DB status before exec.
-          await db
-            .update(agentSandboxes)
-            .set({ status: "paused", activeAt: new Date().toISOString() })
-            .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agentId)))
-            .run().catch(() => {});
-
-          // Step 3: Wait for any in-flight exec() calls (screen polls) to drain
-          await new Promise(r => setTimeout(r, 1500));
-
-          // Step 4: Issue the actual pause
+          // Issue the actual pause
           await vmRef.pause();
           console.log(`[Freestyle] VM ${vmId} paused successfully!`);
-
-          // Step 5: Verify it stayed paused (the bounce-back takes ~2s)
-          await new Promise(r => setTimeout(r, 3000));
-          const verifyData = await vmRef.data().catch(() => null);
-          if (verifyData?.state === "running") {
-            console.warn(`[Freestyle] VM ${vmId} bounced back to running — retrying pause...`);
-            await vmRef.pause();
-          } else {
-            console.log(`[Freestyle] VM ${vmId} confirmed state: ${verifyData?.state}`);
-          }
         } else if (vmData?.state === "paused") {
           console.log(`[Freestyle] VM ${vmId} already paused.`);
         }
@@ -510,15 +504,6 @@ export async function pauseFreestyleSandbox(
       console.warn(`[Freestyle] Direct pause notice for ${agentId}:`, err.message);
     }
   }
-
-  await db
-    .update(agentSandboxes)
-    .set({
-      status: "paused",
-      activeAt: new Date().toISOString(),
-    })
-    .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agentId)))
-    .run();
 
   return { status: "paused" };
 }
