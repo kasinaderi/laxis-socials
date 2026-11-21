@@ -495,13 +495,16 @@ export async function initSandboxBrowserAndCdp(sb: any, agentId?: string): Promi
 
     // 4. Install & configure in-VM Hermes Agent for this specific agent
     //    Sets up Hermes with the agent's dedicated Gemini API key and failover pool
-    installHermesInSandbox(sb, agentId).then((result) => {
+    try {
+      const result = await installHermesInSandbox(sb, agentId);
       if (result.success) {
-        console.log(`[Hermes] ✓ Configured in-VM Hermes for ${agentId || "workstation"} (gemini-3.5-flash)`);
+        console.log(`[Hermes] ✓ Configured in-VM Hermes for ${agentId || "workstation"} (gemini-3.5-flash-lite)`);
       } else {
         console.warn("[Hermes] Setup notice:", result.message);
       }
-    }).catch(() => {});
+    } catch (e: any) {
+      console.warn("[Hermes] Setup exception:", e?.message);
+    }
 
     // 5. If this is the analytics agent — also install the Deriv Pattern Engine
     if (agentId === "analytics") {
@@ -602,6 +605,9 @@ export async function launchChromeWithCdp(sb: any, initialUrl: string): Promise<
         --disable-features=Translate,OptimizationHints,MediaRouter \
         --disable-component-update \
         --disable-popup-blocking \
+        --disable-notifications \
+        --deny-permission-prompts \
+        --disable-features=Translate,OptimizationHints,MediaRouter,PushMessaging \
         --window-size=1280,800 \
         --start-maximized \
         "${initialUrl}" > /tmp/chrome_cdp.log 2>&1 &

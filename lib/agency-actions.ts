@@ -1046,10 +1046,21 @@ export async function executeAgentChromeTask(
       const hermesStatus = await checkHermesStatus(activeSb).catch(() => ({ installed: false, configured: false, version: "" }));
       if (hermesStatus.configured) {
         console.log(`[Hermes] Active on ${displayName} VM. Handing off full PC control to in-VM Hermes agent...`);
-        // Clean operational prompt for Hermes: strip bare wake/agent identifiers so Hermes focuses directly on the web objective
-        const cleanHermesTask = baseUrl
-          ? `Go to ${baseUrl} and ${searchQuery ? `search for "${searchQuery}"` : cleanTopic}. Verify results and capture screenshot.`
-          : rawPrompt.replace(/^(?:can\s+you\s+)?(?:turn\s+on|wake|open|start)\s+(?:instashader|insta\s+shader|laxdollar|lax\s+dollar|pintr|contentor|insta\s+real)\s*(?:and|,)?\s*/i, "").trim();
+        // Clean operational prompt for Hermes: strip bare wake/agent identifiers so Hermes focuses directly on the full web objective
+        // ⚠️ CRITICAL: Never drop sub-actions (e.g. "click on the first video") by truncating to bare search query!
+        const strippedPrompt = rawPrompt
+          .replace(/^(?:can\s+you\s+)?(?:turn\s+on|wake|open|start|boot|spin\s+up)\s+(?:agent\s+)?(?:instashader|insta\s+shader|laxdollar|lax\s+dollar|pintr|fb_jotrainer|contentor|fb_contentor|insta\s+real|ig_real|ig_shader|shader|real)\s*(?:and|,)?\s*/i, "")
+          .trim();
+        let cleanHermesTask = strippedPrompt;
+        if (baseUrl) {
+          try {
+            const hostHint = new URL(baseUrl).hostname.replace(/^www\./, "").split(".")[0];
+            if (hostHint && !strippedPrompt.toLowerCase().includes(hostHint)) {
+              cleanHermesTask = `Go to ${baseUrl} and ${strippedPrompt}`;
+            }
+          } catch {}
+        }
+        cleanHermesTask = `${cleanHermesTask}. Verify results and capture screenshot.`;
         const hermesResult = await runHermesTask(activeSb, cleanHermesTask, 90_000, agentId);
         if (hermesResult.mode === "hermes" && hermesResult.success) {
           let mediaUrl = hermesResult.screenshotB64 ? `data:image/png;base64,${hermesResult.screenshotB64}` : undefined;
