@@ -197,6 +197,11 @@ async function handleAgencyExecutiveCommand(
   - **Multiple VM Pause/Wake**: e.g., `"turn off shader and pintr"`, `"wake lax dollar and contentor"`. The brain captures all targets (`targetAgentIds: ["ig_shader", "fb_jotrainer"]`) and operates on each in parallel.
   - **Contextual Pronoun Pause**: e.g., Kelvin asks `"any pc on?"` → Master replies that `ig_shader` is on → Kelvin says `"power it off"`. The brain resolves `"it"` to the active running VM (`ig_shader`) and powers it down immediately!
   - **All VMs Pause/Wake**: e.g., `"put everything to sleep"`, `"power off all"`, `"wake all vms"`. The brain sets `allAgents: true` and pauses/wakes all agent workstations at once.
+- **Multi-Step Compound Task Disambiguation**:
+  - When Kelvin sends compound instructions like `"turn on instashader go to github and search mausbot and take a screenshot"`, the brain does NOT classify it as a bare `wake`.
+  - It prioritizes the true operational goal (`navigate_or_search`) and automatically boots the workstation first, launches Chrome, performs the navigation/search, and returns the screenshot.
+- **Conversational Memory for Follow-Up Affirmations**:
+  - When Kelvin follows up with `"okey do the task i have asked"`, `"proceed"`, or `"do what i told you"`, the brain scans conversation `history` backwards, resolves the exact previous instruction, and executes it without asking Kelvin to repeat himself.
 - **Support for Both Migrated (Freestyle) and Non-Migrated (E2B) Agents**:
   - The brain treats all agents identically (`fb_laxdollar`, `fb_jotrainer`, `fb_contentor`, `ig_real`, `ig_shader`, `analytics`).
   - Under the hood, `isFreestyleAgent(agentId)` automatically routes to `pauseFreestyleSandbox()` (with direct `vmRef.pause()`) or `pauseAgentSandbox()` on E2B.
