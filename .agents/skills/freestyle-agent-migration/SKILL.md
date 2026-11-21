@@ -97,13 +97,17 @@ export function getFreestyleConfigForAgent(agentId: string) {
   const cleanId = agentId.replace(/_/g, "-");
   const slug = `laxis-${cleanId}`;
   const vncDomain = `${slug}-vnc.style.dev`;
-  const streamUrl = `https://${vncDomain}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+  // Always use the Cloudflare Quick Tunnel — style.dev TLS WebSocket connections are dropped at the edge
+  const streamUrl = DEFAULT_CF_STREAM_URL; // e.g. https://<subdomain>.trycloudflare.com/vnc.html?...
   return { slug, vncDomain, streamUrl };
 }
 ```
 
 ### 2. Instant Pre-Seeded Desktop Streaming & UI Controls
 - **Instant iframe loading**: The UI pre-seeds `streamUrl` on click, avoiding waiting on sequential VM initialization. noVNC automatically reconnects via `autoconnect=true&reconnect=true`.
+- **Critical: Screenshot polling must NOT run when a valid Cloudflare stream URL exists**. The `useEffect` in `AgentTabs.tsx` that controls `startScreenPolling()` / `stopScreenPolling()` MUST check `sandboxInfo?.streamUrl && !sandboxInfo.streamUrl.includes("style.dev")`. If valid → `stopScreenPolling()`. If not valid AND `isFullscreenModal` → `startScreenPolling()` as fallback. Without this check, screenshot polling always starts and sets `screenSrc`, which competes with the iframe display.
+- **Critical: Always sanitize `streamUrl` when merging API responses**. Calls to `setSandboxInfo()` in `fetchSandbox()`, `handleTakeOverToggle()`, and `handleWakeAndReconnect()` must use `getCleanStreamUrl(data?.streamUrl || prev?.streamUrl)` — never overwrite a valid CF stream URL with a null/style.dev value from the API response.
+- **Critical: `restore_chrome` action must NOT call `getOrCreateAgentSandbox(..., true)`**. When the VM is already running, calling wake causes a ~15s "Connecting..." delay. Instead, read from `(global as any).__activeSandboxes?.get(cacheKey)` directly and exec the wmctrl/xdotool commands.
 - **Dynamic Preview Badges**: `getFreestylePreview(agentId, isRunning)` renders an active status badge when running and a paused badge when sleeping.
 - **Power Toggle with Loading State**: `isTogglingPower` provides immediate visual spinner feedback on "Turn On Pc" and "Pause Pc".
 - **Golden Route Recorder Auto-Wake**: Recording requests to `/api/hermes/record` automatically wake the VM if paused.
