@@ -25,11 +25,28 @@ export interface HermesAgentConfig {
   model?: string;
 }
 
-// 3 Pooled Gemini Keys across 3 distinct Google Cloud projects
-// Keys are loaded exclusively from .env.local — never hardcoded here
-export const HERMES_KEY_1 = process.env.GEMINI_HERMES_KEY_1 || "";
-export const HERMES_KEY_2 = process.env.GEMINI_HERMES_KEY_2 || "";
-export const HERMES_KEY_3 = process.env.GEMINI_HERMES_KEY_3 || "";
+// Dynamic Key Getters with robust failover fallbacks
+// Evaluated at runtime so dotenv loading order never results in empty keys
+export function getHermesKey(index: 1 | 2 | 3): string {
+  if (!process.env.GEMINI_HERMES_KEY_1 && !process.env.GEMINI_API_KEY) {
+    try {
+      // Lazily load .env.local if not loaded yet
+      const dotenv = require("dotenv");
+      dotenv.config({ path: ".env.local" });
+    } catch {}
+  }
+  if (index === 1) {
+    return process.env.GEMINI_HERMES_KEY_1 || process.env.GEMINI_API_KEY || "";
+  }
+  if (index === 2) {
+    return process.env.GEMINI_HERMES_KEY_2 || process.env.GEMINI_API_KEY_FALLBACK || "";
+  }
+  return process.env.GEMINI_HERMES_KEY_3 || "";
+}
+
+export const HERMES_KEY_1 = getHermesKey(1);
+export const HERMES_KEY_2 = getHermesKey(2);
+export const HERMES_KEY_3 = getHermesKey(3);
 
 /**
  * Procedural Memory Persistence (Turso Cloud SQLite)
@@ -108,20 +125,23 @@ export const AGENT_NICHE_CONTEXT: Record<string, { name: string; niche: string; 
  * Returns the assigned primary and failover keys for each agent
  */
 export function getDefaultHermesConfigForAgent(agentId: string): HermesAgentConfig {
+  const k1 = getHermesKey(1);
+  const k2 = getHermesKey(2);
+  const k3 = getHermesKey(3);
   if (agentId === "fb_jotrainer" || agentId === "fb_laxdollar") {
     return {
       agentId,
       modelProvider: "gemini",
-      apiKey: HERMES_KEY_1,
-      backupKeys: [HERMES_KEY_2, HERMES_KEY_3],
+      apiKey: k1,
+      backupKeys: [k2, k3],
       model: "gemini-3.5-flash-lite",
     };
   } else if (agentId === "fb_contentor" || agentId === "ig_shader") {
     return {
       agentId,
       modelProvider: "gemini",
-      apiKey: HERMES_KEY_2,
-      backupKeys: [HERMES_KEY_3, HERMES_KEY_1],
+      apiKey: k2,
+      backupKeys: [k3, k1],
       model: "gemini-3.5-flash-lite",
     };
   } else {
@@ -129,8 +149,8 @@ export function getDefaultHermesConfigForAgent(agentId: string): HermesAgentConf
     return {
       agentId,
       modelProvider: "gemini",
-      apiKey: HERMES_KEY_3,
-      backupKeys: [HERMES_KEY_1, HERMES_KEY_2],
+      apiKey: k3,
+      backupKeys: [k1, k2],
       model: "gemini-3.5-flash-lite",
     };
   }
@@ -249,7 +269,7 @@ def xdotool_search(query):
       1. Click search input box using CDP to get its coordinates
       2. Use xdotool to physically click, clear, type, and submit
     """
-    clean_q = query.strip().replace("'", "").replace("\"", "")
+    clean_q = query.strip().replace("'", "").replace('"', "")
     # First get search input coords via CDP
     info = run_cdp(["info"])
     # Try to find the search input position using CDP evaluate
@@ -375,14 +395,17 @@ def main():
         cached = learned_routes[route_key]
         log(f"Fast-Track Route Activated: '{route_key}' (Previously verified {cached.get('hits', 1)} times)")
         
-        # Deconstruct query using fastest intent rule or Gemini
+        # Deconstruct query cleanly without regex escaping pitfalls
         q_match = None
-        import re
-        m = re.search(r'(?:search|find|for|play|watch)\\s+["\\']?([^"\\']+)["\\']?', raw_task, re.IGNORECASE)
-        if m:
-            clean_q = re.sub(r'\\s+(?:and|the|then|to)\\s+(?:share|take|bring|give|send|report|show).*$', '', m.group(1), flags=re.IGNORECASE).strip()
-            if clean_q:
-                q_match = clean_q
+        for verb in ["search for", "search", "find", "play", "watch"]:
+            if verb in raw_task.lower():
+                idx = raw_task.lower().find(verb) + len(verb)
+                q_match = raw_task[idx:].strip().strip('"').strip("'")
+                break
+        if q_match:
+            for stop_word in [" and ", " click ", " watch ", " play ", " then ", " to ", " take ", " bring ", " give ", " send ", " report ", " show "]:
+                if stop_word in q_match.lower():
+                    q_match = q_match[:q_match.lower().find(stop_word)].strip()
 
         if q_match:
             log(f"Fast-Track submitting query: '{q_match}'")
@@ -396,7 +419,8 @@ def main():
             time.sleep(2.0)
             action_history.append(f"Fast-Track Route: submitted '{q_match}' via learned route for {domain}")
             route_used = route_key
-            if re.search(r'(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+video', raw_task, re.IGNORECASE):
+            wants_first_vid = any(p in raw_task.lower() for p in ["first video", "1st video", "first result", "1st result"])
+            if wants_first_vid:
                 time.sleep(1.5)
                 log("Fast-Track auto-clicking first video result")
                 run_cdp(["ordinal", "video", "1"])
@@ -473,7 +497,7 @@ Look at the current live screen. What is the next logical step to complete the o
         try:
             decision = json.loads(ai_res)
         except Exception:
-            clean = ai_res.strip().replace("\`\`\`json", "").replace("\`\`\`", "").strip()
+            clean = ai_res.strip().replace(chr(96)*3 + "json", "").replace(chr(96)*3, "").strip()
             try:
                 decision = json.loads(clean)
             except Exception:
@@ -533,10 +557,7 @@ Look at the current live screen. What is the next logical step to complete the o
                     res = run_cdp(["search", q])
                 action_history.append(f"Searched for '{q}': {res.get('mode', 'executed') if isinstance(res, dict) else 'executed'}")
                 # ── Post-search video click guarantee ──
-                wants_video = __import__("re").search(
-                    r"(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+video",
-                    raw_task, __import__("re").IGNORECASE
-                )
+                wants_video = any(p in raw_task.lower() for p in ["first video", "1st video", "first result", "1st result"])
                 if wants_video:
                     log("Post-search: auto-clicking first video result")
                     time.sleep(2.5)
@@ -572,10 +593,7 @@ Look at the current live screen. What is the next logical step to complete the o
                         res = run_cdp(["search", txt])
                     action_history.append(f"Searched for '{txt}': {res.get('mode', 'executed') if isinstance(res, dict) else 'executed'}")
                     # Post-search video click guarantee
-                    wants_video2 = __import__("re").search(
-                        r"(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+video",
-                        raw_task, __import__("re").IGNORECASE
-                    )
+                    wants_video2 = any(p in raw_task.lower() for p in ["first video", "1st video", "first result", "1st result"])
                     if wants_video2:
                         log("Post-type-promoted-search: auto-clicking first video result")
                         time.sleep(2.5)
@@ -619,21 +637,20 @@ if __name__ == "__main__":
  * Builds the .env configuration file inside the VM
  */
 function buildHermesEnvFile(config: HermesAgentConfig): string {
+  const primaryKey = config.apiKey || getHermesKey(1);
+  const backup1 = config.backupKeys?.[0] || getHermesKey(2);
+  const backup2 = config.backupKeys?.[1] || getHermesKey(3);
+
   const lines = [
     `# Hermes Agent Configuration — ${config.agentId}`,
     `HERMES_AGENT_ID=${config.agentId}`,
     `HERMES_MODEL_PROVIDER=${config.modelProvider}`,
     `HERMES_CDP_URL=http://127.0.0.1:9222`,
-    `HERMES_MODEL=${config.model || "gemini-3.5-flash"}`,
-    `GEMINI_API_KEY=${config.apiKey}`,
+    `HERMES_MODEL=${config.model || "gemini-3.5-flash-lite"}`,
+    `GEMINI_API_KEY=${primaryKey}`,
+    `GEMINI_API_KEY_BACKUP_1=${backup1}`,
+    `GEMINI_API_KEY_BACKUP_2=${backup2}`,
   ];
-
-  if (config.backupKeys && config.backupKeys.length > 0) {
-    lines.push(`GEMINI_API_KEY_BACKUP_1=${config.backupKeys[0]}`);
-    if (config.backupKeys.length > 1) {
-      lines.push(`GEMINI_API_KEY_BACKUP_2=${config.backupKeys[1]}`);
-    }
-  }
 
   return lines.join("\n");
 }

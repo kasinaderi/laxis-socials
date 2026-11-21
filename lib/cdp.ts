@@ -361,19 +361,18 @@ class CDPClient:
             }} else if (type.includes("video")) {{
                 selectors = [
                     'ytd-video-renderer a#video-title',
-                    'ytd-video-renderer a#thumbnail',
                     'ytd-rich-item-renderer a#video-title',
+                    'ytd-video-renderer a#thumbnail',
                     'ytd-compact-video-renderer a#video-title',
                     '#contents ytd-video-renderer a#video-title',
                     'a[href*="/watch?v="]',
-                    'a[href*="watch?v="]',
                     'article a'
                 ];
             }} else {{
                 // Generic search results, items, cards, posts
                 selectors = [
-                    'ytd-channel-renderer a#main-link',
                     'ytd-video-renderer a#video-title',
+                    'ytd-channel-renderer a#main-link',
                     'article a',
                     'h3 a',
                     '[data-testid="tweet"]',
@@ -386,6 +385,10 @@ class CDPClient:
             let candidates = [];
             for (const sel of selectors) {{
                 const els = Array.from(document.querySelectorAll(sel)).filter(el => {{
+                    // Filter out sponsored ads
+                    if (el.closest('ytd-ad-slot-renderer') || el.closest('ytd-in-feed-ad-layout-renderer') || el.closest('[id*="ad-slot"]') || el.closest('.badge-shape-wiz--ad')) {{
+                        return false;
+                    }}
                     const rect = el.getBoundingClientRect();
                     return rect.width > 0 && rect.height > 0 && rect.top >= -150 && rect.bottom <= (window.innerHeight * 3);
                 }});
@@ -397,6 +400,7 @@ class CDPClient:
 
             if (candidates.length === 0) {{
                 candidates = Array.from(document.querySelectorAll('a, button')).filter(el => {{
+                    if (el.closest('ytd-ad-slot-renderer') || el.closest('[id*="ad-slot"]')) return false;
                     const rect = el.getBoundingClientRect();
                     return rect.width > 20 && rect.height > 10 && (el.innerText || '').trim().length > 0;
                 }});
@@ -412,26 +416,28 @@ class CDPClient:
                     target.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
                     target.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true, view: window }}));
                 }} catch(e) {{}}
-                const href = target.href || target.closest('a')?.href;
-                if (href && (href.includes('/watch?v=') || href.includes('watch?v='))) {{
-                    setTimeout(() => {{
-                        if (!window.location.href.includes('watch?v=')) {{
-                            window.location.href = href;
-                        }}
-                    }}, 400);
-                }}
+                const href = target.href || target.closest('a')?.href || '';
                 return {{
                     success: true,
                     clicked: (target.innerText || target.getAttribute('aria-label') || target.getAttribute('href') || 'item').trim(),
                     index: idx + 1,
                     totalFound: candidates.length,
-                    href: href || ''
+                    href: href
                 }};
             }}
             return {{ success: false, reason: f"Target item at position {index} not found. Found {{len(candidates)}} items." }};
         }})()"""
         res = self.evaluate(js)
-        time.sleep(2.0)
+        # Guaranteed CDP navigation fallback if page did not transition
+        if isinstance(res, dict) and res.get("href"):
+            target_href = res["href"]
+            time.sleep(0.4)
+            curr = self.get_info()
+            curr_url = curr.get("url", "") if isinstance(curr, dict) else ""
+            if target_href.startswith("http") and curr_url != target_href and ("watch?v=" in target_href or "/@" in target_href):
+                self.navigate(target_href)
+                time.sleep(2.5)
+        time.sleep(1.5)
         return res
 
     def scroll(self, direction="down", amount=600):
