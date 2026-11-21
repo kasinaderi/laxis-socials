@@ -1330,8 +1330,188 @@ export async function executeAgentChromeTask(
   };
 }
 
+export interface CompiledAgencyIntent {
+  intent:
+    | "screenshot"
+    | "navigate_or_search"
+    | "click"
+    | "type"
+    | "scroll"
+    | "wake"
+    | "pause"
+    | "status"
+    | "clear_posts"
+    | "confirm_pending"
+    | "conversational";
+  targetAgentId: string;
+  baseUrl?: string;
+  cleanTopic?: string;
+  searchQuery?: string;
+  targetTab?: "people" | "groups" | "repositories" | "all";
+  targetElement?: string;
+  textToType?: string;
+  pressEnter?: boolean;
+  scrollDirection?: "down" | "up";
+  reasoning?: string;
+}
+
 /**
- * Handle incoming user instructions for real agency actions and double-authorization protocol
+ * Autonomous Reasoning Brain (Cognitive Intent Compiler)
+ * Interprets ANY instruction from Kelvin — regardless of typos, slang, questions, or non-standard syntax.
+ */
+export async function compileInstructionWithBrain(
+  rawPrompt: string,
+  contextId: string,
+  campaignId: string = "default_campaign"
+): Promise<CompiledAgencyIntent> {
+  const activeMap: Map<string, any> = (global as any).__activeSandboxes;
+  const lastActive = contextId ? lastActiveAgentByContext.get(contextId) : null;
+  let fallbackAgent = lastActive;
+  if (!fallbackAgent && activeMap && activeMap.size > 0) {
+    fallbackAgent = Array.from(activeMap.keys())[0]?.replace(new RegExp(`^${campaignId}_`), "");
+  }
+  if (!fallbackAgent) fallbackAgent = "ig_shader";
+
+  const cleanLower = rawPrompt.toLowerCase().trim().replace(/[?!.,]+$/, "");
+
+  // Fast-path: 1-word affirmative confirmations
+  if (
+    cleanLower === "yes" ||
+    cleanLower === "confirm" ||
+    cleanLower === "proceed" ||
+    cleanLower === "do it" ||
+    cleanLower === "y" ||
+    cleanLower === "ok" ||
+    cleanLower === "okay" ||
+    cleanLower === "continue"
+  ) {
+    return {
+      intent: "confirm_pending",
+      targetAgentId: fallbackAgent,
+      reasoning: "User confirmed pending action",
+    };
+  }
+
+  // Fast-path: single word screenshot request
+  if (cleanLower === "screenshot" || cleanLower === "screen" || cleanLower === "pic" || cleanLower === "photo" || cleanLower === "snapshot") {
+    return {
+      intent: "screenshot",
+      targetAgentId: fallbackAgent,
+      reasoning: "Direct screenshot request",
+    };
+  }
+
+  // Fast-path: single word pause/stop/sleep
+  if (cleanLower === "pause" || cleanLower === "sleep" || cleanLower === "stop" || cleanLower === "hibernate") {
+    return {
+      intent: "pause",
+      targetAgentId: fallbackAgent,
+      reasoning: "Direct pause request",
+    };
+  }
+
+  // Fast-path: single word status
+  if (cleanLower === "status" || cleanLower === "vms" || cleanLower === "vms status" || cleanLower === "vm status") {
+    return {
+      intent: "status",
+      targetAgentId: fallbackAgent,
+      reasoning: "Direct status inquiry",
+    };
+  }
+
+  // Semantic Reasoning Compiler using Gemini
+  try {
+    const aiCompilerPrompt = `You are the Executive Reasoning Brain for AGENTLAX / Laxis Socials.
+Kelvin (the agency owner) gave this instruction: "${rawPrompt}".
+
+Understand Kelvin's TRUE human intent — whether expressed in slang, Sheng, typos, questions, multi-step phrasing, or direct commands.
+
+Specialist Agents available:
+- fb_laxdollar: LAXDOLLAR (Deriv trading, Boom & Crash, forex, money memes, Remotasks/Outlier hustles)
+- fb_jotrainer: PINTR (Pinterest pin creator, remote jobs, lifestyle marketing)
+- fb_contentor: CONTENTOR (Sheng & English comedy memes)
+- ig_real: INSTA REAL (confessions, dilemma questions, relationship drama)
+- ig_shader: INSTA SHADER (pop culture, celebrity gossip, The Shade Room, Kenya Gossip)
+- analytics: ANALYTICS AGENT (viral metrics, post stats)
+
+Context:
+Currently active / last engaged agent: "${fallbackAgent}"
+
+INTENT CATEGORIES:
+1. "screenshot": User wants to see the screen, take a picture, inspect visual progress, or asked "screenshot?", "pic?", "let me see", "show me", "can i see what it's doing", "what is on the screen right now".
+2. "navigate_or_search": User wants to open a website (e.g. facebook.com, instagram.com, youtube.com, google.com, etc.), visit a URL, or search for something on a platform.
+   - baseUrl: Base root URL (e.g. "https://www.facebook.com", "https://www.instagram.com", "https://www.youtube.com", "https://www.google.com")
+   - searchQuery: Clean search query without instructions or typos (e.g. "forex trading", or empty/null if just opening the site)
+   - targetTab: "people" | "groups" | "repositories" | "all"
+3. "click": User wants to click an element, video, button, link, tab, or profile.
+   - targetElement: description of what to click
+4. "type": User wants to type text or press keys into the page.
+   - textToType: text to type
+   - pressEnter: boolean
+5. "scroll": User wants to scroll up or down.
+   - scrollDirection: "down" | "up"
+6. "wake": User wants to wake, boot, turn on, spin up an agent PC.
+7. "pause": User wants to pause, hibernate, shut down, put to sleep, or stop compute on agent PC(s).
+8. "status": User asks which VMs/agents are active, running, awake, or sleeping.
+9. "clear_posts": User wants to clear, delete, or reset scheduled posts.
+10. "conversational": User is asking for strategy advice, greeting, asking general questions, or discussing ideas without needing an immediate workstation click/type/navigation.
+
+Respond ONLY with valid JSON:
+{
+  "intent": "screenshot" | "navigate_or_search" | "click" | "type" | "scroll" | "wake" | "pause" | "status" | "clear_posts" | "conversational",
+  "targetAgentId": "fb_laxdollar" | "fb_jotrainer" | "fb_contentor" | "ig_real" | "ig_shader" | "analytics",
+  "baseUrl": string | null,
+  "cleanTopic": string | null,
+  "searchQuery": string | null,
+  "targetTab": "people" | "groups" | "repositories" | "all" | null,
+  "targetElement": string | null,
+  "textToType": string | null,
+  "pressEnter": boolean | null,
+  "scrollDirection": "down" | "up" | null,
+  "reasoning": string
+}`;
+
+    const text = await Promise.race([
+      generateWithFallback([{ text: aiCompilerPrompt }]),
+      new Promise<string>((_, reject) => setTimeout(() => reject(new Error("Compiler timeout")), 12000)),
+    ]);
+
+    if (text) {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (parsed.intent) {
+          return {
+            intent: parsed.intent,
+            targetAgentId: parsed.targetAgentId || fallbackAgent,
+            baseUrl: parsed.baseUrl || undefined,
+            cleanTopic: parsed.cleanTopic || undefined,
+            searchQuery: parsed.searchQuery || undefined,
+            targetTab: parsed.targetTab || undefined,
+            targetElement: parsed.targetElement || undefined,
+            textToType: parsed.textToType || undefined,
+            pressEnter: Boolean(parsed.pressEnter),
+            scrollDirection: parsed.scrollDirection || undefined,
+            reasoning: parsed.reasoning || undefined,
+          };
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn("[BrainCompiler] AI interpretation notice:", err?.message || err);
+  }
+
+  // Graceful fallback
+  const targetAgent = extractAgentFromPrompt(rawPrompt, contextId) || fallbackAgent;
+  return {
+    intent: "conversational",
+    targetAgentId: targetAgent,
+  };
+}
+
+/**
+ * Handle incoming user instructions for real agency actions and workstation operations.
+ * Powered by the Autonomous Reasoning Brain (compileInstructionWithBrain).
  */
 export async function handleAgencyExecutiveCommand(
   text: string,
@@ -1340,23 +1520,241 @@ export async function handleAgencyExecutiveCommand(
 ): Promise<{ handled: boolean; replyText?: string; mediaUrl?: string }> {
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
+  const cleanPunctLower = lower.replace(/[?!.,]+$/, "").trim();
 
-  // 1a. Query: "Which vm's are active now", "what vms are running", "are any vms running"
-  const isVmStatusQuery =
-    /(?:which|what|are any|any)\s+(?:vm|vms|pc|pcs|agents?)\s+(?:are\s+)?(?:active|running|awake|on|paused|standby|alive)/i.test(lower) ||
-    lower.includes("which vm's are active") ||
-    lower.includes("which vms are active") ||
-    lower.includes("which vm is active") ||
-    lower.includes("what vms are active") ||
-    lower.includes("what vms are running") ||
-    lower.includes("which vms are running") ||
-    lower.includes("which agents are active") ||
-    lower.includes("which agent is active") ||
-    lower === "vm status" ||
-    lower === "vms status" ||
-    lower === "active vms";
+  // 1. Check if user is confirming a pending authorization
+  const pendingMap: Map<string, any> = (global as any).__pendingConfirmations || pendingConfirmations;
+  const pending = pendingMap.get(contextId);
 
-  if (isVmStatusQuery) {
+  const isAffirmative =
+    /^(y|ye|yes|yep|yeah|ya|yup|yess|sure|confirm|proceed|ok|okay|do it|authorize|go ahead|wake|start|run)$/i.test(
+      cleanPunctLower
+    ) ||
+    cleanPunctLower === "yes" ||
+    cleanPunctLower.startsWith("yes ") ||
+    cleanPunctLower === "confirm" ||
+    cleanPunctLower.startsWith("confirm ") ||
+    cleanPunctLower === "proceed" ||
+    cleanPunctLower === "do it";
+
+  if (pending && isAffirmative && Date.now() - pending.timestamp < 10 * 60 * 1000) {
+    pendingMap.delete(contextId);
+    const { agentId, action, rawPrompt } = pending;
+    const displayName = getAgentDisplayName(agentId);
+    if (contextId) lastActiveAgentByContext.set(contextId, agentId);
+
+    if (action === "search" || action === "browser" || action === "chart") {
+      const result = await executeAgentChromeTask(campaignId, agentId, rawPrompt);
+      return {
+        handled: true,
+        replyText: result.replyText,
+        mediaUrl: result.mediaUrl,
+      };
+    } else if (action === "wake") {
+      const sb = await wakeAgentPc(campaignId, agentId);
+      return {
+        handled: true,
+        replyText: `⚡ **Manual Authorization Confirmed!**\n\n**${displayName}**'s PC is now booted and running. Workstation ID: \`${sb.sandboxId || "Active"}\`.\n\nGoogle Chrome and Live VNC are ready on DISPLAY=:0. What task would you like ${displayName} to execute?`,
+      };
+    }
+  }
+
+  // 2. Invoke the Semantic Reasoning Brain to interpret the instruction
+  const compiled = await compileInstructionWithBrain(text, contextId, campaignId);
+  const targetAgentId = compiled.targetAgentId || "ig_shader";
+  const displayName = getAgentDisplayName(targetAgentId);
+  if (contextId) lastActiveAgentByContext.set(contextId, targetAgentId);
+
+  // ── INTENT: SCREENSHOT ────────────────────────────────────────────────────
+  if (compiled.intent === "screenshot") {
+    let activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+    if (!activeSb) {
+      await getOrCreateAgentSandbox(campaignId, targetAgentId, true);
+      activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+    }
+
+    if (activeSb) {
+      await initSandboxBrowserAndCdp(activeSb, targetAgentId);
+    }
+
+    let screenshotBase64 = "";
+    let visualAnalysis = "";
+
+    if (activeSb && typeof activeSb.screenshot === "function") {
+      try {
+        const shotBuffer = await activeSb.screenshot();
+        if (shotBuffer && shotBuffer.length > 0) {
+          screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+          visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} Live Workstation Display`);
+        }
+      } catch (err: any) {
+        console.warn("[AgencyActions] Screenshot capture notice:", err);
+      }
+    }
+
+    if (screenshotBase64) {
+      const mediaUrl = `data:image/png;base64,${screenshotBase64}`;
+      const hasAnomaly =
+        visualAnalysis.toLowerCase().includes("firefox") ||
+        visualAnalysis.toLowerCase().includes("blocked") ||
+        visualAnalysis.toLowerCase().includes("not_verified");
+      return {
+        handled: true,
+        replyText: `${hasAnomaly ? "⚠️" : "📸"} **Live Workstation Screenshot: ${displayName}**\n\n${visualAnalysis || "Current live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Status:** ${hasAnomaly ? "Attention Required" : "Active Live VNC"}`,
+        mediaUrl,
+      };
+    } else {
+      return {
+        handled: true,
+        replyText: `📸 **Workstation in Standby ($0 Compute)**\n\nThe microVM for **${displayName}** is currently in standby to preserve your compute credits.\n\nReply **WAKE ${displayName}** or give a direct task command to boot the PC and view the live screen.`,
+      };
+    }
+  }
+
+  // ── INTENT: NAVIGATE OR SEARCH ───────────────────────────────────────────
+  if (compiled.intent === "navigate_or_search") {
+    const result = await executeAgentChromeTask(campaignId, targetAgentId, text);
+    return {
+      handled: true,
+      replyText: result.replyText,
+      mediaUrl: result.mediaUrl,
+    };
+  }
+
+  // ── INTENT: CLICK ────────────────────────────────────────────────────────
+  if (compiled.intent === "click") {
+    let activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+    if (!activeSb) {
+      await getOrCreateAgentSandbox(campaignId, targetAgentId, true);
+      activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+    }
+
+    const clickTarget = compiled.targetElement || "result";
+    if (activeSb) {
+      if (clickTarget.toLowerCase().includes("enter")) {
+        await cdpPressEnter(activeSb);
+      } else {
+        await cdpClickText(activeSb, clickTarget);
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    let shotBuffer: Uint8Array | null = null;
+    if (activeSb && typeof activeSb.screenshot === "function") {
+      shotBuffer = await activeSb.screenshot().catch(() => null);
+    }
+    let screenshotBase64 = "";
+    let visualAnalysis = "";
+    if (shotBuffer && shotBuffer.length > 0) {
+      screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+      visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName}: Clicked ${clickTarget}`);
+    }
+    const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
+    return {
+      handled: true,
+      replyText: `🎯 **${displayName} – Clicked "${clickTarget}"**\n\n${visualAnalysis ? `${visualAnalysis}\n\n` : ""}• **Workstation:** ${displayName} (Live screenshot above)`,
+      mediaUrl,
+    };
+  }
+
+  // ── INTENT: TYPE ─────────────────────────────────────────────────────────
+  if (compiled.intent === "type") {
+    let activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+    if (!activeSb) {
+      await getOrCreateAgentSandbox(campaignId, targetAgentId, true);
+      activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+    }
+
+    const textToType = compiled.textToType || "";
+    if (activeSb && textToType) {
+      await cdpTypeInput(activeSb, textToType);
+      if (compiled.pressEnter) {
+        await cdpPressEnter(activeSb);
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    let shotBuffer: Uint8Array | null = null;
+    if (activeSb && typeof activeSb.screenshot === "function") {
+      shotBuffer = await activeSb.screenshot().catch(() => null);
+    }
+    let screenshotBase64 = "";
+    let visualAnalysis = "";
+    if (shotBuffer && shotBuffer.length > 0) {
+      screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+      visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName}: Typed "${textToType}"`);
+    }
+    const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
+    return {
+      handled: true,
+      replyText: `⌨️ **${displayName} – Typed into page**\n\n${visualAnalysis ? `${visualAnalysis}\n\n` : ""}• **Typed:** "${textToType}"\n• **Workstation:** ${displayName} (Live screenshot above)`,
+      mediaUrl,
+    };
+  }
+
+  // ── INTENT: SCROLL ───────────────────────────────────────────────────────
+  if (compiled.intent === "scroll") {
+    let activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+    if (!activeSb) {
+      await getOrCreateAgentSandbox(campaignId, targetAgentId, true);
+      activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+    }
+
+    const direction = compiled.scrollDirection || "down";
+    if (activeSb) {
+      await cdpScroll(activeSb, direction as any, 600);
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+
+    let shotBuffer: Uint8Array | null = null;
+    if (activeSb && typeof activeSb.screenshot === "function") {
+      shotBuffer = await activeSb.screenshot().catch(() => null);
+    }
+    let screenshotBase64 = "";
+    let visualAnalysis = "";
+    if (shotBuffer && shotBuffer.length > 0) {
+      screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+      visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} after scrolling ${direction}`);
+    }
+    const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
+    return {
+      handled: true,
+      replyText: `📸 **${displayName} – Scrolled ${direction.toUpperCase()}**\n\n${visualAnalysis || "Live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Action:** Scrolled ${direction}`,
+      mediaUrl,
+    };
+  }
+
+  // ── INTENT: WAKE ─────────────────────────────────────────────────────────
+  if (compiled.intent === "wake") {
+    const sb = await wakeAgentPc(campaignId, targetAgentId);
+    let screenshotBase64 = "";
+    const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
+    if (activeSb && typeof activeSb.screenshot === "function") {
+      const shotBuffer = await activeSb.screenshot().catch(() => null);
+      if (shotBuffer && shotBuffer.length > 0) {
+        screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+      }
+    }
+    const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
+    return {
+      handled: true,
+      replyText: `⚡ **${displayName} Workstation is Awake**\n\nWorkstation ID: \`${sb.sandboxId || "Active"}\`.\nGoogle Chrome and Live VNC are ready on DISPLAY=:0.`,
+      mediaUrl,
+    };
+  }
+
+  // ── INTENT: PAUSE / STOP ─────────────────────────────────────────────────
+  if (compiled.intent === "pause") {
+    await pauseAllAgentSandboxes(campaignId);
+    lastActiveAgentByContext.delete(contextId);
+    return {
+      handled: true,
+      replyText: `🛑 **Workstations Paused ($0 Compute Mode)**\n\nI have securely paused the cloud microVMs and frozen all browser sessions.\n\n• **MicroVM Status:** Paused ($0 compute)\n• **State & Memory:** Opened tabs, logins, and cookies 100% preserved in persistent sandbox\n• **Agent Status:** Resting / Idle`,
+    };
+  }
+
+  // ── INTENT: STATUS ───────────────────────────────────────────────────────
+  if (compiled.intent === "status") {
     const runningList = await db
       .select({ agentId: agentSandboxes.agentId, sandboxId: agentSandboxes.sandboxId })
       .from(agentSandboxes)
@@ -1389,149 +1787,12 @@ export async function handleAgencyExecutiveCommand(
 
     return {
       handled: true,
-      replyText: `🖥️ **Active Workstations (${activeIds.size} Running)**\n\n${listLines.join("\n")}\n\nAll other workstations remain paused at $0 compute. Reply **"switch all vms off"** to pause them, or give a task for an active agent.`,
+      replyText: `🖥️ **Active Workstations (${activeIds.size} Running)**\n\n${listLines.join("\n")}\n\nAll other workstations remain paused at $0 compute. Reply **"pause"** to put them to sleep, or give any task for an active agent.`,
     };
   }
 
-  // 1b. Immediate Action: STOP / PAUSE / SWITCH OFF / POWER OFF / KILL VM / RESET AGENTS
-  // Handles: "switch of that vm", "switch them both off", "switch all vms off", "not agents only but any active vm", etc.
-  const targetAgentForStop = extractAgentFromPrompt(text, contextId);
-  const hasStopWord = /(?:pause|stop|power\s*of+|shut\s*down|turn\s*of+|switch\s*of+|kill|freeze|halt|standby)/i.test(lower);
-  const hasTargetWord = /(?:vm|pc|agent|agents|analytic|analytics|pintr|jotrainer|laxdollar|shader|real|contentor|master|all|everything|session|browser|both|them)/i.test(lower);
-  const isStopCommand =
-    (hasStopWord && hasTargetWord) ||
-    lower.includes("switch them both off") ||
-    lower.includes("switch both off") ||
-    lower.includes("switch them off") ||
-    lower.includes("switch all vms off") ||
-    lower.includes("switch all off") ||
-    lower.includes("turn off all vms") ||
-    lower.includes("turn all vms off") ||
-    lower.includes("turn off all") ||
-    lower.includes("shut down all") ||
-    lower.includes("any active vm") ||
-    lower.includes("all active vms") ||
-    lower.includes("both off") ||
-    lower === "stop" ||
-    lower === "stop it" ||
-    lower === "stop them" ||
-    lower === "power off" ||
-    lower === "power of" ||
-    lower === "switch of" ||
-    lower === "switch off" ||
-    lower === "switch of that vm" ||
-    lower === "switch off that vm" ||
-    lower === "switch of vm" ||
-    lower === "switch off vm" ||
-    lower === "pause" ||
-    lower === "pause it" ||
-    lower === "pause vm" ||
-    lower === "pause the vm" ||
-    lower.startsWith("switch of") ||
-    lower.startsWith("switch off") ||
-    lower.startsWith("power off") ||
-    lower.startsWith("power of") ||
-    lower.startsWith("turn off") ||
-    lower.startsWith("turn of") ||
-    lower.startsWith("stop it") ||
-    lower.includes("switch of that vm") ||
-    lower.includes("switch off that vm") ||
-    lower.includes("power off the vm") ||
-    lower.includes("power of the vm") ||
-    lower.includes("pause the vm") ||
-    lower.includes("pause that vm") ||
-    lower.includes("stop vm") ||
-    lower.includes("stop them") ||
-    lower.includes("stop the agents") ||
-    lower.includes("told you to stop them") ||
-    lower.includes("told you to pause") ||
-    lower.includes("stop it plus vm") ||
-    lower.includes("it is still running") ||
-    lower.includes("its still running") ||
-    lower.includes("still running") ||
-    lower.includes("can see it running") ||
-    (lower.includes("still") && lower.includes("active") && lower.includes("why"));
-
-  if (isStopCommand) {
-    let pausedDisplayName = "All Active Agent PCs";
-    const stopAll =
-      lower.includes("all") ||
-      lower.includes("both") ||
-      lower.includes("them") ||
-      lower.includes("every") ||
-      lower.includes("any active vm") ||
-      !targetAgentForStop;
-
-    if (!stopAll && targetAgentForStop) {
-      pausedDisplayName = getAgentDisplayName(targetAgentForStop);
-      await pauseAgentSandbox(campaignId, targetAgentForStop);
-      await db.update(agents).set({ status: "idle", currentTask: null }).where(eq(agents.id, targetAgentForStop)).run();
-    } else {
-      await pauseAllAgentSandboxes(campaignId);
-      lastActiveAgentByContext.delete(contextId);
-    }
-
-    // If user also requested to clear schedule/don't post today
-    if (lower.includes("don't allocate") || lower.includes("dont allocate") || lower.includes("no posts") || lower.includes("clear schedule")) {
-      await clearScheduledPosts(campaignId);
-    }
-
-    return {
-      handled: true,
-      replyText: `🛑 **${pausedDisplayName} Paused ($0 Compute Mode)**\n\nI have securely paused the cloud microVM and frozen all browser sessions.\n\n• **MicroVM Status:** Paused ($0 compute)\n• **State & Memory:** Opened tabs, logins, and cookies 100% preserved in persistent sandbox\n• **Agent Status:** Resting / Idle\n• **Posting Schedule:** Preserved in vault`,
-    };
-  }
-
-  // 2. Action: Check if user is confirming a pending authorization
-  const pendingMap: Map<string, any> = (global as any).__pendingConfirmations || pendingConfirmations;
-  const pending = pendingMap.get(contextId);
-
-  const isAffirmative =
-    /^(y|ye|yes|yep|yeah|ya|yup|yess|sure|confirm|proceed|ok|okay|do it|authorize|go ahead|wake|start|run)$/i.test(
-      lower
-    ) ||
-    lower === "yes" ||
-    lower === "ye" ||
-    lower === "y" ||
-    lower.startsWith("yes ") ||
-    lower.startsWith("ye ") ||
-    lower.startsWith("y ") ||
-    lower.startsWith("confirm") ||
-    lower.includes("confirm") ||
-    lower.includes("authorize") ||
-    lower.includes("proceed");
-
-  if (pending && isAffirmative && Date.now() - pending.timestamp < 10 * 60 * 1000) {
-    // User confirmed! Execute the pending task immediately!
-    pendingMap.delete(contextId);
-
-    const { agentId, action, rawPrompt } = pending;
-    const displayName = getAgentDisplayName(agentId);
-    if (contextId) lastActiveAgentByContext.set(contextId, agentId);
-
-    if (action === "search" || action === "browser" || action === "chart") {
-      const result = await executeAgentChromeTask(campaignId, agentId, rawPrompt);
-      return {
-        handled: true,
-        replyText: result.replyText,
-        mediaUrl: result.mediaUrl,
-      };
-    } else if (action === "wake") {
-      const sb = await wakeAgentPc(campaignId, agentId);
-      return {
-        handled: true,
-        replyText: `⚡ **Manual Authorization Confirmed!**\n\n**${displayName}**'s PC is now booted and running. Workstation ID: \`${sb.sandboxId || "Active"}\`.\n\nGoogle Chrome and Live VNC are ready on DISPLAY=:0. What task would you like ${displayName} to execute?`,
-      };
-    }
-  }
-
-  // 3. Action: Clear scheduled posts
-  if (
-    /(clear|delete|remove|wipe|cancel|reset)\s+(all\s+)?(the\s+)?(scheduled\s+)?(posts|drops|queue)/i.test(
-      lower
-    ) &&
-    !lower.includes("how many")
-  ) {
+  // ── INTENT: CLEAR POSTS ──────────────────────────────────────────────────
+  if (compiled.intent === "clear_posts") {
     const { deletedCount } = await clearScheduledPosts(campaignId);
     return {
       handled: true,
@@ -1539,575 +1800,6 @@ export async function handleAgencyExecutiveCommand(
     };
   }
 
-  // 4a. Action: Check status / "is it done or its still active"
-  if (/(is\s+it\s+done|is\s+it\s+still\s+running|is\s+it\s+finished)/i.test(lower)) {
-    const latestTask = await db
-      .select()
-      .from(agentTasks)
-      .where(eq(agentTasks.campaignId, campaignId))
-      .orderBy(desc(agentTasks.createdAt))
-      .limit(1)
-      .get();
-
-    if (latestTask && latestTask.status === "completed") {
-      return {
-        handled: true,
-        replyText: `✅ **Task Completed!**\n\n• **Task:** ${latestTask.title}\n• **Outcome:** ${latestTask.output || "Complete"}\n\nThe browser task has finished and the deliverable is saved. The typing animation has stopped. If you want to pause the microVM, reply "switch off that vm".`,
-      };
-    }
-  }
-
-  // ── EARLY EXIT: Inline search on active VM ("search X instead", "search X in the searchbox") ──
-  // Check BEFORE isTaskOrBrowse — if the user wants to search on the ALREADY-OPEN Chrome session,
-  // skip authorization entirely and just run cdpSearch directly.
-  const inlineSearchPatternMatch =
-    /^(?:search|type)\s+(.+?)\s+(?:instead|in\s+(?:the\s+)?search(?:box|bar|\s+box|\s+bar)|in\s+(?:the\s+)?(?:youtube|google|github|facebook|instagram|twitter|x)(?:\s+search(?:box|bar)?)?)/i.exec(trimmed) ||
-    /^(?:search|type)\s+(.+?)\s+instead/i.exec(trimmed);
-
-  if (inlineSearchPatternMatch && inlineSearchPatternMatch[1]) {
-    const queryCandidate = inlineSearchPatternMatch[1].trim()
-      .replace(/\s+(?:in|into|on|at)\s+(?:the\s+)?(?:searchbox|search\s+box|search\s+bar|search\s+field)$/i, "")
-      .trim();
-
-    // Only apply if there's already an active sandbox in context
-    const activeMapEarly: Map<string, any> = (global as any).__activeSandboxes;
-    const earlyAgentId = contextId
-      ? lastActiveAgentByContext.get(contextId) || null
-      : activeMapEarly && activeMapEarly.size > 0
-        ? Array.from(activeMapEarly.keys())[0]?.replace(new RegExp(`^${campaignId}_`), "")
-        : null;
-    const earlySb = earlyAgentId ? activeMapEarly?.get(`${campaignId}_${earlyAgentId}`) : null;
-
-    if (earlySb && earlyAgentId && queryCandidate) {
-      if (contextId) lastActiveAgentByContext.set(contextId, earlyAgentId);
-      const displayName = getAgentDisplayName(earlyAgentId);
-      console.log(`[AgencyActions] Inline CDP search "${queryCandidate}" on active ${displayName} VM (no auth needed)`);
-
-      await cdpSearch(earlySb, queryCandidate);
-      await new Promise((r) => setTimeout(r, 2500));
-
-      let shotBuf: Uint8Array | null = null;
-      if (typeof earlySb.screenshot === "function") {
-        shotBuf = await earlySb.screenshot().catch(() => null);
-      }
-      let screenshotB64 = "";
-      let visAnalysis = "";
-      if (shotBuf && shotBuf.length > 0) {
-        screenshotB64 = Buffer.from(shotBuf).toString("base64");
-        visAnalysis = await analyzeWorkstationScreenshot(shotBuf, `${displayName}: Search "${queryCandidate}"`);
-      }
-      const mUrl = screenshotB64 ? `data:image/png;base64,${screenshotB64}` : undefined;
-      return {
-        handled: true,
-        replyText: `🎯 **${displayName} – Searched "${queryCandidate}"**\n\n${visAnalysis ? `${visAnalysis}\n\n` : ""}• **Search Query:** "${queryCandidate}"\n• **Status:** Verified & Complete (Live screenshot above)\n• **Workstation:** ${displayName}`,
-        mediaUrl: mUrl,
-      };
-    }
-  }
-
-  // Check if prompt specifies an actionable browsing, search, navigation, or computer-use task
-  const isTaskOrBrowse =
-    /(?:search|google|browse|open|chrome|find|chart|graph|trend|analyze|check|tradingview|youtube|video|play|github|repo|repos|repository|facebook|fb|look up|twitter|twittwer|x\.com|\/x|\binstagram\b|\binsta\b|medium|reddit|chatgpt|unfollow|follow|navigate|view|go\s+to|go\s+[a-z]+)/i.test(
-      lower
-    );
-
-  // ────────────────────────────────────────────────────────────────────────────
-  // 4b-EXTRA: Conversational Follow-Up Actions (NO new URL needed)
-  // Handles: "let me see it", "scroll up", "click the first account", etc.
-  // These MUST be processed BEFORE the screenshot/browse routing below.
-  // ────────────────────────────────────────────────────────────────────────────
-
-  // Helper: resolve the currently active sandbox
-  function getActiveSb(): { agentId: string | null; sb: any } {
-    let agentId: string | null = contextId ? lastActiveAgentByContext.get(contextId) || null : null;
-    if (!agentId) {
-      const activeMap: Map<string, any> = (global as any).__activeSandboxes;
-      if (activeMap && activeMap.size > 0) {
-        const firstKey = Array.from(activeMap.keys())[0];
-        agentId = firstKey.replace(new RegExp(`^${campaignId}_`), "");
-      }
-    }
-    const sb = agentId ? (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`) : null;
-    return { agentId, sb };
-  }
-
-  // ── 4b-1: SCROLL request ──────────────────────────────────────────────────
-  const isScrollRequest =
-    !isTaskOrBrowse &&
-    (/^scroll(?:\s+(?:up|down|left|right|top|bottom))?(?:\s+and)?/i.test(trimmed) ||
-      lower.startsWith("scroll ") ||
-      lower === "scroll up" ||
-      lower === "scroll down" ||
-      lower === "scroll to top" ||
-      lower === "scroll to bottom" ||
-      (lower.includes("scroll") && !lower.includes("search")) ||
-      lower.includes("swipe up") ||
-      lower.includes("swipe down"));
-
-  if (isScrollRequest) {
-    const { agentId, sb: activeSb } = getActiveSb();
-    if (!activeSb || !agentId) {
-      return {
-        handled: false,
-      };
-    }
-    if (contextId) lastActiveAgentByContext.set(contextId, agentId);
-    const displayName = getAgentDisplayName(agentId);
-
-    const isUp = lower.includes("up") || lower.includes("top");
-    const direction = isUp ? (lower.includes("top") ? "top" : "up") : lower.includes("bottom") ? "bottom" : "down";
-    const amountMatch = lower.match(/(\d+)/);
-    const amount = amountMatch ? parseInt(amountMatch[1]) * 120 : 600;
-
-    console.log(`[AgencyActions] Scrolling ${direction} on ${displayName}`);
-    await cdpScroll(activeSb, direction as any, amount);
-    await new Promise((r) => setTimeout(r, 1200));
-
-    let shotBuffer: Uint8Array | null = null;
-    if (typeof activeSb.screenshot === "function") {
-      shotBuffer = await activeSb.screenshot().catch(() => null);
-    }
-
-    let screenshotBase64 = "";
-    let visualAnalysis = "";
-    if (shotBuffer && shotBuffer.length > 0) {
-      screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
-      visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} after scrolling ${direction}`);
-    }
-
-    const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
-    return {
-      handled: true,
-      replyText: `📸 **${displayName} – Scrolled ${direction.toUpperCase()}**\n\n${visualAnalysis || "Live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Action:** Scrolled ${direction}`,
-      mediaUrl,
-    };
-  }
-
-  // ── 4b-2: ORDINAL CLICK request ("click the first account", "open second video") ──
-  const ordinalMatch =
-    !isTaskOrBrowse &&
-    trimmed.match(/^(?:click|open|tap|press)(?:\s+the\s+|\s+)?(first|second|third|1st|2nd|3rd|top|latest)\s*(?:account|channel|video|result|item|one|profile|user)?/i);
-
-  if (ordinalMatch) {
-    const { agentId, sb: activeSb } = getActiveSb();
-    if (!activeSb || !agentId) {
-      return { handled: false };
-    }
-    if (contextId) lastActiveAgentByContext.set(contextId, agentId);
-    const displayName = getAgentDisplayName(agentId);
-
-    const ordinalWord = ordinalMatch[1].toLowerCase();
-    const index = ordinalWord === "first" || ordinalWord === "1st" || ordinalWord === "top" ? 1
-      : ordinalWord === "second" || ordinalWord === "2nd" ? 2
-      : ordinalWord === "third" || ordinalWord === "3rd" ? 3
-      : 1;
-
-    const typeKeyword = (ordinalMatch[0].match(/(?:account|channel|video|result|item|profile|user)/i) || ["result"])[0];
-
-    console.log(`[AgencyActions] Ordinal click: ${index}${ordinalWord.slice(-2)} ${typeKeyword} on ${displayName}`);
-    const clickResult = await cdpClickOrdinal(activeSb, typeKeyword, index);
-    const clickedName = clickResult?.clicked || `${ordinalWord} item`;
-    await new Promise((r) => setTimeout(r, 2500));
-
-    let shotBuffer: Uint8Array | null = null;
-    if (typeof activeSb.screenshot === "function") {
-      shotBuffer = await activeSb.screenshot().catch(() => null);
-    }
-
-    let screenshotBase64 = "";
-    let visualAnalysis = "";
-    if (shotBuffer && shotBuffer.length > 0) {
-      screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
-      visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName}: Clicked ${typeKeyword} #${index}`);
-    }
-
-    const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
-    return {
-      handled: true,
-      replyText: `🎯 **${displayName} – Clicked ${ordinalWord} ${typeKeyword}**\n\n${visualAnalysis ? `${visualAnalysis}\n\n` : ""}• **Clicked:** "${clickedName}"\n• **Workstation:** ${displayName} (Live screenshot above)`,
-      mediaUrl,
-    };
-  }
-
-  // ── 4b-3: "LET ME SEE IT" / "SHOW ME" / conversational screenshot request ──
-  const isShowMeRequest =
-    !isTaskOrBrowse &&
-    (lower === "let me see" ||
-      lower === "let me see it" ||
-      lower.includes("let me see") ||
-      lower.includes("i want to see") ||
-      lower.includes("i told you let me see") ||
-      lower.includes("show me the screenshot") ||
-      lower.includes("show it to me") ||
-      lower.includes("where is the photo") ||
-      lower.includes("i want to see the screenshot") ||
-      lower === "show" ||
-      lower === "show me" ||
-      lower === "photo" ||
-      lower === "pic" ||
-      lower === "picture" ||
-      lower === "image" ||
-      lower.includes("send me the photo") ||
-      lower.includes("send me the screenshot") ||
-      lower.includes("show me the photo") ||
-      lower.includes("where is the picture") ||
-      lower === "send it here" ||
-      lower === "send it again");
-
-  if (isShowMeRequest) {
-    const { agentId, sb: activeSb } = getActiveSb();
-    if (!activeSb || !agentId) {
-      return { handled: false };
-    }
-    if (contextId) lastActiveAgentByContext.set(contextId, agentId);
-    const displayName = getAgentDisplayName(agentId);
-
-    let shotBuffer: Uint8Array | null = null;
-    if (typeof activeSb.screenshot === "function") {
-      shotBuffer = await activeSb.screenshot().catch(() => null);
-    }
-
-    let screenshotBase64 = "";
-    let visualAnalysis = "";
-    if (shotBuffer && shotBuffer.length > 0) {
-      screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
-      visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} Live Workstation Display`);
-    }
-
-    if (screenshotBase64) {
-      const mediaUrl = `data:image/png;base64,${screenshotBase64}`;
-      const hasAnomaly =
-        visualAnalysis.toLowerCase().includes("firefox") ||
-        visualAnalysis.toLowerCase().includes("blocked") ||
-        visualAnalysis.toLowerCase().includes("not_verified");
-      return {
-        handled: true,
-        replyText: `${hasAnomaly ? "⚠️" : "📸"} **Live Workstation Screenshot: ${displayName}**\n\n${visualAnalysis || "Current live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Status:** ${hasAnomaly ? "Attention Required" : "Active Live VNC"}`,
-        mediaUrl,
-      };
-    }
-
-    return {
-      handled: true,
-      replyText: `📸 **Workstation in Standby ($0 Compute)**\n\nThe microVM for **${displayName}** is currently in standby.\n\nReply **WAKE ${displayName}** or give a direct task command to boot the PC and view the live screen.`,
-    };
-  }
-
-  // 4b. Action: Live Workstation Screenshot Capture on demand (ONLY if NOT accompanied by a new browsing/search/navigation task!)
-  const cleanPunctLower = lower.replace(/[?!.,]+$/, "").trim();
-  const isScreenshotRequest =
-    !isTaskOrBrowse &&
-    (cleanPunctLower === "screenshot" ||
-      cleanPunctLower === "screen" ||
-      lower.includes("screenshot") ||
-      lower.includes("screen shot") ||
-      /(?:show|send|give|bring|take|capture|get)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?screenshot/i.test(lower) ||
-      /(?:cant|can't|cannot|didn't|didnt)\s+(?:see|find|get)\s+(?:the|that|any)?\s*screenshot/i.test(lower) ||
-      lower.includes("show me the screenshot") ||
-      lower.includes("where is the screenshot") ||
-      lower.includes("give me the screenshot") ||
-      lower.includes("send the screenshot") ||
-      lower.includes("send it here") ||
-      lower.includes("send it again") ||
-      lower.includes("cant see that screenshot") ||
-      lower.includes("can't see that screenshot") ||
-      lower.includes("cant see the screenshot") ||
-      lower.includes("can't see the screenshot") ||
-      lower.includes("take that screenshot") ||
-      cleanPunctLower === "show screenshot" ||
-      cleanPunctLower === "take screenshot");
-
-  if (isScreenshotRequest) {
-    let targetAgentId = extractAgentFromPrompt(text, contextId);
-    if (!targetAgentId && contextId) {
-      targetAgentId = lastActiveAgentByContext.get(contextId) || null;
-    }
-    if (!targetAgentId) {
-      const activeMap: Map<string, any> = (global as any).__activeSandboxes;
-      if (activeMap && activeMap.size > 0) {
-        const firstKey = Array.from(activeMap.keys())[0];
-        targetAgentId = firstKey.replace(new RegExp(`^${campaignId}_`), "");
-      }
-    }
-    if (!targetAgentId) {
-      const latestTask = await db.select().from(agentTasks).where(eq(agentTasks.campaignId, campaignId)).orderBy(desc(agentTasks.createdAt)).limit(1).get();
-      if (latestTask?.agentId) {
-        targetAgentId = latestTask.agentId;
-      }
-    }
-    targetAgentId = targetAgentId || "fb_contentor";
-    if (contextId) lastActiveAgentByContext.set(contextId, targetAgentId);
-    const displayName = getAgentDisplayName(targetAgentId);
-
-    let screenshotBase64 = "";
-    let visualAnalysis = "";
-
-    let activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
-    if (!activeSb) {
-      await getOrCreateAgentSandbox(campaignId, targetAgentId, true);
-      activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
-    }
-
-    if (activeSb) {
-      await initSandboxBrowserAndCdp(activeSb, targetAgentId);
-    }
-
-    if (activeSb && typeof activeSb.screenshot === "function") {
-      try {
-        const shotBuffer = await activeSb.screenshot();
-        if (shotBuffer && shotBuffer.length > 0) {
-          screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
-          visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} Live Workstation Display`);
-        }
-      } catch (err: any) {
-        console.warn("[AgencyActions] Screenshot capture notice:", err);
-      }
-    }
-
-    if (screenshotBase64) {
-      const mediaUrl = `data:image/png;base64,${screenshotBase64}`;
-      const hasAnomaly =
-        visualAnalysis.toLowerCase().includes("firefox") ||
-        visualAnalysis.toLowerCase().includes("blocked") ||
-        visualAnalysis.toLowerCase().includes("not_verified");
-      return {
-        handled: true,
-        replyText: `${hasAnomaly ? "⚠️" : "📸"} **Live Workstation Screenshot: ${displayName}**\n\n${visualAnalysis || "Current live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Status:** ${hasAnomaly ? "Attention Required (Display anomaly or legacy window detected)" : "Active Live VNC"}`,
-        mediaUrl,
-      };
-    } else {
-      return {
-        handled: true,
-        replyText: `📸 **Workstation in Standby ($0 Compute)**\n\nThe microVM for **${displayName}** is currently in standby to preserve your compute credits.\n\nReply **WAKE ${displayName}** or give a direct task command to boot the PC and view the live screen.`,
-      };
-    }
-  }
-
-  // 4c. Action: Close Firefox / Clean Workstation Browsers
-  const isCloseFirefox =
-    /(?:close|kill|shut|terminate)\s+(?:all\s+)?(?:those\s+)?firefox/i.test(lower) ||
-    lower.includes("close firefox") ||
-    lower.includes("kill firefox") ||
-    (lower.includes("firefox") && (lower.includes("close") || lower.includes("kill")));
-
-  if (isCloseFirefox) {
-    const targetAgentId = extractAgentFromPrompt(text, contextId) || "ig_real";
-    const displayName = getAgentDisplayName(targetAgentId);
-    const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
-
-    if (activeSb?.commands?.run) {
-      await initSandboxBrowserAndCdp(activeSb, targetAgentId);
-      await launchChromeWithCdp(activeSb, "about:blank");
-    }
-
-    return {
-      handled: true,
-      replyText: `🧹 **Workstation Cleanup Complete: ${displayName}**\n\nI have terminated all Firefox processes on the workstation, replaced system browser handlers, and ensured Google Chrome is the fixed, exclusive browser with Chrome DevTools Protocol (CDP) ready.\n\n• **Active Browser:** Google Chrome (CDP enabled on :9222)\n• **Firefox Status:** Blocked & Terminated\n• **Workstation:** ${displayName} (Ready for next command)`,
-    };
-  }
-
-  // 4d. Action: Direct In-Page Interactive Automation (Type into input, click button, press enter)
-  const isTypeAction =
-    /(?:type|enter|input|write|fill)\s+(?:the\s+)?(?:email|text|password|username|string|query)?\s*["']?([^"'\n]+?)["']?\s+(?:in|into)\s+(?:the\s+)?(?:required\s+)?(?:email|username|input|field|section|box)/i.test(lower) ||
-    lower.includes("type the email") ||
-    lower.includes("type in the email") ||
-    (lower.startsWith("type ") && (lower.includes("@") || lower.includes("email") || lower.includes("into") || lower.includes("in ")));
-
-  // isClickAction: generic clicks. Ordinal clicks are handled above in 4b-2,
-  // so here we only handle literal text targets (not ordinal ones).
-  const isClickAction =
-    !ordinalMatch &&
-    (/^(?:click|press|tap)\s+["']?([a-zA-Z0-9_ ]+?)["']?$/i.test(trimmed) ||
-      lower.startsWith("click ") ||
-      lower === "click next" ||
-      lower === "press enter");
-
-  if (isTypeAction || isClickAction) {
-    let targetAgentId = extractAgentFromPrompt(text, contextId);
-    if (!targetAgentId && contextId) {
-      targetAgentId = lastActiveAgentByContext.get(contextId) || null;
-    }
-    if (!targetAgentId) {
-      const activeMap: Map<string, any> = (global as any).__activeSandboxes;
-      if (activeMap && activeMap.size > 0) {
-        const firstKey = Array.from(activeMap.keys())[0];
-        targetAgentId = firstKey.replace(new RegExp(`^${campaignId}_`), "");
-      }
-    }
-    targetAgentId = targetAgentId || "fb_contentor";
-    if (contextId) lastActiveAgentByContext.set(contextId, targetAgentId);
-    const displayName = getAgentDisplayName(targetAgentId);
-
-    let activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
-    if (!activeSb) {
-      await getOrCreateAgentSandbox(campaignId, targetAgentId, true);
-      activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
-    }
-
-    let actionSummary = "";
-    if (activeSb) {
-      if (isTypeAction) {
-        let textToType = "";
-        const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-        if (emailMatch) {
-          textToType = emailMatch[0];
-        } else {
-          const quoteMatch = text.match(/["']([^"'\n]+)["']/);
-          if (quoteMatch) {
-            textToType = quoteMatch[1];
-          } else {
-            const m = text.match(/(?:type|enter|input|write|fill)\s+(?:the\s+)?(?:email|text|string|query)?\s*([^\s]+)/i);
-            if (m) textToType = m[1];
-          }
-        }
-        textToType = textToType.trim();
-        if (textToType) {
-          console.log(`[AgencyActions] In-page CDP typing for ${displayName}: "${textToType}"`);
-          await cdpTypeInput(activeSb, textToType);
-          actionSummary = `Typed "${textToType}" into input field`;
-          await new Promise((r) => setTimeout(r, 1500));
-        }
-      } else if (isClickAction) {
-        if (lower.includes("enter")) {
-          await cdpPressEnter(activeSb);
-          actionSummary = "Pressed Enter key";
-        } else {
-          let btnText = "Next";
-          const m = text.match(/(?:click|press|tap)\s+["']?([a-zA-Z0-9_ ]+?)["']?$/i);
-          if (m) btnText = m[1].trim();
-          console.log(`[AgencyActions] In-page CDP clicking for ${displayName}: "${btnText}"`);
-          await cdpClickText(activeSb, btnText);
-          actionSummary = `Clicked "${btnText}" button`;
-        }
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-
-      let shotBuffer: Uint8Array | null = null;
-      if (typeof activeSb.screenshot === "function") {
-        shotBuffer = await activeSb.screenshot().catch(() => null);
-      }
-
-      let visualAnalysis = "";
-      let screenshotBase64 = "";
-      if (shotBuffer && shotBuffer.length > 0) {
-        screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
-        visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName}: ${actionSummary}`);
-      }
-
-      const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
-      return {
-        handled: true,
-        replyText: `🎯 **In-Page Action Executed: ${displayName}**\n\n• **Action:** ${actionSummary}\n${visualAnalysis ? `\n${visualAnalysis}\n` : ""}\n• **Workstation:** ${displayName} (Live screen attached above)`,
-        mediaUrl,
-      };
-    }
-  }
-
-  // 4e. Action: Pure PC Wake (Without search / navigation query)
-  const isPureWake =
-    /^(?:wake|boot|start|spin up|turn on)\s+(?:the\s+)?(?:agent\s+)?([a-z_ ]+)(?:\s+vm|\s+pc)?$/i.test(trimmed) ||
-    (lower.startsWith("wake ") && !lower.includes("and search") && !lower.includes("and go") && !lower.includes("and type")) ||
-    (lower.startsWith("boot ") && !lower.includes("and search")) ||
-    (lower.startsWith("spin up ") && !lower.includes("and search"));
-
-  const targetAgentId =
-    extractAgentFromPrompt(text, contextId) ||
-    (lower.includes("instagram") || /\binsta\b/.test(lower)
-      ? "ig_real"
-      : lower.includes("twitter") || lower.includes("twittwer") || lower.includes("x.com") || lower.includes("/x")
-      ? "fb_contentor"
-      : lower.includes("github") || lower.includes("remotask") || lower.includes("job")
-      ? "fb_jotrainer"
-      : lower.includes("chart") || lower.includes("forex") || lower.includes("deriv") || lower.includes("trading") || lower.includes("gold")
-      ? "fb_laxdollar"
-      : lower.includes("meme") || lower.includes("comedy")
-      ? "fb_contentor"
-      : lower.includes("medium") || lower.includes("article") || lower.includes("story") || lower.includes("news") || lower.includes("reddit") || lower.includes("chatgpt")
-      ? "analytics"
-      : lastActiveAgentByContext.get(contextId) || "fb_contentor");
-
-  if (isPureWake && targetAgentId) {
-    const displayName = getAgentDisplayName(targetAgentId);
-    if (contextId) lastActiveAgentByContext.set(contextId, targetAgentId);
-
-    const activeMap: Map<string, any> = (global as any).__activeSandboxes;
-    const isAlreadyAwake = Boolean(activeMap && activeMap.has(`${campaignId}_${targetAgentId}`));
-
-    if (isAlreadyAwake) {
-      return {
-        handled: true,
-        replyText: `⚡ **${displayName}**'s PC is already booted and running! Google Chrome and Live VNC are active on DISPLAY=:0. What task would you like ${displayName} to execute?`,
-      };
-    }
-
-    const alreadyAuthorized = lower.includes("confirm") || lower.includes("authorize");
-    if (alreadyAuthorized) {
-      const sb = await wakeAgentPc(campaignId, targetAgentId);
-      return {
-        handled: true,
-        replyText: `⚡ **Manual Authorization Confirmed!**\n\n**${displayName}**'s PC is now booted and running. Workstation ID: \`${sb.sandboxId || "Active"}\`.\n\nGoogle Chrome and Live VNC are ready on DISPLAY=:0. What task would you like ${displayName} to execute?`,
-      };
-    }
-
-    pendingMap.set(contextId, {
-      agentId: targetAgentId,
-      action: "wake",
-      target: displayName,
-      rawPrompt: text,
-      timestamp: Date.now(),
-    });
-
-    return {
-      handled: true,
-      replyText: `⚠️ **Manual PC Authorization Required**\n\nTo preserve your compute credits, agent PCs remain in standby ($0 compute) until scheduled drops or explicit manual authorization.\n\nAre you sure you want to wake **${displayName}**'s PC into active mode?\n\n👉 Reply **YES** or **CONFIRM** to authorize.`,
-    };
-  }
-
-  // 5. Action: Chrome Navigation & Autonomous Computer-Use Task
-  if (targetAgentId && isTaskOrBrowse && !isScreenshotRequest && !isCloseFirefox && !isPureWake) {
-    const displayName = getAgentDisplayName(targetAgentId);
-    if (contextId) lastActiveAgentByContext.set(contextId, targetAgentId);
-    const plan = await planAutonomousTask(text);
-    const { cleanTopic, isChart } = plan;
-
-    // Check if target VM is ALREADY AWAKE & RUNNING in this session!
-    const activeMap: Map<string, any> = (global as any).__activeSandboxes;
-    const isAlreadyAwake = Boolean(activeMap && activeMap.has(`${campaignId}_${targetAgentId}`));
-
-    // Once authorized or already awake, never ask for authorization again!
-    const alreadyAuthorized =
-      isAlreadyAwake ||
-      lower.includes("double authorize") ||
-      lower.includes("double authorization") ||
-      lower.includes("force wake") ||
-      lower.includes("i authorize") ||
-      lower.includes("i confirm") ||
-      lower.includes("all the permissions") ||
-      lower.includes("all the permisions");
-
-    if (alreadyAuthorized) {
-      const result = await executeAgentChromeTask(campaignId, targetAgentId, text);
-      return {
-        handled: true,
-        replyText: result.replyText,
-        mediaUrl: result.mediaUrl,
-      };
-    }
-
-    // Otherwise: Enforce the double-authorization protocol!
-    pendingMap.set(contextId, {
-      agentId: targetAgentId,
-      action: isChart ? "chart" : "search",
-      target: cleanTopic,
-      rawPrompt: text,
-      timestamp: Date.now(),
-    });
-
-    return {
-      handled: true,
-      replyText: `⚠️ **Manual PC Authorization Required**\n\nTo preserve your compute credits, agent PCs remain in standby ($0 compute) until scheduled drops or explicit manual authorization.\n\nAre you sure you want to wake **${displayName}**'s PC, launch Chrome, and execute **"${cleanTopic}"**?\n\n👉 Reply **YES** or **CONFIRM** to authorize.`,
-    };
-  }
-
+  // ── INTENT: CONVERSATIONAL (Pass through to askMasterAgent) ───────────────
   return { handled: false };
 }

@@ -13,14 +13,14 @@ const key3 = process.env.GEMINI_HERMES_KEY_3 || "";
 // Triple API keys pool for 3x daily quota (4,500 requests/day) and multi-project failover
 const API_KEYS = [key1, key2, key3].filter(Boolean);
 
-// Validated fast Gemini models — ordered by reliability (updated 2026-10-26)
-// gemini-2.0/1.5-flash are deprecated; gemini-3.5-flash is the primary working model
+// Validated fast Gemini models — ordered by reliability & capacity (updated 2026-11-21)
+// gemini-3.1-flash-lite has guaranteed capacity and ultra-low latency; gemini-3.5/3.8 may spike with 503
 export const VALID_FAST_MODELS = [
-  "gemini-3.5-flash",          // Primary — fastest confirmed working model
-  "gemini-3.8-flash",          // Secondary — may have high demand, retry
-  "gemini-3.1-flash-lite",     // Tertiary — lighter, fast fallback
-  "gemini-flash-latest",       // Alias fallback (may resolve to 3.5)
-  "gemini-flash-lite-latest",  // Last resort alias
+  "gemini-3.1-flash-lite",     // Primary — ultra-fast, high capacity, 0.3s latency
+  "gemini-flash-lite-latest",  // Secondary — instant alias fallback
+  "gemini-3.5-flash",          // Tertiary — when capacity allows
+  "gemini-flash-latest",       // Alias fallback
+  "gemini-3.8-flash",          // High capability fallback
 ];
 
 async function parseImageToInlineData(imageSource: string): Promise<{ mimeType: string; data: string } | null> {
@@ -328,19 +328,30 @@ MEDIA_PROMPT: [a detailed descriptive prompt for Flux.1 describing the desired v
 
     const fullText = await generateWithFallback(contentsPayload);
 
-    // Parse JSON block if present
+    // Parse JSON plan block if present (for campaign rollout plans only)
     const jsonMatch = fullText.match(/```json\s*([\s\S]*?)\s*```/);
     let plan: AgentPlanResult | undefined;
     let cleanText = fullText;
 
     if (jsonMatch && jsonMatch[1]) {
       try {
-        plan = JSON.parse(jsonMatch[1]);
-        cleanText = fullText.replace(/```json[\s\S]*?```/, "").trim();
+        const potentialPlan = JSON.parse(jsonMatch[1]);
+        if (potentialPlan.title && (potentialPlan.tasks || potentialPlan.dailyPostCounts)) {
+          plan = potentialPlan;
+          cleanText = fullText.replace(/```json[\s\S]*?```/, "").trim();
+        }
       } catch (err) {
-        console.error("Failed to parse plan JSON:", err);
+        // Not a structured campaign plan
       }
     }
+
+    // Anti-Hallucination: strip fake terminal actions or fake markdown image tags
+    cleanText = cleanText
+      .replace(/```(?:json)?\s*\{\s*"action":[\s\S]*?\}\s*```/gi, "")
+      .replace(/\{\s*"action":\s*"[A-Z_]+"[\s\S]*?\}/gi, "")
+      .replace(/!\[Screenshot:[^\]]*\]/gi, "")
+      .replace(/\[IMAGE_DATA:[^\]]*\]/gi, "")
+      .trim();
 
     // Check if image generation was requested or triggered
     let mediaUrl: string | undefined;
@@ -360,6 +371,26 @@ MEDIA_PROMPT: [a detailed descriptive prompt for Flux.1 describing the desired v
       const enriched = enrichVisualPrompt(userPrompt);
       const imgRes = await generateSocialImage(enriched.prompt, "1:1", enriched.seed);
       mediaUrl = imgRes.url;
+    }
+
+    // If text mentioned screenshot/visual or active VM is running, attach real live screen
+    if (!mediaUrl) {
+      const activeMap: Map<string, any> = (global as any).__activeSandboxes;
+      const lastActiveMap: Map<string, string> = (global as any).__lastActiveAgentByContext;
+      const fallbackAgent = lastActiveMap?.get(contextId) || (activeMap && activeMap.size > 0 ? Array.from(activeMap.keys())[0]?.replace("default_campaign_", "") : "ig_shader");
+      const activeSb = (global as any).__activeSandboxes?.get(`default_campaign_${fallbackAgent}`);
+      if (activeSb && typeof activeSb.screenshot === "function" && (fullText.includes("screenshot") || fullText.includes("CAPTURE_SCREENSHOT") || userPrompt.toLowerCase().includes("screenshot") || userPrompt.toLowerCase().includes("screen"))) {
+        try {
+          const shotBuffer = await activeSb.screenshot();
+          if (shotBuffer && shotBuffer.length > 0) {
+            mediaUrl = `data:image/png;base64,${Buffer.from(shotBuffer).toString("base64")}`;
+          }
+        } catch {}
+      }
+    }
+
+    if (!cleanText) {
+      cleanText = "The live workstation display is active. Let me know what you would like to do next.";
     }
 
     return { text: cleanText, plan, mediaUrl };

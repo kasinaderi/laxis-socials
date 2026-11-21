@@ -95,11 +95,32 @@ const AGENT_NICHE_SHORTCUTS: Record<string, { label: string; url: string; color?
   ],
 };
 
+const CF_HOST = "link-million-retained-calendar.trycloudflare.com";
+// Use vnc_lite.html — simpler than vnc.html, no localStorage conflicts, reads URL params directly
 const DEFAULT_CF_STREAM_URL =
-  "https://link-million-retained-calendar.trycloudflare.com/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify";
+  `https://${CF_HOST}/vnc_lite.html?host=${CF_HOST}&port=443&path=websockify&scale=true`;
 
+/**
+ * Normalises any stream URL:
+ * - null / undefined / style.dev → default CF noVNC URL (vnc_lite.html)
+ * - trycloudflare.com URL → always redirect to vnc_lite.html with correct params
+ *   (vnc_lite.html reads URL params directly — no localStorage conflicts)
+ * - Other URLs → returned as-is
+ */
 function getCleanStreamUrl(url?: string | null): string {
   if (!url || url.includes("style.dev")) return DEFAULT_CF_STREAM_URL;
+
+  // Always normalise CF tunnel URLs to vnc_lite.html with explicit params
+  if (url.includes("trycloudflare.com")) {
+    try {
+      const u = new URL(url.includes("//") ? url : `https://${url}`);
+      const tunnelHost = u.hostname;
+      return `https://${tunnelHost}/vnc_lite.html?host=${tunnelHost}&port=443&path=websockify&scale=true`;
+    } catch {
+      return DEFAULT_CF_STREAM_URL;
+    }
+  }
+
   return url;
 }
 
