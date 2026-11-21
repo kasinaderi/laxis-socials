@@ -67,7 +67,7 @@ export interface FreestyleSandboxWrapper {
   setTimeout: (ms: number) => Promise<void>;
 }
 
-async function getFreestyleClient(): Promise<any> {
+export async function getFreestyleClient(): Promise<any> {
   const key = process.env.FREESTYLE_API_KEY || apiKey;
   if (!key) {
     console.warn("[Freestyle] Missing FREESTYLE_API_KEY in environment");
@@ -430,6 +430,19 @@ export async function pauseFreestyleSandbox(
   if (freestyle) {
     try {
       let vmId = knownVmId;
+
+      if (!vmId) {
+        try {
+          const existing = await db
+            .select({ sandboxId: agentSandboxes.sandboxId })
+            .from(agentSandboxes)
+            .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agentId)))
+            .get();
+          if (existing?.sandboxId) {
+            vmId = existing.sandboxId;
+          }
+        } catch {}
+      }
 
       if (!vmId) {
         // Fallback: find by slug (slower — requires listing all VMs)

@@ -152,7 +152,105 @@ When the agent workstation wakes up, `initSandboxBrowserAndCdp(wrapper, agentId)
 - **Failover Screenshot Engine (`/api/sandbox/screen`)**:
   - If the tunnel is momentarily reconnecting, the UI seamlessly falls back to the screenshot viewer with `cursor-default` and keyboard forwarding via `tabIndex={0}` + `onKeyDown`.
 
-### 6. Git & Remote Deployment Configuration
+### 6. Autonomous Reasoning Brain — LLM Intent Dispatcher ([lib/agency-actions.ts](file:///c:/dev/SOCIAL%20MEDIA%20AGENT%20TEAM/lib/agency-actions.ts))
+
+The agent must **never use rigid regex/keyword command dispatching**. Instead, every incoming Telegram message goes through an LLM brain that classifies the intent, then routes to the correct VM action.
+
+#### Why
+Kelvin sends natural language like `"screenshot?"`, `"let me see what's happening"`, `"scroll down a bit"`, `"put everything to sleep"`, `"go to facebook"` — not structured commands. A regex chain would miss most of these.
+
+#### Architecture
+
+```typescript
+// 1. Interface for classified intent (supports single, multiple, and all agents)
+interface CompiledAgencyIntent {
+  intent: "screenshot" | "navigate_or_search" | "click" | "type" | "scroll"
+        | "wake" | "pause" | "status" | "clear_posts" | "confirm_pending" | "conversational";
+  targetAgentId: string;       // Primary agent targeted
+  targetAgentIds?: string[];   // Multiple targeted agents, e.g. ["ig_shader", "fb_laxdollar"]
+  allAgents?: boolean;         // True if user requested "all vms", "everything", etc.
+  baseUrl?: string;            // for navigate_or_search
+  targetElement?: string;      // for click
+  textToType?: string;         // for type
+  scrollDirection?: "down" | "up"; // for scroll
+  reasoning?: string;
+}
+
+// 2. Compile any natural language → structured intent
+async function compileInstructionWithBrain(
+  instruction: string,
+  contextId: string,
+  campaignId?: string
+): Promise<CompiledAgencyIntent>
+
+// 3. Main dispatcher — brain-first, then action
+async function handleAgencyExecutiveCommand(
+  message: string,
+  contextId?: string,
+  campaignId?: string
+): Promise<{ handled: boolean; replyText?: string; mediaUrl?: string }>
+```
+
+#### Implementation Rules for All Agents (Migrated & Non-Migrated)
+- **Granular Single / Multiple / All Power Management**:
+  - **Single VM Pause/Wake**: e.g., `"power off insta shader"`, `"turn on lax dollar"`. The brain targets just that agent (`targetAgentIds: ["ig_shader"]`).
+  - **Multiple VM Pause/Wake**: e.g., `"turn off shader and pintr"`, `"wake lax dollar and contentor"`. The brain captures all targets (`targetAgentIds: ["ig_shader", "fb_jotrainer"]`) and operates on each in parallel.
+  - **Contextual Pronoun Pause**: e.g., Kelvin asks `"any pc on?"` → Master replies that `ig_shader` is on → Kelvin says `"power it off"`. The brain resolves `"it"` to the active running VM (`ig_shader`) and powers it down immediately!
+  - **All VMs Pause/Wake**: e.g., `"put everything to sleep"`, `"power off all"`, `"wake all vms"`. The brain sets `allAgents: true` and pauses/wakes all agent workstations at once.
+- **Support for Both Migrated (Freestyle) and Non-Migrated (E2B) Agents**:
+  - The brain treats all agents identically (`fb_laxdollar`, `fb_jotrainer`, `fb_contentor`, `ig_real`, `ig_shader`, `analytics`).
+  - Under the hood, `isFreestyleAgent(agentId)` automatically routes to `pauseFreestyleSandbox()` (with direct `vmRef.pause()`) or `pauseAgentSandbox()` on E2B.
+- **Freestyle Direct VM Pause Guarantee**:
+  - `pauseFreestyleSandbox()` must NEVER rely solely on `freestyle.vms.list()` (which can fail or timeout on Vercel serverless cold starts).
+  - It must query `agentSandboxes.sandboxId` from the DB (e.g. `vm-3cb555595b524fd8939eee9e5200a353`) and execute `freestyle.vms.ref(vmId).pause()` directly.
+- **Live Status Ground Truth Verification**:
+  - When Kelvin asks `"any pc on?"` or `"status"`, the status handler queries the DB AND performs live verification against the Freestyle API for persistent VMs.
+  - If a VM is actually paused in the cloud, it self-heals the DB record to `"paused"`, preventing any phantom "1 Running" false positives.
+- **Fast-path single-word and regex commands** (`"any pc on?"`, `"power it off"`, `"power off <agent>"`, `"turn on <agent>"`, `"screenshot"`, `"pause"`, `"yes"`, `"status"`) bypass the LLM for sub-100ms response.
+- **Brain-first routing**: `compileInstructionWithBrain()` runs BEFORE any existing regex check.
+- **Gemini model**: Use `gemini-3.1-flash-lite` as PRIMARY (confirmed working). Do NOT use `gemini-3.5-flash` or `gemini-3.8-flash` as primary — both return 503 during high demand.
+- **Anti-hallucination**: Strip fake JSON action blocks and fake markdown image tags from LLM output in `askMasterAgent()`. Real screenshots come from `activeSb.screenshot()` only — never fake `{"action":"CAPTURE_SCREENSHOT"}` responses.
+- **No default navigation target**: `resolveNavigationTarget()` must NOT inject any default search query (e.g. "forex trading") when none is specified in the instruction.
+
+#### Adding Brain to a Newly Migrated Agent
+After migrating a new agent via `migrate_agent_to_freestyle.mjs`, the brain dispatcher automatically handles it — no extra code needed. The `targetAgentId` returned by the brain maps to the agent's `agentId` (e.g. `"fb_laxdollar"`), which `getOrCreateAgentSandbox` already resolves to the correct Freestyle VM.
+
+---
+
+### 7. noVNC iframe Fix — Use `vnc_lite.html` Not `vnc.html` ([components/AgentTabs.tsx](file:///c:/dev/SOCIAL%20MEDIA%20AGENT%20TEAM/components/AgentTabs.tsx))
+
+#### The Bug
+`vnc.html` uses `ui.js` which calls `initSetting('host', window.location.hostname)` — but `initSetting` only sets the default **if localStorage is empty**. If the browser has a stale session at the `trycloudflare.com` domain, localStorage has the wrong host/port cached, and noVNC silently ignores the URL params → stuck on "Connecting..." forever.
+
+#### The Fix
+Always use **`vnc_lite.html`** in the iframe `src`. It:
+- Never reads or writes localStorage
+- Reads `?host=&port=&path=` directly from the URL via regex
+- Builds `wss://HOST:PORT/PATH` immediately and connects
+
+#### Correct URL Format
+```typescript
+const CF_HOST = "link-million-retained-calendar.trycloudflare.com"; // from /etc/laxis_tunnel_url.txt
+const DEFAULT_CF_STREAM_URL =
+  `https://${CF_HOST}/vnc_lite.html?host=${CF_HOST}&port=443&path=websockify&scale=true`;
+```
+
+#### `getCleanStreamUrl()` Must Normalise ALL Cloudflare URLs
+The database (`agent_sandboxes.stream_url`) may store the raw tunnel root URL without noVNC params. `getCleanStreamUrl()` must always convert any `trycloudflare.com` URL to `vnc_lite.html` with the correct params:
+```typescript
+function getCleanStreamUrl(url?: string | null): string {
+  if (!url || url.includes("style.dev")) return DEFAULT_CF_STREAM_URL;
+  if (url.includes("trycloudflare.com")) {
+    const tunnelHost = new URL(url.includes("//") ? url : `https://${url}`).hostname;
+    return `https://${tunnelHost}/vnc_lite.html?host=${tunnelHost}&port=443&path=websockify&scale=true`;
+  }
+  return url;
+}
+```
+
+---
+
+### 8. Git & Remote Deployment Configuration
 - When pushing to GitHub from Windows environments with multiple GitHub accounts, set the remote URL with the username:
   `git remote set-url origin https://<username>@github.com/<org>/<repo>.git`
   This prevents `git-credential-manager` from hanging background processes when switching accounts.

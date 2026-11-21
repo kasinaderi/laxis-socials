@@ -146,6 +146,48 @@ export function extractAgentFromPrompt(text: string, contextId?: string): string
   return null;
 }
 
+/**
+ * Extract one or multiple agents from user prompt, or detect if ALL agents are targeted.
+ */
+export function extractAllAgentsFromText(text: string): { agentIds: string[]; all: boolean } {
+  const lower = text.toLowerCase();
+  const found = new Set<string>();
+  const isAll =
+    lower.includes("all vms") ||
+    lower.includes("all agents") ||
+    lower.includes("all workstations") ||
+    lower.includes("all pcs") ||
+    lower.includes("everything") ||
+    lower.includes("every vm") ||
+    lower.includes("every pc") ||
+    /\ball\s*(vms?|agents?|pcs?|workstations?)?\b/i.test(lower);
+
+  if (isAll) {
+    return { agentIds: ["all"], all: true };
+  }
+
+  if (lower.includes("insta shader") || lower.includes("instashader") || lower.includes("ig_shader") || /\bshader\b/i.test(lower)) {
+    found.add("ig_shader");
+  }
+  if (lower.includes("lax dollar") || lower.includes("laxdollar") || lower.includes("fb_laxdollar") || /\blax\b/i.test(lower) || /\bdollar\b/i.test(lower)) {
+    found.add("fb_laxdollar");
+  }
+  if (lower.includes("pintr") || lower.includes("jotrainer") || lower.includes("fb_jotrainer") || /\bpinterest\b/i.test(lower)) {
+    found.add("fb_jotrainer");
+  }
+  if (lower.includes("contentor") || lower.includes("fb_contentor") || /\bmeme\b/i.test(lower)) {
+    found.add("fb_contentor");
+  }
+  if (lower.includes("insta real") || lower.includes("instareal") || lower.includes("ig_real") || /\breal\b/i.test(lower)) {
+    found.add("ig_real");
+  }
+  if (lower.includes("analytics")) {
+    found.add("analytics");
+  }
+
+  return { agentIds: Array.from(found), all: false };
+}
+
 export function getAgentDisplayName(agentId: string): string {
   const names: Record<string, string> = {
     fb_laxdollar: "LAXDOLLAR (Trading & Hustles)",
@@ -1345,6 +1387,8 @@ export interface CompiledAgencyIntent {
     | "confirm_pending"
     | "conversational";
   targetAgentId: string;
+  targetAgentIds?: string[];
+  allAgents?: boolean;
   baseUrl?: string;
   cleanTopic?: string;
   searchQuery?: string;
@@ -1371,9 +1415,25 @@ export async function compileInstructionWithBrain(
   if (!fallbackAgent && activeMap && activeMap.size > 0) {
     fallbackAgent = Array.from(activeMap.keys())[0]?.replace(new RegExp(`^${campaignId}_`), "");
   }
+  if (!fallbackAgent) {
+    try {
+      const runningDb = await db
+        .select({ agentId: agentSandboxes.agentId })
+        .from(agentSandboxes)
+        .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.status, "running")))
+        .limit(1)
+        .get();
+      if (runningDb?.agentId) {
+        fallbackAgent = runningDb.agentId;
+      }
+    } catch {}
+  }
   if (!fallbackAgent) fallbackAgent = "ig_shader";
 
   const cleanLower = rawPrompt.toLowerCase().trim().replace(/[?!.,]+$/, "");
+  const extracted = extractAllAgentsFromText(rawPrompt);
+  const targetIds = extracted.all ? ["all"] : (extracted.agentIds.length > 0 ? extracted.agentIds : [fallbackAgent]);
+  const primaryTarget = targetIds[0] === "all" ? fallbackAgent : targetIds[0];
 
   // Fast-path: 1-word affirmative confirmations
   if (
@@ -1388,34 +1448,71 @@ export async function compileInstructionWithBrain(
   ) {
     return {
       intent: "confirm_pending",
-      targetAgentId: fallbackAgent,
+      targetAgentId: primaryTarget,
+      targetAgentIds: targetIds,
       reasoning: "User confirmed pending action",
     };
   }
 
   // Fast-path: single word screenshot request
-  if (cleanLower === "screenshot" || cleanLower === "screen" || cleanLower === "pic" || cleanLower === "photo" || cleanLower === "snapshot") {
+  if (
+    cleanLower === "screenshot" ||
+    cleanLower === "screen" ||
+    cleanLower === "pic" ||
+    cleanLower === "photo" ||
+    cleanLower === "snapshot" ||
+    /^(take\s*(a\s*)?screenshot|send\s*(a\s*|me\s*a\s*)?screenshot|let\s*me\s*see|show\s*me|screenshot\??)$/i.test(cleanLower)
+  ) {
     return {
       intent: "screenshot",
-      targetAgentId: fallbackAgent,
+      targetAgentId: primaryTarget,
+      targetAgentIds: targetIds,
       reasoning: "Direct screenshot request",
     };
   }
 
-  // Fast-path: single word pause/stop/sleep
-  if (cleanLower === "pause" || cleanLower === "sleep" || cleanLower === "stop" || cleanLower === "hibernate") {
+  // Fast-path: PAUSE / STOP / POWER OFF / SLEEP (handles single, multiple, or all VMs!)
+  const isPauseRegex =
+    /^(power\s*(it\s*|them\s*)?off|turn\s*(it\s*|them\s*)?off|shut\s*down|shutdown|switch\s*off|kill\s*pc|stop\s*pc|pause\s*pc|put\s*(it\s*|them\s*|everything\s*)?to\s*sleep|hibernate|sleep|pause|stop)$/i.test(cleanLower) ||
+    /\b(power\s*off|turn\s*off|shut\s*down|put\s*to\s*sleep|hibernate|stop\s*compute)\b/i.test(cleanLower) ||
+    ((cleanLower.startsWith("pause") || cleanLower.startsWith("stop") || cleanLower.startsWith("turn off") || cleanLower.startsWith("power off") || cleanLower.startsWith("shut down")) && !cleanLower.includes("post"));
+
+  if (isPauseRegex) {
     return {
       intent: "pause",
-      targetAgentId: fallbackAgent,
-      reasoning: "Direct pause request",
+      targetAgentId: primaryTarget,
+      targetAgentIds: targetIds,
+      allAgents: extracted.all,
+      reasoning: `Direct pause/power-down request (target: ${extracted.all ? "ALL" : targetIds.join(", ")})`,
     };
   }
 
-  // Fast-path: single word status
-  if (cleanLower === "status" || cleanLower === "vms" || cleanLower === "vms status" || cleanLower === "vm status") {
+  // Fast-path: WAKE / BOOT / TURN ON / SPIN UP (handles single, multiple, or all VMs!)
+  const isWakeRegex =
+    /^(power\s*(it\s*|them\s*)?on|turn\s*(it\s*|them\s*)?on|boot\s*(it\s*|them\s*)?up|wake\s*(it\s*|them\s*)?up|wake|turn\s*on|power\s*on|boot|spin\s*up)$/i.test(cleanLower) ||
+    /\b(turn\s*on|power\s*on|boot\s*up|wake\s*up|spin\s*up)\b/i.test(cleanLower) ||
+    ((cleanLower.startsWith("wake") || cleanLower.startsWith("turn on") || cleanLower.startsWith("power on") || cleanLower.startsWith("boot")) && !cleanLower.includes("post"));
+
+  if (isWakeRegex) {
+    return {
+      intent: "wake",
+      targetAgentId: primaryTarget,
+      targetAgentIds: targetIds,
+      allAgents: extracted.all,
+      reasoning: `Direct wake/boot request (target: ${extracted.all ? "ALL" : targetIds.join(", ")})`,
+    };
+  }
+
+  // Fast-path: STATUS / ANY PC ON inquiry
+  const isStatusRegex =
+    /^(status|vms?|vms?\s+status|any\s+pc\s+on\??|is\s+any\s+pc\s+on\??|are\s+any\s+pcs?\s+on\??|which\s+pcs?\s+(is|are)\s+(on|running|active|awake)\??|what\s+(is|are)\s+running\??|who\s+(is|are)\s+awake\??|any\s+vm\s+awake\??)$/i.test(cleanLower) ||
+    /\b(any\s+pc\s+on|which\s+pcs?.*(on|running|active|awake)|vms?\s+(running|active|on)|workstations?\s+(running|active|on)|what('s|\s+is|\s+are)\s+running)\b/i.test(cleanLower);
+
+  if (isStatusRegex) {
     return {
       intent: "status",
-      targetAgentId: fallbackAgent,
+      targetAgentId: primaryTarget,
+      targetAgentIds: targetIds,
       reasoning: "Direct status inquiry",
     };
   }
@@ -1451,9 +1548,9 @@ INTENT CATEGORIES:
    - pressEnter: boolean
 5. "scroll": User wants to scroll up or down.
    - scrollDirection: "down" | "up"
-6. "wake": User wants to wake, boot, turn on, spin up an agent PC.
-7. "pause": User wants to pause, hibernate, shut down, put to sleep, or stop compute on agent PC(s).
-8. "status": User asks which VMs/agents are active, running, awake, or sleeping.
+6. "wake": User wants to wake, boot, turn on, spin up an agent PC. Can target single agent ("wake shader"), multiple agents ("wake shader and pintr"), or all ("turn on all vms").
+7. "pause": User wants to pause, hibernate, shut down, put to sleep, power off, or stop compute on agent PC(s). Can target single agent ("power off shader", "turn off lax dollar"), multiple ("turn off shader and pintr"), or all ("put everything to sleep", "power off all").
+8. "status": User asks which VMs/agents are active, running, awake, or sleeping ("any pc on?", "which pcs are on?").
 9. "clear_posts": User wants to clear, delete, or reset scheduled posts.
 10. "conversational": User is asking for strategy advice, greeting, asking general questions, or discussing ideas without needing an immediate workstation click/type/navigation.
 
@@ -1461,6 +1558,8 @@ Respond ONLY with valid JSON:
 {
   "intent": "screenshot" | "navigate_or_search" | "click" | "type" | "scroll" | "wake" | "pause" | "status" | "clear_posts" | "conversational",
   "targetAgentId": "fb_laxdollar" | "fb_jotrainer" | "fb_contentor" | "ig_real" | "ig_shader" | "analytics",
+  "targetAgentIds": ["fb_laxdollar", "fb_jotrainer", "fb_contentor", "ig_real", "ig_shader", "analytics"] | null,
+  "allAgents": boolean | null,
   "baseUrl": string | null,
   "cleanTopic": string | null,
   "searchQuery": string | null,
@@ -1482,9 +1581,14 @@ Respond ONLY with valid JSON:
       if (match) {
         const parsed = JSON.parse(match[0]);
         if (parsed.intent) {
+          const parsedIds = Array.isArray(parsed.targetAgentIds) && parsed.targetAgentIds.length > 0
+            ? parsed.targetAgentIds
+            : (parsed.targetAgentId ? [parsed.targetAgentId] : targetIds);
           return {
             intent: parsed.intent,
-            targetAgentId: parsed.targetAgentId || fallbackAgent,
+            targetAgentId: parsed.targetAgentId || primaryTarget,
+            targetAgentIds: parsedIds,
+            allAgents: Boolean(parsed.allAgents || parsed.targetAgentId === "all"),
             baseUrl: parsed.baseUrl || undefined,
             cleanTopic: parsed.cleanTopic || undefined,
             searchQuery: parsed.searchQuery || undefined,
@@ -1507,6 +1611,7 @@ Respond ONLY with valid JSON:
   return {
     intent: "conversational",
     targetAgentId: targetAgent,
+    targetAgentIds: [targetAgent],
   };
 }
 
@@ -1727,30 +1832,91 @@ export async function handleAgencyExecutiveCommand(
 
   // ── INTENT: WAKE ─────────────────────────────────────────────────────────
   if (compiled.intent === "wake") {
-    const sb = await wakeAgentPc(campaignId, targetAgentId);
-    let screenshotBase64 = "";
-    const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${targetAgentId}`);
-    if (activeSb && typeof activeSb.screenshot === "function") {
-      const shotBuffer = await activeSb.screenshot().catch(() => null);
-      if (shotBuffer && shotBuffer.length > 0) {
-        screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+    const isAll = compiled.allAgents || compiled.targetAgentIds?.includes("all") || compiled.targetAgentId === "all";
+    const allKnown = ["ig_shader", "fb_laxdollar", "fb_jotrainer", "fb_contentor", "ig_real"];
+    const targets = isAll
+      ? allKnown
+      : (compiled.targetAgentIds && compiled.targetAgentIds.length > 0
+          ? compiled.targetAgentIds.filter((id) => id !== "all")
+          : [compiled.targetAgentId || targetAgentId]);
+
+    const wokeNames: string[] = [];
+    let lastScreenshotBase64 = "";
+
+    for (const agId of targets) {
+      const sb = await wakeAgentPc(campaignId, agId);
+      wokeNames.push(getAgentDisplayName(agId));
+      if (contextId) lastActiveAgentByContext.set(contextId, agId);
+
+      const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agId}`);
+      if (activeSb && typeof activeSb.screenshot === "function") {
+        const shotBuffer = await activeSb.screenshot().catch(() => null);
+        if (shotBuffer && shotBuffer.length > 0) {
+          lastScreenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+        }
       }
     }
-    const mediaUrl = screenshotBase64 ? `data:image/png;base64,${screenshotBase64}` : undefined;
+
+    const mediaUrl = lastScreenshotBase64 ? `data:image/png;base64,${lastScreenshotBase64}` : undefined;
+    const namesStr = wokeNames.join(", ");
     return {
       handled: true,
-      replyText: `⚡ **${displayName} Workstation is Awake**\n\nWorkstation ID: \`${sb.sandboxId || "Active"}\`.\nGoogle Chrome and Live VNC are ready on DISPLAY=:0.`,
+      replyText: `⚡ **${namesStr} Workstation is Awake**\n\nGoogle Chrome and Live VNC Desktop are active and ready on DISPLAY=:0.\n\n• **Workstation(s):** ${namesStr}\n• **Status:** Active Live VNC Desktop\n• **Controller:** Ready for autonomous or manual commands`,
       mediaUrl,
     };
   }
 
   // ── INTENT: PAUSE / STOP ─────────────────────────────────────────────────
   if (compiled.intent === "pause") {
-    await pauseAllAgentSandboxes(campaignId);
-    lastActiveAgentByContext.delete(contextId);
+    const isAll = compiled.allAgents || compiled.targetAgentIds?.includes("all") || compiled.targetAgentId === "all";
+
+    if (isAll) {
+      await pauseAllAgentSandboxes(campaignId);
+      lastActiveAgentByContext.delete(contextId);
+      return {
+        handled: true,
+        replyText: `🛑 **All Workstations Paused ($0 Compute Mode)**\n\nI have securely paused every cloud microVM and frozen all browser sessions.\n\n• **MicroVM Status:** Standby ($0 compute)\n• **State & Memory:** Open tabs, logins, and cookies 100% preserved in persistent cloud vault\n• **Agent Status:** Resting / Idle`,
+      };
+    }
+
+    // Granular single or multiple targets
+    let targets = compiled.targetAgentIds && compiled.targetAgentIds.length > 0
+      ? compiled.targetAgentIds.filter((id) => id !== "all")
+      : [compiled.targetAgentId || targetAgentId];
+
+    // If targets still empty or points to 'master', query currently running agents from DB
+    if (targets.length === 0 || targets[0] === "master") {
+      const runningInDb = await db
+        .select({ agentId: agentSandboxes.agentId })
+        .from(agentSandboxes)
+        .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.status, "running")))
+        .all();
+      targets = runningInDb.map((r) => r.agentId).filter(Boolean) as string[];
+      if (targets.length === 0) targets = [targetAgentId || "ig_shader"];
+    }
+
+    const pausedNames: string[] = [];
+    for (const agId of targets) {
+      if (isFreestyleAgent(agId)) {
+        const existing = await db
+          .select({ sandboxId: agentSandboxes.sandboxId })
+          .from(agentSandboxes)
+          .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agId)))
+          .get();
+        await pauseFreestyleSandbox(campaignId, agId, existing?.sandboxId || undefined);
+      } else {
+        await pauseAgentSandbox(campaignId, agId);
+      }
+      pausedNames.push(getAgentDisplayName(agId));
+      if (contextId && lastActiveAgentByContext.get(contextId) === agId) {
+        lastActiveAgentByContext.delete(contextId);
+      }
+    }
+
+    const nameList = pausedNames.join(", ");
     return {
       handled: true,
-      replyText: `🛑 **Workstations Paused ($0 Compute Mode)**\n\nI have securely paused the cloud microVMs and frozen all browser sessions.\n\n• **MicroVM Status:** Paused ($0 compute)\n• **State & Memory:** Opened tabs, logins, and cookies 100% preserved in persistent sandbox\n• **Agent Status:** Resting / Idle`,
+      replyText: `🛑 **${nameList} Powered Down ($0 Compute Mode)**\n\nThe workstation has been safely shut down into standby. All session data, open tabs, logins, and cookies are 100% preserved in your cloud vault.\n\n• **Status:** Standby ($0 compute)\n• **Preserved:** Full Chrome session state\n• **Action:** Reply anytime to wake this or another agent!`,
     };
   }
 
@@ -1774,6 +1940,38 @@ export async function handleAgencyExecutiveCommand(
       }
     }
 
+    // Live verification for Freestyle Agents (like ig_shader) so DB is always 100% in sync with reality
+    for (const agId of Array.from(activeIds)) {
+      if (isFreestyleAgent(agId)) {
+        try {
+          const { getFreestyleClient } = await import("./freestyle-sandbox");
+          const freestyle = await getFreestyleClient();
+          if (freestyle) {
+            const existing = await db
+              .select({ sandboxId: agentSandboxes.sandboxId })
+              .from(agentSandboxes)
+              .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agId)))
+              .get();
+            const vmId = existing?.sandboxId;
+            if (vmId) {
+              const vmRef = freestyle.vms.ref(vmId);
+              const vmData = await vmRef.data().catch(() => null);
+              if (vmData && vmData.state === "paused") {
+                activeIds.delete(agId);
+                await db
+                  .update(agentSandboxes)
+                  .set({ status: "paused", activeAt: new Date().toISOString() })
+                  .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agId)))
+                  .run();
+              }
+            }
+          }
+        } catch (checkErr: any) {
+          console.warn(`[AgencyActions] Freestyle status check notice for ${agId}:`, checkErr.message);
+        }
+      }
+    }
+
     if (activeIds.size === 0) {
       return {
         handled: true,
@@ -1788,7 +1986,7 @@ export async function handleAgencyExecutiveCommand(
 
     return {
       handled: true,
-      replyText: `🖥️ **Active Workstations (${activeIds.size} Running)**\n\n${listLines.join("\n")}\n\nAll other workstations remain paused at $0 compute. Reply **"pause"** to put them to sleep, or give any task for an active agent.`,
+      replyText: `🖥️ **Active Workstations (${activeIds.size} Running)**\n\n${listLines.join("\n")}\n\nAll other workstations remain paused at $0 compute. Reply **"pause"** or **"turn off <agent>"** to put them to sleep, or give any task for an active agent.`,
     };
   }
 
