@@ -682,10 +682,18 @@ ${task}`;
         if (parsed.learned_routes && agentId) {
           saveAgentHermesRoutes(agentId, parsed.learned_routes).catch(() => {});
         }
+        let screenshotB64 = parsed.screenshot_b64 || "";
+        if (!screenshotB64 && typeof sb.screenshot === "function") {
+          try {
+            const shot = await sb.screenshot();
+            if (shot && shot.length > 0) screenshotB64 = Buffer.from(shot).toString("base64");
+          } catch {}
+        }
+
         return {
           success: parsed.success !== false,
           summary: parsed.summary || parsed.result || "Task completed on workstation.",
-          screenshotB64: parsed.screenshot_b64 || "",
+          screenshotB64,
           mode: "hermes",
           learnedRoutes: parsed.learned_routes,
         };

@@ -121,20 +121,30 @@ async function sendTelegramPhoto(chatId: number | string, photoUrl: string, capt
   try {
     // If photo is a data URL (base64)
     if (photoUrl.startsWith("data:")) {
+      const mimeMatch = photoUrl.match(/^data:(image\/[a-zA-Z0-9.-]+);base64,/);
+      const mimeType = mimeMatch ? mimeMatch[1] : "image/png";
+      const ext = mimeType.includes("jpeg") || mimeType.includes("jpg") ? "jpg" : "png";
       const base64Data = photoUrl.replace(/^data:image\/[a-zA-Z0-9.-]+;base64,/, "");
       const buffer = Buffer.from(base64Data, "base64");
       const formData = new FormData();
       formData.append("chat_id", String(chatId));
-      formData.append("photo", new Blob([buffer], { type: "image/jpeg" }), "visual.jpg");
+      formData.append("photo", new Blob([buffer], { type: mimeType }), `screenshot.${ext}`);
       if (caption) formData.append("caption", caption.slice(0, 1000));
 
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+      const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
         method: "POST",
         body: formData,
       });
+      const resJson = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.error("[Telegram photo error]:", resJson);
+        if (caption) {
+          await sendTelegramMessage(chatId, caption);
+        }
+      }
     } else {
       // If photo is a public HTTP URL
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+      const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -143,6 +153,13 @@ async function sendTelegramPhoto(chatId: number | string, photoUrl: string, capt
           caption: caption ? caption.slice(0, 1000) : undefined,
         }),
       });
+      const resJson = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.error("[Telegram photo error]:", resJson);
+        if (caption) {
+          await sendTelegramMessage(chatId, caption);
+        }
+      }
     }
   } catch (err) {
     console.error("[Telegram photo error]:", err);

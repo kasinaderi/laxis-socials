@@ -161,18 +161,24 @@ export async function askMasterAgent(
       return { text: execAction.replyText, mediaUrl: execAction.mediaUrl };
     }
 
-    // 2. ANTI-HALLUCINATION GUARD: If a workstation is active and user asks to "see" it,
-    //    NEVER let the LLM reply with text — always capture a screenshot immediately.
+    // 2. ANTI-HALLUCINATION GUARD: If user asks for a screenshot or to "see" the screen,
+    //    NEVER let the LLM reply with text or pretend JSON — always capture a real screenshot immediately.
     const lower = userPrompt.toLowerCase().trim();
+    const cleanLower = lower.replace(/[?!.,]+$/, "").trim();
     const activeMap: Map<string, any> = (global as any).__activeSandboxes;
     const lastActiveMap: Map<string, string> = (global as any).__lastActiveAgentByContext;
-    const activeAgentId = lastActiveMap?.get(contextId) || (activeMap && activeMap.size > 0 ? Array.from(activeMap.keys())[0]?.replace("default_campaign_", "") : null);
-    const activeSandbox = activeAgentId ? activeMap?.get(`default_campaign_${activeAgentId}`) : null;
+    let activeAgentId = lastActiveMap?.get(contextId) || (activeMap && activeMap.size > 0 ? Array.from(activeMap.keys())[0]?.replace("default_campaign_", "") : null);
+    if (!activeAgentId) activeAgentId = "ig_shader";
+    let activeSandbox = activeAgentId ? activeMap?.get(`default_campaign_${activeAgentId}`) : null;
 
     const isRequestingVisual =
+      cleanLower === "screenshot" ||
+      cleanLower === "screen" ||
+      lower.includes("screenshot") ||
+      lower.includes("screen shot") ||
       lower.includes("let me see") ||
-      lower === "show" ||
-      lower === "show me" ||
+      cleanLower === "show" ||
+      cleanLower === "show me" ||
       lower.includes("i want to see") ||
       lower.includes("i told you let me see") ||
       lower.includes("why do i have to explain") ||
@@ -181,23 +187,31 @@ export async function askMasterAgent(
       lower.includes("show me the photo") ||
       lower.includes("send it here") ||
       lower.includes("send it again") ||
-      lower === "photo" ||
-      lower === "pic" ||
-      lower === "picture";
+      cleanLower === "photo" ||
+      cleanLower === "pic" ||
+      cleanLower === "picture";
 
-    if (isRequestingVisual && activeSandbox && typeof activeSandbox.screenshot === "function") {
+    if (isRequestingVisual) {
       try {
-        const { analyzeWorkstationScreenshot, getAgentDisplayName } = await import("./agency-actions");
-        const shotBuffer = await activeSandbox.screenshot().catch(() => null);
-        if (shotBuffer && shotBuffer.length > 0) {
-          const screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
-          const displayName = getAgentDisplayName(activeAgentId!);
-          const visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} Live Workstation Display`);
-          const mediaUrl = `data:image/png;base64,${screenshotBase64}`;
-          return {
-            text: `📸 **Live Workstation Screenshot: ${displayName}**\n\n${visualAnalysis || "Current live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Status:** Active Live VNC`,
-            mediaUrl,
-          };
+        if (!activeSandbox) {
+          const { getOrCreateAgentSandbox } = await import("./sandbox");
+          await getOrCreateAgentSandbox("default_campaign", activeAgentId!, true);
+          activeSandbox = (global as any).__activeSandboxes?.get(`default_campaign_${activeAgentId}`);
+        }
+
+        if (activeSandbox && typeof activeSandbox.screenshot === "function") {
+          const { analyzeWorkstationScreenshot, getAgentDisplayName } = await import("./agency-actions");
+          const shotBuffer = await activeSandbox.screenshot().catch(() => null);
+          if (shotBuffer && shotBuffer.length > 0) {
+            const screenshotBase64 = Buffer.from(shotBuffer).toString("base64");
+            const displayName = getAgentDisplayName(activeAgentId!);
+            const visualAnalysis = await analyzeWorkstationScreenshot(shotBuffer, `${displayName} Live Workstation Display`);
+            const mediaUrl = `data:image/png;base64,${screenshotBase64}`;
+            return {
+              text: `📸 **Live Workstation Screenshot: ${displayName}**\n\n${visualAnalysis || "Current live workstation display captured."}\n\n• **Workstation:** ${displayName}\n• **Status:** Active Live VNC`,
+              mediaUrl,
+            };
+          }
         }
       } catch (guardErr: any) {
         console.warn("[MasterAgent] Anti-hallucination screenshot guard notice:", guardErr.message);
@@ -238,7 +252,8 @@ OPERATING PRINCIPLES (UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY → DEL
 
 2. TRUTHFUL EVIDENCE & ANTI-HALLUCINATION WORKSTATION RULE:
    - Report ONLY what visible pixels and verified tool output establish.
-   - NEVER invent fake terminal logs, fake screenshot filenames (e.g. [SCREENSHOT_LOG: ...]), fake search results, or fake articles.
+   - NEVER invent fake terminal logs, fake screenshot filenames (e.g. [SCREENSHOT_LOG: ...]), fake JSON actions (e.g. {"action": "CAPTURE_SCREENSHOT", ...}), or fake Markdown image tags (![Screenshot...]).
+   - Real screenshots are attached automatically as image attachments by the system. NEVER pretend in text that you captured or displayed a screenshot.
    - NEVER claim that you launched Chrome, navigated to a URL, clicked elements, or completed an action unless real tool output exists in context.
    - If an agent PC is paused, report that it is paused.
    - If a confirmation is pending (e.g. waiting for YES/CONFIRM), tell the user: "Please reply YES or CONFIRM to wake the PC and execute the task."

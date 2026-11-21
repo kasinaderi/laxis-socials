@@ -373,16 +373,18 @@ export function resolveNavigationTarget(text: string): NavigationIntent {
     if (m && m[1]) {
       fbQuery = m[1].replace(/facebook|fb/gi, "").trim();
     }
-    fbQuery = fbQuery || "forex trading";
+    const isSearch = Boolean(fbQuery);
     const isGroups = lower.includes("group") || lower.includes("groups");
 
     return {
       baseUrl: "https://www.facebook.com",
       targetUrl: "https://www.facebook.com",
-      cleanTopic: `Facebook ${isGroups ? "Groups" : "Search"}: "${fbQuery}"`,
+      cleanTopic: isSearch
+        ? `Facebook ${isGroups ? "Groups" : "Search"}: "${fbQuery}"`
+        : "Navigate to Facebook",
       searchQuery: fbQuery,
       platform: "facebook",
-      intentType: "search",
+      intentType: isSearch ? "search" : "browse",
       targetTab: isGroups ? "groups" : "all",
       isChart: false,
     };
@@ -1003,7 +1005,15 @@ export async function executeAgentChromeTask(
         console.log(`[Hermes] Active on ${displayName} VM. Handing off full PC control to in-VM Hermes agent...`);
         const hermesResult = await runHermesTask(activeSb, rawPrompt, 180_000, agentId);
         if (hermesResult.mode === "hermes" && hermesResult.success) {
-          const mediaUrl = hermesResult.screenshotB64 ? `data:image/png;base64,${hermesResult.screenshotB64}` : undefined;
+          let mediaUrl = hermesResult.screenshotB64 ? `data:image/png;base64,${hermesResult.screenshotB64}` : undefined;
+          if (!mediaUrl && typeof activeSb.screenshot === "function") {
+            try {
+              const shot = await activeSb.screenshot();
+              if (shot && shot.length > 0) {
+                mediaUrl = `data:image/png;base64,${Buffer.from(shot).toString("base64")}`;
+              }
+            } catch {}
+          }
           await db.update(agents).set({ status: "idle", currentTask: null }).where(eq(agents.id, agentId)).run();
           const deliverableId = `deliv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
           await db.insert(agentDeliverables).values({
@@ -1784,9 +1794,14 @@ export async function handleAgencyExecutiveCommand(
   }
 
   // 4b. Action: Live Workstation Screenshot Capture on demand (ONLY if NOT accompanied by a new browsing/search/navigation task!)
+  const cleanPunctLower = lower.replace(/[?!.,]+$/, "").trim();
   const isScreenshotRequest =
     !isTaskOrBrowse &&
-    (/(?:show|send|give|bring|take|capture|get)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?screenshot/i.test(lower) ||
+    (cleanPunctLower === "screenshot" ||
+      cleanPunctLower === "screen" ||
+      lower.includes("screenshot") ||
+      lower.includes("screen shot") ||
+      /(?:show|send|give|bring|take|capture|get)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?screenshot/i.test(lower) ||
       /(?:cant|can't|cannot|didn't|didnt)\s+(?:see|find|get)\s+(?:the|that|any)?\s*screenshot/i.test(lower) ||
       lower.includes("show me the screenshot") ||
       lower.includes("where is the screenshot") ||
@@ -1799,9 +1814,8 @@ export async function handleAgencyExecutiveCommand(
       lower.includes("cant see the screenshot") ||
       lower.includes("can't see the screenshot") ||
       lower.includes("take that screenshot") ||
-      lower === "show screenshot" ||
-      lower === "take screenshot" ||
-      lower === "screenshot");
+      cleanPunctLower === "show screenshot" ||
+      cleanPunctLower === "take screenshot");
 
   if (isScreenshotRequest) {
     let targetAgentId = extractAgentFromPrompt(text, contextId);
