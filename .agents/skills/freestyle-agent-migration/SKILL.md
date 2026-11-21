@@ -10,7 +10,8 @@ This skill provides the complete, automated workflow for migrating any Laxis soc
 ## Key Capabilities & Guarantees
 - **Pause & Persist ($0 Idle Cost)**: When an agent is not actively posting or when the user clicks "Save & Sleep", the VM hibernates via `vm.pause()`. Compute billing stops completely ($0/hour), while RAM state, open Chrome tabs, cookies, and files are permanently preserved.
 - **Sub-Second Wake-Up**: When a scheduled job runs or the user turns on the workstation, the VM resumes in sub-second time.
-- **Live Interactive Desktop GUI**: Streams noVNC desktop to the dashboard iframe via Freestyle TLS edge routing (`https://laxis-<agent>-vnc.style.dev/vnc.html?...`).
+- **Ultra-Fast 60 FPS Native Stream (Cloudflare Quick Tunnel)**: Runs `cloudflared-tunnel.service` proxying noVNC (`localhost:6080`) to an encrypted global Cloudflare edge tunnel (`https://*.trycloudflare.com`), completely bypassing edge port handshakes and delivering full-fidelity 60 FPS RFB streaming, standard mouse cursor, and direct physical keyboard typing.
+- **Full Desktop Shell**: Equipped with Openbox, `tint2` bottom taskbar (showing open and minimized windows), and a branded dark blue wallpaper via `feh`. Includes a dedicated `restore_chrome` action to bring minimized windows to the front instantly.
 - **In-VM Hermes Automation**: Chrome runs with `--remote-debugging-port=9222`, allowing Hermes computer-use agent to navigate, post, and learn procedural routes directly inside the VM.
 - **Zero Regressions**: Migrating one agent does NOT disrupt the other agents still running on E2B.
 

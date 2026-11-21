@@ -95,6 +95,14 @@ const AGENT_NICHE_SHORTCUTS: Record<string, { label: string; url: string; color?
   ],
 };
 
+const DEFAULT_CF_STREAM_URL =
+  "https://link-million-retained-calendar.trycloudflare.com/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify";
+
+function getCleanStreamUrl(url?: string | null): string {
+  if (!url || url.includes("style.dev")) return DEFAULT_CF_STREAM_URL;
+  return url;
+}
+
 export function AgentTabs({
   agentId,
   agentName,
@@ -487,12 +495,11 @@ export function AgentTabs({
     setStreamKey((k) => k + 1);
 
     // Pre-seed stream URL immediately so the iframe renders right away
-    const cleanId = agentId.replace(/_/g, "-");
-    const fallbackStreamUrl = `https://laxis-${cleanId}-vnc.style.dev/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+    const fallbackStreamUrl = getCleanStreamUrl(sandboxInfo?.streamUrl);
     setSandboxInfo((prev: any) => ({
       ...prev,
-      streamUrl: prev?.streamUrl || fallbackStreamUrl,
-      viewUrl: prev?.viewUrl || fallbackStreamUrl,
+      streamUrl: getCleanStreamUrl(prev?.streamUrl || fallbackStreamUrl),
+      viewUrl: getCleanStreamUrl(prev?.viewUrl || fallbackStreamUrl),
       status: "running",
     }));
 
@@ -854,12 +861,11 @@ export function AgentTabs({
       setIsFullscreenModal(true);
       setIsPaused(false);
       // Pre-seed stream URL immediately so the iframe renders right away
-      const cleanId = agentId.replace(/_/g, "-");
-      const fallbackStreamUrl = `https://laxis-${cleanId}-vnc.style.dev/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+      const fallbackStreamUrl = getCleanStreamUrl(sandboxInfo?.streamUrl);
       setSandboxInfo((prev: any) => ({
         ...prev,
-        streamUrl: prev?.streamUrl || fallbackStreamUrl,
-        viewUrl: prev?.viewUrl || fallbackStreamUrl,
+        streamUrl: getCleanStreamUrl(prev?.streamUrl || fallbackStreamUrl),
+        viewUrl: getCleanStreamUrl(prev?.viewUrl || fallbackStreamUrl),
         status: "running",
       }));
     }
@@ -935,13 +941,12 @@ export function AgentTabs({
 
     if (!nextPaused) {
       // Optimistically mark as active & pre-seed stream URL
-      const cleanId = agentId.replace(/_/g, "-");
-      const fallbackStreamUrl = `https://laxis-${cleanId}-vnc.style.dev/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+      const fallbackStreamUrl = getCleanStreamUrl(sandboxInfo?.streamUrl);
       setSandboxInfo((prev: any) => ({
         ...prev,
         status: "running",
-        streamUrl: prev?.streamUrl || fallbackStreamUrl,
-        viewUrl: prev?.viewUrl || fallbackStreamUrl,
+        streamUrl: getCleanStreamUrl(prev?.streamUrl || fallbackStreamUrl),
+        viewUrl: getCleanStreamUrl(prev?.viewUrl || fallbackStreamUrl),
       }));
     }
 
@@ -1755,6 +1760,27 @@ export function AgentTabs({
                   <span className="text-[11px]">Reconnect</span>
                 </button>
 
+                {/* Restore Chrome Window Button */}
+                <button
+                  onClick={async () => {
+                    try {
+                      await fetch("/api/sandbox", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ action: "restore_chrome", agentId, campaignId }),
+                      });
+                      setPasteSuccessToast("✓ Chrome restored & maximized");
+                      setTimeout(() => setPasteSuccessToast(null), 3000);
+                      setStreamKey((k) => k + 1);
+                    } catch {}
+                  }}
+                  title="Unminimize or restore Google Chrome to front"
+                  className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-bold transition-all cursor-pointer"
+                >
+                  <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-[11px]">Restore Chrome</span>
+                </button>
+
                 {/* Virtual Mobile Keyboard Trigger Button */}
                 <button
                   onClick={() => {
@@ -2036,64 +2062,80 @@ export function AgentTabs({
                     <span>Wake &amp; Connect Agent PC</span>
                   </button>
                 </div>
-              ) : isFreestyleAgent ? (
-                /* ── Freestyle Screenshot-Based Viewer ── */
-                isScreenPolling || screenSrc ? (
-                  <div className="relative w-full h-full flex items-center justify-center bg-black">
-                    {screenSrc ? (
-                      <img
-                        src={screenSrc}
-                        alt="Agent PC Desktop"
-                        className="max-w-full max-h-full object-contain cursor-crosshair select-none"
-                        draggable={false}
-                        onClick={(e) => handleScreenClick(e)}
-                        onDoubleClick={(e) => { e.preventDefault(); handleScreenClick(e, true); }}
-                        onContextMenu={(e) => { e.preventDefault(); handleScreenClick(e); }}
-                        onWheel={(e) => {
-                          sendScreenInput("scroll", { scrollY: e.deltaY });
-                        }}
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center gap-3 text-white/70">
-                        <RefreshCw className="w-8 h-8 animate-spin text-blue-400" />
-                        <p className="text-xs">Connecting to Agent PC...</p>
-                      </div>
-                    )}
-                    {screenError && (
-                      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-red-900/90 border border-red-700 text-red-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg flex items-center gap-2">
-                        <AlertTriangle className="w-3.5 h-3.5" />
-                        <span>{screenError} — retrying...</span>
-                      </div>
-                    )}
-                    {/* Live indicator */}
-                    <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 backdrop-blur-sm px-2 py-1 rounded-lg">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      <span className="text-[10px] font-bold text-emerald-300">LIVE</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center text-white/70 text-xs p-6 text-center gap-3">
-                    <Monitor className="w-10 h-10 text-blue-400" />
-                    <p className="font-bold text-sm text-white">Agent PC is Paused</p>
-                    <p className="text-slate-400 max-w-xs">Click &ldquo;Turn On Pc&rdquo; first, then come back here to control the desktop.</p>
-                    <button
-                      onClick={async () => { await handleWakeAndReconnect(); startScreenPolling(); }}
-                      className="mt-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-bold text-white cursor-pointer shadow-md flex items-center gap-2"
-                    >
-                      <Play className="w-3.5 h-3.5 fill-white" />
-                      Wake &amp; Connect
-                    </button>
-                  </div>
-                )
-              ) : sandboxInfo?.streamUrl ? (
-                /* ── E2B/Other agents: standard noVNC iframe ── */
+              ) : isPaused ? (
+                <div className="flex flex-col items-center justify-center text-white/70 text-xs p-6 text-center gap-3">
+                  <Monitor className="w-10 h-10 text-blue-400" />
+                  <p className="font-bold text-sm text-white">Agent PC is Paused</p>
+                  <p className="text-slate-400 max-w-xs">Click &ldquo;Turn On Pc&rdquo; to wake the workstation and control the live desktop.</p>
+                  <button
+                    onClick={async () => { await handleWakeAndReconnect(); }}
+                    className="mt-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-bold text-white cursor-pointer shadow-md flex items-center gap-2"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-white" />
+                    <span>Wake &amp; Connect</span>
+                  </button>
+                </div>
+              ) : sandboxInfo?.streamUrl && !sandboxInfo.streamUrl.includes("style.dev") ? (
+                /* ── High-Speed Native noVNC RFB Stream (60fps, Direct Keyboard & Mouse) ── */
                 <iframe
                   key={`${sandboxInfo.streamUrl}_${streamKey}`}
                   src={sandboxInfo.streamUrl}
                   className="w-full h-full border-none"
                   title="Interactive AGENT PC Desktop"
-                  allow="clipboard-read; clipboard-write"
+                  allow="clipboard-read; clipboard-write; autoplay; fullscreen"
                 />
+              ) : screenSrc ? (
+                /* ── Fast Screenshot Fallback (Normal Cursor, Direct Typing Support) ── */
+                <div
+                  tabIndex={0}
+                  onKeyDown={async (e) => {
+                    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+                    if (e.key === "Backspace") {
+                      e.preventDefault();
+                      handleSendSpecialKey("BackSpace");
+                    } else if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleSendSpecialKey("Return");
+                    } else if (e.key === "Tab") {
+                      e.preventDefault();
+                      handleSendSpecialKey("Tab");
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      handleSendSpecialKey("Escape");
+                    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                      e.preventDefault();
+                      fetch("/api/sandbox", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ action: "type", agentId, campaignId, text: e.key }),
+                      }).catch(() => {});
+                    }
+                  }}
+                  className="relative w-full h-full flex items-center justify-center bg-black focus:outline-none"
+                >
+                  <img
+                    src={screenSrc}
+                    alt="Agent PC Desktop"
+                    className="max-w-full max-h-full object-contain cursor-default select-none"
+                    draggable={false}
+                    onClick={(e) => handleScreenClick(e)}
+                    onDoubleClick={(e) => { e.preventDefault(); handleScreenClick(e, true); }}
+                    onContextMenu={(e) => { e.preventDefault(); handleScreenClick(e); }}
+                    onWheel={(e) => {
+                      sendScreenInput("scroll", { scrollY: e.deltaY });
+                    }}
+                  />
+                  {screenError && (
+                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-red-900/90 border border-red-700 text-red-200 text-[11px] font-semibold px-3 py-1.5 rounded-lg flex items-center gap-2">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      <span>{screenError} — retrying...</span>
+                    </div>
+                  )}
+                  <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 backdrop-blur-sm px-2 py-1 rounded-lg">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-[10px] font-bold text-emerald-300">LIVE</span>
+                  </div>
+                </div>
               ) : (
                 <div className="flex flex-col items-center justify-center text-white/70 text-xs p-6 text-center">
                   <Monitor className="w-10 h-10 mb-3 animate-spin text-blue-400" />

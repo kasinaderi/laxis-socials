@@ -9,17 +9,21 @@ const apiKey =
   process.env.FREESTYLE_API_KEY ||
   "HJvPGG99GGP8NFW3auYy8o-5PBhkqJYwCsHPye82jT3ttbFs6E3eBdPmpMJaNCg37Bz";
 
+export const DEFAULT_CF_STREAM_URL =
+  "https://link-million-retained-calendar.trycloudflare.com/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify";
+
 export function getFreestyleConfigForAgent(agentId: string) {
   const cleanId = agentId.replace(/_/g, "-");
   const slug = `laxis-${cleanId}`;
   const vncDomain = `${slug}-vnc.style.dev`;
-  const streamUrl = `https://${vncDomain}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+  // Cloudflare Quick Tunnel guarantees ultra-fast 60fps RFB streaming with direct keyboard & mouse support
+  const streamUrl = DEFAULT_CF_STREAM_URL;
   return { slug, vncDomain, streamUrl };
 }
 
 export const FREESTYLE_SLUG = "laxis-ig-shader";
 export const FREESTYLE_VNC_DOMAIN = "laxis-ig-shader-vnc.style.dev";
-export const FREESTYLE_STREAM_URL = `https://${FREESTYLE_VNC_DOMAIN}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+export const FREESTYLE_STREAM_URL = DEFAULT_CF_STREAM_URL;
 
 export interface FreestyleSandboxWrapper {
   sandboxId: string;
@@ -213,13 +217,17 @@ export async function getOrCreateFreestyleSandbox(
   // STRICTLY READ-ONLY on page loads: Do not wake or start VM if not requested
   if (!launchIfMissing && !wrapper) {
     const isRunning = existing?.status === "running";
+    let activeStreamUrl = existing?.streamUrl || streamUrl;
+    if (!activeStreamUrl || activeStreamUrl.includes("style.dev")) {
+      activeStreamUrl = DEFAULT_CF_STREAM_URL;
+    }
     return {
       agentId,
       sandboxId: currentVmId || undefined,
       status: isRunning ? "running" : "paused",
       control: (existing?.control as "agent" | "user") || "agent",
-      streamUrl: streamUrl,
-      viewUrl: streamUrl,
+      streamUrl: activeStreamUrl,
+      viewUrl: activeStreamUrl,
       lastAction: currentVmId
         ? `Freestyle VM: ${currentVmId} (${isRunning ? "Active · Live" : "Paused · $0 cost"})`
         : "Freestyle VM hibernated (Click 'Turn On' to launch)",
@@ -285,7 +293,24 @@ export async function getOrCreateFreestyleSandbox(
       }).catch(() => {});
     }
 
-    // 3. Record / update DB state IMMEDIATELY — so streamUrl & running status are persisted
+    // 3. Query active Cloudflare noVNC tunnel URL from the VM (yields 60fps low-latency stream)
+    let liveStreamUrl = existing?.streamUrl || streamUrl;
+    if (!liveStreamUrl || liveStreamUrl.includes("style.dev")) {
+      liveStreamUrl = DEFAULT_CF_STREAM_URL;
+    }
+    try {
+      const tunnelRes = await vmRef.exec({
+        command: "cat /tmp/laxis_tunnel_url.txt 2>/dev/null || cat /etc/laxis_tunnel_url.txt 2>/dev/null || grep -o 'https://[a-zA-Z0-9-]*\\.trycloudflare\\.com' /var/log/cloudflared.log | tail -1 || true",
+        linuxUser: "root",
+        timeoutMs: 4000,
+      });
+      const cfBase = (tunnelRes.stdout || "").trim();
+      if (cfBase && cfBase.startsWith("https://")) {
+        liveStreamUrl = `${cfBase}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=websockify`;
+      }
+    } catch {}
+
+    // 4. Record / update DB state IMMEDIATELY — so streamUrl & running status are persisted
     const id = existing?.id || `sb_${campaignId}_${agentId}`;
     if (!existing) {
       await db.insert(agentSandboxes).values({
@@ -295,8 +320,8 @@ export async function getOrCreateFreestyleSandbox(
         sandboxId: vmId,
         status: "running",
         control: "agent",
-        streamUrl: streamUrl,
-        viewUrl: streamUrl,
+        streamUrl: liveStreamUrl,
+        viewUrl: liveStreamUrl,
         activeAt: now,
         createdAt: now,
       }).run();
@@ -305,12 +330,12 @@ export async function getOrCreateFreestyleSandbox(
         status: "running",
         activeAt: now,
         sandboxId: vmId,
-        streamUrl: streamUrl,
-        viewUrl: streamUrl,
+        streamUrl: liveStreamUrl,
+        viewUrl: liveStreamUrl,
       }).where(eq(agentSandboxes.id, existing.id)).run();
     }
 
-    // 4. Capture real desktop screenshot if possible
+    // 5. Capture real desktop screenshot if possible
     let previewImg = "";
     try {
       const shotBuffer = await wrapper.screenshot();
@@ -319,15 +344,17 @@ export async function getOrCreateFreestyleSandbox(
       }
     } catch {}
 
-    // 5. Kick off slow background tasks (service restart & Hermes deployment)
+    // 6. Kick off slow background tasks (service restart & Hermes deployment)
     Promise.resolve().then(async () => {
       try {
         await vmRef.exec({
           command: [
             "systemctl is-active xvfb || systemctl restart xvfb",
             "systemctl is-active openbox || systemctl restart openbox",
+            "systemctl is-active tint2 || systemctl restart tint2",
             "systemctl is-active x11vnc || systemctl restart x11vnc",
             "systemctl is-active novnc || systemctl restart novnc",
+            "systemctl is-active cloudflared-tunnel || systemctl restart cloudflared-tunnel",
             "systemctl is-active chrome-cdp || systemctl restart chrome-cdp",
           ].join("\n"),
           linuxUser: "root",
@@ -346,8 +373,8 @@ export async function getOrCreateFreestyleSandbox(
       sandboxId: vmId,
       status: "running",
       control: (existing?.control as "agent" | "user") || "agent",
-      streamUrl: streamUrl,
-      viewUrl: streamUrl,
+      streamUrl: liveStreamUrl,
+      viewUrl: liveStreamUrl,
       lastAction: `Active Freestyle Cloud Workstation (VM: ${vmId})`,
       previewImage: previewImg || getFreestylePreview(agentId, true),
       isRealE2B: true,

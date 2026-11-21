@@ -156,6 +156,25 @@ export async function POST(req: Request) {
         await activeSb.commands.run(`nohup google-chrome --no-sandbox "${url || "https://google.com"}" >/dev/null 2>&1 &`);
       }
       return NextResponse.json({ success: true, url: url || "https://google.com" });
+    } else if (action === "restore_chrome") {
+      const sandbox = await getOrCreateAgentSandbox(campaignId, agentId, true);
+      const activeSb = (global as any).__activeSandboxes?.get(`${campaignId}_${agentId}`);
+      if (activeSb && activeSb.commands?.run) {
+        await activeSb.commands.run(`
+          DISPLAY=:0 wmctrl -x -r google-chrome.Google-chrome -b remove,hidden 2>/dev/null || true
+          DISPLAY=:0 wmctrl -x -a google-chrome.Google-chrome 2>/dev/null || true
+          DISPLAY=:0 wmctrl -x -r google-chrome.Google-chrome -b add,maximized_vert,maximized_horz 2>/dev/null || true
+          WID=$(DISPLAY=:0 xdotool search --class google-chrome | head -1 || true)
+          if [ -n "$WID" ]; then
+            DISPLAY=:0 xdotool windowactivate "$WID" 2>/dev/null || true
+            DISPLAY=:0 xdotool windowmap "$WID" 2>/dev/null || true
+            DISPLAY=:0 xdotool windowraise "$WID" 2>/dev/null || true
+          else
+            DISPLAY=:0 nohup google-chrome --no-sandbox "${url || "https://instagram.com"}" >/dev/null 2>&1 &
+          fi
+        `);
+      }
+      return NextResponse.json({ success: true, action: "restore_chrome" });
     } else if (action === "init_all") {
       const agentIds = ["fb_laxdollar", "fb_jotrainer", "fb_contentor", "ig_real", "ig_shader", "analytics"];
       const results = await Promise.allSettled(
