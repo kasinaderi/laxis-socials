@@ -114,7 +114,7 @@ export function getDefaultHermesConfigForAgent(agentId: string): HermesAgentConf
       modelProvider: "gemini",
       apiKey: HERMES_KEY_1,
       backupKeys: [HERMES_KEY_2, HERMES_KEY_3],
-      model: "gemini-3.5-flash",
+      model: "gemini-3.5-flash-lite",
     };
   } else if (agentId === "fb_contentor" || agentId === "ig_shader") {
     return {
@@ -122,7 +122,7 @@ export function getDefaultHermesConfigForAgent(agentId: string): HermesAgentConf
       modelProvider: "gemini",
       apiKey: HERMES_KEY_2,
       backupKeys: [HERMES_KEY_3, HERMES_KEY_1],
-      model: "gemini-3.5-flash",
+      model: "gemini-3.5-flash-lite",
     };
   } else {
     // ig_real, analytics, or master fallback
@@ -131,7 +131,7 @@ export function getDefaultHermesConfigForAgent(agentId: string): HermesAgentConf
       modelProvider: "gemini",
       apiKey: HERMES_KEY_3,
       backupKeys: [HERMES_KEY_1, HERMES_KEY_2],
-      model: "gemini-3.5-flash",
+      model: "gemini-3.5-flash-lite",
     };
   }
 }
@@ -188,7 +188,7 @@ def save_learned_route(route_key, data):
 
 # Load environment & pooled keys
 keys = []
-model = "gemini-3.5-flash"
+model = "gemini-3.5-flash-lite"
 
 if os.path.exists(ENV_FILE):
     with open(ENV_FILE) as f:
@@ -217,7 +217,9 @@ log(f"Hermes Agent Online. Model: {model}. Key Pool: {len(keys)} projects active
 
 def take_screenshot():
     try:
-        subprocess.run(["scrot", "-z", SHOT_FILE], check=True, timeout=5)
+        env = os.environ.copy()
+        env["DISPLAY"] = ":0"
+        subprocess.run(["scrot", "-z", SHOT_FILE], check=True, timeout=5, env=env)
         if os.path.exists(SHOT_FILE) and os.path.getsize(SHOT_FILE) > 1000:
             with open(SHOT_FILE, "rb") as f:
                 return base64.b64encode(f.read()).decode("utf-8")
@@ -253,27 +255,38 @@ def call_gemini(contents, system_prompt):
     }
     data = json.dumps(payload).encode("utf-8")
 
-    # Seamless Multi-Project Failover (Key 1 -> Key 2 -> Key 3)
-    for idx, key in enumerate(keys):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"}
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=22) as resp:
-                res_data = json.loads(resp.read().decode("utf-8"))
-                text = res_data["candidates"][0]["content"]["parts"][0]["text"]
-                return text
-        except urllib.error.HTTPError as e:
-            log(f"Key {idx + 1} HTTPError {e.code} — auto-failing over to next key...")
-            continue
-        except Exception as e:
-            log(f"Key {idx + 1} notice {e} — trying backup key...")
-            continue
+    # Fast multi-model failover pool (flash-lite prioritised for <1s latency)
+    models_to_try = [model, "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+    seen_m = set()
+    unique_models = []
+    for m in models_to_try:
+        if m and m not in seen_m:
+            seen_m.add(m)
+            unique_models.append(m)
 
-    log("All Gemini keys in failover pool exhausted.")
+    for m in unique_models:
+        for idx, key in enumerate(keys):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={key}"
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"}
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    res_data = json.loads(resp.read().decode("utf-8"))
+                    text = res_data["candidates"][0]["content"]["parts"][0]["text"]
+                    return text
+            except urllib.error.HTTPError as e:
+                log(f"Model {m} Key {idx + 1} HTTPError {e.code} — auto-failing over...")
+                if e.code in (404, 503):
+                    break
+                continue
+            except Exception as e:
+                log(f"Model {m} Key {idx + 1} notice {e} — trying next...")
+                continue
+
+    log("All Gemini keys and models in failover pool exhausted.")
     return None
 
 def extract_domain(url):
@@ -355,7 +368,8 @@ CORE OPERATING PRINCIPLES:
 2. DISMISS OBSTACLES: If any cookie banner, popup, sign-in prompt, or dialog appears, click Dismiss, Skip, Reject, or 'X'.
 3. MULTI-STEP BATCHES: For tasks like "follow 5 people" or "check 3 channels", complete one item per turn, track count in reason, and ONLY mark "done" when 100% complete!
 4. VERIFY BEFORE DONE: Only return action: "done" when the exact goal is clearly rendered and verified on screen.
-5. ADAPTIVE METHODOLOGY REASONING: Recorded golden routes and learned paths demonstrate the user's approved interaction pattern (e.g. how to navigate to groups, open composers, enter text cleanly, attach media, and publish). NEVER rigidly lock to the exact group or page ID from a recording if the current post topic calls for a different group or page! Use the demonstrated navigation and posting method to reach the appropriate target group or page for this specific post topic, and then execute the learned posting steps."""
+5. ADAPTIVE METHODOLOGY REASONING: Recorded golden routes and learned paths demonstrate the user's approved interaction pattern (e.g. how to navigate to groups, open composers, enter text cleanly, attach media, and publish). NEVER rigidly lock to the exact group or page ID from a recording if the current post topic calls for a different group or page! Use the demonstrated navigation and posting method to reach the appropriate target group or page for this specific post topic, and then execute the learned posting steps.
+6. AGENT WORKSTATION IDENTITY: Names like 'instashader', 'laxdollar', 'pintr', 'contentor', 'instareal' are names of this AI agent workstation, NOT Chrome extensions or browser add-ons! NEVER navigate to chrome://extensions or try to toggle browser extensions for them. Directly execute the requested web action (e.g. go to github.com and search for mausbot)."""
 
     for step in range(1, max_steps + 1):
         log(f"Step {step}/{max_steps}")
@@ -548,6 +562,7 @@ export async function installHermesInSandbox(sb: any, agentId?: string): Promise
 
     // 4. Deploy bash wrapper script
     const taskWrapperScript = `#!/bin/bash
+export DISPLAY=:0
 TASK="$1"
 python3 /home/user/hermes_agent.py "$TASK" 2>/dev/null
 `;

@@ -438,7 +438,7 @@ export async function pauseFreestyleSandbox(
             .from(agentSandboxes)
             .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agentId)))
             .get();
-          if (existing?.sandboxId) {
+          if (existing?.sandboxId && existing.sandboxId.startsWith("vm-")) {
             vmId = existing.sandboxId;
           }
         } catch {}
@@ -450,6 +450,12 @@ export async function pauseFreestyleSandbox(
         const list = await freestyle.vms.list();
         const rawVm = list.vms?.find((v: any) => v.slug === slug);
         vmId = rawVm?.id;
+        if (vmId) {
+          await db.update(agentSandboxes)
+            .set({ sandboxId: vmId })
+            .where(and(eq(agentSandboxes.campaignId, campaignId), eq(agentSandboxes.agentId, agentId)))
+            .run().catch(() => {});
+        }
       }
 
       if (vmId) {

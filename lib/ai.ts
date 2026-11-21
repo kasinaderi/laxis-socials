@@ -14,11 +14,12 @@ const key3 = process.env.GEMINI_HERMES_KEY_3 || "";
 const API_KEYS = [key1, key2, key3].filter(Boolean);
 
 // Validated fast Gemini models — ordered by reliability & capacity (updated 2026-11-21)
-// gemini-3.1-flash-lite has guaranteed capacity and ultra-low latency; gemini-3.5/3.8 may spike with 503
+// gemini-3.5-flash-lite and gemini-3.1-flash-lite have guaranteed capacity and sub-second latency
 export const VALID_FAST_MODELS = [
-  "gemini-3.1-flash-lite",     // Primary — ultra-fast, high capacity, 0.3s latency
-  "gemini-flash-lite-latest",  // Secondary — instant alias fallback
-  "gemini-3.5-flash",          // Tertiary — when capacity allows
+  "gemini-3.5-flash-lite",     // Primary — ultra-fast, high capacity, 0.9s latency
+  "gemini-3.1-flash-lite",     // Secondary — high capacity fallback
+  "gemini-flash-lite-latest",  // Tertiary — instant alias fallback
+  "gemini-3.5-flash",          // Fallback — when capacity allows
   "gemini-flash-latest",       // Alias fallback
   "gemini-3.8-flash",          // High capability fallback
 ];

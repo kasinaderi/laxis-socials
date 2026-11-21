@@ -1,4 +1,6 @@
 import { NextResponse, after } from "next/server";
+
+export const maxDuration = 300;
 import { askMasterAgent } from "@/lib/ai";
 import { generateSocialImage } from "@/lib/images";
 import { db } from "@/db";
@@ -491,6 +493,13 @@ export async function POST(req: Request) {
           metadata: JSON.stringify({ platform: "telegram" }),
           createdAt: nowIso,
         }).run();
+
+        // Send immediate typing indicator & acknowledgment for operational tasks so user is never left waiting in silence
+        sendTelegramChatAction(chatId, "typing").catch(() => {});
+        const isTaskCommand = /turn\s+on|wake|search|go\s+to|visit|browse|github|youtube|insta|facebook|power|pause|sleep/i.test(text || "");
+        if (isTaskCommand) {
+          sendTelegramMessage(chatId, "⚡ AGENTLAX received your objective. Dispatching to workstation...").catch(() => {});
+        }
 
         const masterRes = await askMasterAgent(
           text || "Hello",

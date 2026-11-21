@@ -213,7 +213,13 @@ async function handleAgencyExecutiveCommand(
   - If a VM is actually paused in the cloud, it self-heals the DB record to `"paused"`, preventing any phantom "1 Running" false positives.
 - **Fast-path single-word and regex commands** (`"any pc on?"`, `"power it off"`, `"power off <agent>"`, `"turn on <agent>"`, `"screenshot"`, `"pause"`, `"yes"`, `"status"`) bypass the LLM for sub-100ms response.
 - **Brain-first routing**: `compileInstructionWithBrain()` runs BEFORE any existing regex check.
-- **Gemini model**: Use `gemini-3.1-flash-lite` as PRIMARY (confirmed working). Do NOT use `gemini-3.5-flash` or `gemini-3.8-flash` as primary — both return 503 during high demand.
+- **Gemini model**: Use `gemini-3.5-flash-lite` and `gemini-3.1-flash-lite` as PRIMARY for both Master Agent and In-VM Hermes (confirmed working with sub-second latency). Do NOT use `gemini-3.5-flash` or `gemini-3.8-flash` as primary — both return 503 spikes during high demand.
+- **In-VM Hermes Execution Environment**:
+  - `export DISPLAY=:0` MUST be set in `/home/user/hermes_task.sh` and inside `take_screenshot()` (`env={"DISPLAY": ":0", ...os.environ}`). Without `DISPLAY=:0`, `scrot` fails with exit code 1 and leaves Hermes blind.
+  - **Workstation Identity Rule**: In Hermes's system prompt, declare that names like `instashader`, `laxdollar`, `pintr`, etc. are names of the workstation identity, NEVER Chrome extensions.
+  - **Clean Mission Dispatch**: When `executeAgentChromeTask` hands off to Hermes, pass the clean goal-oriented prompt (`Go to https://github.com and search for "mausbot"...`) rather than the raw user prompt with wake tokens.
+  - **Multi-Model In-VM Failover**: In `call_gemini()`, cycle through `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` → `gemini-flash-latest` with a fast 12s timeout per request.
+- **Telegram Webhook Execution**: Set `export const maxDuration = 300;` on `/api/telegram/webhook` and emit an immediate acknowledgment (`⚡ AGENTLAX received your objective...`) before long-running VM tasks.
 - **Anti-hallucination**: Strip fake JSON action blocks and fake markdown image tags from LLM output in `askMasterAgent()`. Real screenshots come from `activeSb.screenshot()` only — never fake `{"action":"CAPTURE_SCREENSHOT"}` responses.
 - **No default navigation target**: `resolveNavigationTarget()` must NOT inject any default search query (e.g. "forex trading") when none is specified in the instruction.
 

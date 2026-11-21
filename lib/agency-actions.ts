@@ -1046,7 +1046,11 @@ export async function executeAgentChromeTask(
       const hermesStatus = await checkHermesStatus(activeSb).catch(() => ({ installed: false, configured: false, version: "" }));
       if (hermesStatus.configured) {
         console.log(`[Hermes] Active on ${displayName} VM. Handing off full PC control to in-VM Hermes agent...`);
-        const hermesResult = await runHermesTask(activeSb, rawPrompt, 180_000, agentId);
+        // Clean operational prompt for Hermes: strip bare wake/agent identifiers so Hermes focuses directly on the web objective
+        const cleanHermesTask = baseUrl
+          ? `Go to ${baseUrl} and ${searchQuery ? `search for "${searchQuery}"` : cleanTopic}. Verify results and capture screenshot.`
+          : rawPrompt.replace(/^(?:can\s+you\s+)?(?:turn\s+on|wake|open|start)\s+(?:instashader|insta\s+shader|laxdollar|lax\s+dollar|pintr|contentor|insta\s+real)\s*(?:and|,)?\s*/i, "").trim();
+        const hermesResult = await runHermesTask(activeSb, cleanHermesTask, 90_000, agentId);
         if (hermesResult.mode === "hermes" && hermesResult.success) {
           let mediaUrl = hermesResult.screenshotB64 ? `data:image/png;base64,${hermesResult.screenshotB64}` : undefined;
           if (!mediaUrl && typeof activeSb.screenshot === "function") {
