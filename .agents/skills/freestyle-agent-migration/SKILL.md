@@ -45,14 +45,15 @@ node scripts/migrate_agent_to_freestyle.mjs fb_laxdollar
 
 The script automatically executes:
 1. **VM Provisioning**: Locates or creates a persistent Freestyle VM with `slug: "laxis-<agentId>"`.
-2. **TLS Routing**: Attaches an edge rule routing `laxis-<agentId>-vnc.style.dev` to port `6080` (noVNC websockify).
-3. **Headless Workstation Setup**: Installs Chrome Stable, Xvfb (`DISPLAY=:0`), Openbox, x11vnc, websockify, scrot, xdotool, and python3-websocket.
-4. **Service Configuration**: Starts systemd services for `xvfb`, `openbox`, `x11vnc`, `novnc`, and `chrome-cdp` (`127.0.0.1:9222`).
-5. **CDP & Screen Verification**: Confirms Chrome DevTools Protocol is responding and captures a test screenshot.
-6. **Code & Database Sync**:
-   - Adds the `agentId` to `FREESTYLE_MIGRATED_AGENTS` in `lib/sandbox.ts`.
-   - Updates the Turso SQLite `agent_sandboxes` table with the VM ID and Freestyle stream URL so UI tabs, Golden Route Recorder, and scheduled tasks connect instantly without old E2B references.
-7. **Pause to $0 Compute**: Pauses the VM immediately to protect free credits.
+2. **TLS Routing**: Attaches an edge rule routing `laxis-<agentId>-vnc.style.dev` to port `6080` (noVNC websockify) as secondary backup.
+3. **Headless Workstation Setup**: Installs Chrome Stable, Xvfb (`DISPLAY=:0`), Openbox, `tint2`, `feh`, `wmctrl`, `xdotool`, `x11vnc`, `novnc`, `websockify`, `scrot`, `python3-pil`, and `python3-websocket`.
+4. **Cloudflare Quick Tunnel**: Installs `/usr/local/bin/cloudflared` and enables `cloudflared-tunnel.service` to tunnel `localhost:6080` to Cloudflare's global edge network, delivering smooth 60 FPS streaming, direct physical keyboard typing, and standard mouse cursor.
+5. **Desktop Shell & Wallpaper**: Generates dark blue branded wallpaper (`feh --bg-fill /usr/share/backgrounds/laxis_wallpaper.png`) and runs `tint2.service` so minimized windows are always visible and clickable in the taskbar.
+6. **CDP & Screen Verification**: Confirms Chrome DevTools Protocol is responding on port 9222 and captures a test screenshot.
+7. **Code & Database Sync**:
+   - Automatically registers `agentId` in `FREESTYLE_MIGRATED_AGENTS` inside `lib/sandbox.ts`.
+   - Queries the active `https://*.trycloudflare.com` tunnel URL and updates Turso SQLite `agent_sandboxes` table so UI tabs, take-over modal, and pop-out window stream at 60 FPS immediately.
+8. **Pause to $0 Compute**: Pauses the VM immediately via `vm.pause()` to preserve all RAM, tabs, and cookies with $0 idle compute cost.
 
 ---
 
@@ -127,14 +128,20 @@ When the agent workstation wakes up, `initSandboxBrowserAndCdp(wrapper, agentId)
   - Only created once on initial VM creation (never on wake calls, preventing duplicate rules):
   - `freestyle tls create --domain <slug>-vnc.style.dev --from public --to vm=<vmId>,port=6080`
 
-### 5. Interactive Desktop Streaming Architecture (`/api/sandbox/screen`)
-- **Root Cause of `ERR_CONNECTION_CLOSED`**: The Freestyle edge router (`208.72.218.28`) drops external public WebSocket connections to `*.style.dev` domains. While connections succeed from inside the Freestyle network, public web browsers see `ERR_CONNECTION_CLOSED`.
-- **Solution — Native Screenshot-Stream Engine**:
-  - **GET `/api/sandbox/screen?agentId=xxx`**: Takes a snapshot via `DISPLAY=:0 scrot` inside the VM and returns raw PNG bytes via the authenticated Freestyle exec API (`api.freestyle.sh`).
-  - **POST `/api/sandbox/screen`**: Accepts `click`, `dblclick`, `move`, `scroll`, `key`, `type`, and `navigate` actions and injects them directly into X11 using `xdotool`.
-  - **Dynamic Scaling & Letterbox Compensation**: In `AgentTabs.tsx`, click coordinates are mapped from the rendered element to the native `1280x800` desktop taking letterbox / pillarbox black bars into account.
-  - **Sub-200ms Interactive Refresh**: Whenever the user clicks, types, or scrolls, the UI immediately re-fetches a fresh frame for near-instant visual feedback.
-  - **Automatic Fallback**: E2B agents continue using the standard noVNC iframe, while Freestyle agents automatically use the ultra-reliable screenshot-stream viewer.
+### 5. High-Speed 60 FPS Desktop Streaming Architecture (Cloudflare Quick Tunnel)
+- **Root Cause of `ERR_CONNECTION_CLOSED`**: The Freestyle edge router (`208.72.218.28`) drops external public WebSocket connections to `*.style.dev` domains.
+- **Solution — Cloudflare Quick Tunnel (`cloudflared-tunnel.service`)**:
+  - The VM runs `cloudflared tunnel --url http://localhost:6080` in the background.
+  - Generates a secure, public HTTPS/WSS URL (`https://<subdomain>.trycloudflare.com`) on Cloudflare's global edge network.
+  - Fully supports RFB WebSocket streaming (`wss://.../websockify`) without origin restrictions, framing blocks, or TLS handshake drops.
+  - Enables **native 60 FPS streaming, direct physical keyboard typing into Chrome, and standard arrow mouse pointer (`cursor-default`)**.
+  - The active URL is stored at `/etc/laxis_tunnel_url.txt` and synced automatically to Turso SQLite `agent_sandboxes.stream_url`.
+- **Desktop Shell & Window Management**:
+  - **Taskbar (`tint2.service`)**: Minimized windows remain clearly visible and clickable at the bottom of the screen.
+  - **Wallpaper (`feh`)**: Branded dark blue grid wallpaper prevents black void when windows are minimized.
+  - **Restore Chrome Action**: `/api/sandbox` (`action: "restore_chrome"`) runs `wmctrl` and `xdotool` to unminimize, maximize, and bring Google Chrome to the front instantly.
+- **Failover Screenshot Engine (`/api/sandbox/screen`)**:
+  - If the tunnel is momentarily reconnecting, the UI seamlessly falls back to the screenshot viewer with `cursor-default` and keyboard forwarding via `tabIndex={0}` + `onKeyDown`.
 
 ### 6. Git & Remote Deployment Configuration
 - When pushing to GitHub from Windows environments with multiple GitHub accounts, set the remote URL with the username:
