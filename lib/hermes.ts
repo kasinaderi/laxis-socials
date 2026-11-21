@@ -249,8 +249,7 @@ def xdotool_search(query):
       1. Click search input box using CDP to get its coordinates
       2. Use xdotool to physically click, clear, type, and submit
     """
-    import re as _re
-    clean_q = _re.sub(r"['\"]", "", query.strip())
+    clean_q = query.strip().replace("'", "").replace("\"", "")
     # First get search input coords via CDP
     info = run_cdp(["info"])
     # Try to find the search input position using CDP evaluate
@@ -278,7 +277,6 @@ def xdotool_search(query):
     x = pos.get("x", 640)
     y = pos.get("y", 50)
 
-    env = {**subprocess.os.environ, "DISPLAY": ":0"} if hasattr(subprocess, 'os') else {"DISPLAY": ":0", "PATH": "/usr/bin:/bin:/usr/local/bin"}
     try:
         import os as _os
         env = {**_os.environ, "DISPLAY": ":0"}
