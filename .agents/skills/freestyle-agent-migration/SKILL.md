@@ -140,7 +140,12 @@ When the agent workstation wakes up, `initSandboxBrowserAndCdp(wrapper, agentId)
   - Fully supports RFB WebSocket streaming (`wss://.../websockify`) without origin restrictions, framing blocks, or TLS handshake drops.
   - Enables **native 60 FPS streaming, direct physical keyboard typing into Chrome, and standard arrow mouse pointer (`cursor-default`)**.
   - The active URL is stored at `/etc/laxis_tunnel_url.txt` and synced automatically to Turso SQLite `agent_sandboxes.stream_url`.
-- **Desktop Shell & Window Management**:
+- **x11vnc XDamage Deadlock Fix**:
+  - `x11vnc` with virtual Xvfb display must be started with `-noxdamage -repeat -wait 10 -defer 10`.
+  - Without `-noxdamage`, XDamage extension events can deadlock `x11vnc`, causing it to accept TCP connections on port 5900 but hang indefinitely without sending the RFB banner (`RFB 003.008\n`), which causes noVNC to be stuck permanently on "Connecting...".
+- **Clean UI Separation**:
+  - The small preview viewport in the Computer tab displays a lightweight preview image (`previewImage` / `screenSrc`).
+  - The full 60 FPS noVNC interactive RFB stream is loaded inside the takeover modal ("Open Interactive PC" / "Take Over & Control") to prevent duplicate concurrent VNC sessions.
   - **Taskbar (`tint2.service`)**: Minimized windows remain clearly visible and clickable at the bottom of the screen.
   - **Wallpaper (`feh`)**: Branded dark blue grid wallpaper prevents black void when windows are minimized.
   - **Restore Chrome Action**: `/api/sandbox` (`action: "restore_chrome"`) runs `wmctrl` and `xdotool` to unminimize, maximize, and bring Google Chrome to the front instantly.
