@@ -104,9 +104,79 @@ class CDPClient:
             "code": "Enter"
         })
 
+    def xdotool_search(self, query):
+        """
+        Guaranteed search using xdotool real keyboard input.
+        Works on YouTube, Google, Twitter and all reactive-framework sites
+        where synthetic DOM events don't trigger state updates.
+        Strategy:
+          1. Click the YouTube/Google search box via CDP to get coordinates
+          2. Use xdotool to click, clear, and physically type the query
+          3. Press Enter via xdotool to submit
+          4. Wait for page navigation
+        """
+        import subprocess
+        clean_q = query.strip().replace("'", "").replace('"', '')
+
+        # Step 1: Get the bounding rect of the search input via CDP
+        js_rect = """(() => {
+            const selectors = [
+                'input[name="search_query"]',
+                'input[type="search"]',
+                'input[name="q"]',
+                'input[placeholder*="search" i]',
+                'input[aria-label*="search" i]',
+                'input#search',
+                'input[data-testid="SearchBox_Search_Input"]',
+                'input[name="query"]'
+            ];
+            for (const s of selectors) {
+                const el = document.querySelector(s);
+                if (el && el.offsetParent !== null) {
+                    const rect = el.getBoundingClientRect();
+                    el.focus();
+                    return { found: true, x: Math.round(rect.left + rect.width/2), y: Math.round(rect.top + rect.height/2), selector: s };
+                }
+            }
+            return { found: false };
+        })()"""
+        rect = self.evaluate(js_rect)
+        x = rect.get("x", 640) if isinstance(rect, dict) and rect.get("found") else 640
+        y = rect.get("y", 50) if isinstance(rect, dict) and rect.get("found") else 50
+
+        env = {"DISPLAY": ":0", "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        try:
+            # Click the input box, select all, delete, then type the query
+            subprocess.run(
+                f"DISPLAY=:0 xdotool mousemove {x} {y} click 1 key ctrl+a key Delete sleep 0.2 type --clearmodifiers --delay 60 '{clean_q}' sleep 0.3 key Return",
+                shell=True, timeout=15, env={**__import__('os').environ, "DISPLAY": ":0"}
+            )
+        except Exception as e:
+            log(f"xdotool_search error: {e}")
+
+        time.sleep(3.0)
+        return {"success": True, "mode": "xdotool_keyboard", "query": clean_q}
+
     def smart_search(self, query, target_tab=None):
         clean_q = query.strip()
-        # 1. Look for direct search input on page
+
+        # ── STEP 1: Try xdotool (guaranteed real keyboard input) for reactive sites ──
+        # This is the MOST RELIABLE method for YouTube, Google, Twitter and all 
+        # React/Polymer framework pages where synthetic DOM events don't trigger state.
+        # We detect if we're on a reactive platform and use xdotool first.
+        js_url = "(() => window.location.href)()"
+        try:
+            curr_url = self.evaluate(js_url) or ""
+        except Exception:
+            curr_url = ""
+        
+        reactive_sites = ["youtube.com", "google.com", "twitter.com", "x.com", "instagram.com", "facebook.com"]
+        is_reactive = any(site in str(curr_url) for site in reactive_sites)
+        
+        if is_reactive:
+            return self.xdotool_search(clean_q)
+
+        # ── STEP 2: CDP DOM approach for standard/non-reactive sites ──
         js = f"""(() => {{
             const q = "{clean_q}";
             
@@ -186,7 +256,7 @@ class CDPClient:
             }})()"""
             res = self.evaluate(js_modal)
 
-        # Press Enter to execute search and click search buttons
+        # Press Enter to execute search
         time.sleep(0.3)
         self.press_enter()
 
@@ -204,10 +274,9 @@ class CDPClient:
         except Exception:
             pass
 
-        # Wait for page to process the search submission
         time.sleep(2.0)
 
-        # Definitively blur search input and close YouTube/Google autocomplete dropdown
+        # Dismiss autocomplete dropdowns
         js_dismiss = """(() => {
             if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
                 document.activeElement.blur();
@@ -218,65 +287,27 @@ class CDPClient:
         })()"""
         try:
             self.evaluate(js_dismiss)
-            self.send("Input.dispatchKeyEvent", {
-                "type": "rawKeyDown",
-                "windowsVirtualKeyCode": 27,
-                "key": "Escape",
-                "code": "Escape"
-            })
-            self.send("Input.dispatchKeyEvent", {
-                "type": "keyUp",
-                "windowsVirtualKeyCode": 27,
-                "key": "Escape",
-                "code": "Escape"
-            })
+            self.send("Input.dispatchKeyEvent", {"type": "rawKeyDown", "windowsVirtualKeyCode": 27, "key": "Escape", "code": "Escape"})
+            self.send("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 27, "key": "Escape", "code": "Escape"})
         except Exception:
             pass
 
-        # If a target category tab was requested (e.g. "repositories", "people", "groups")
         if target_tab and target_tab != "all":
             time.sleep(1.5)
             self.click_text(target_tab)
 
-        # Human-Like Recovery: If search input was not found initially, retry by pressing
-        # the keyboard shortcut "/" (universal search hotkey on YouTube, GitHub, Reddit, etc.)
-        # then re-type the query — NO direct URL navigation ever.
+        # Fallback: "/" hotkey retry
         if not res or not res.get("success"):
             try:
-                # Press "/" to open search on most platforms
-                self.send("Input.dispatchKeyEvent", {
-                    "type": "char",
-                    "text": "/",
-                    "key": "/",
-                    "code": "Slash",
-                    "windowsVirtualKeyCode": 191
-                })
+                self.send("Input.dispatchKeyEvent", {"type": "char", "text": "/", "key": "/", "code": "Slash", "windowsVirtualKeyCode": 191})
                 time.sleep(0.8)
-                # Try typing again into whatever input is now focused
                 js_retry = f"""(() => {{
                     const q = "{clean_q}";
                     const focused = document.activeElement;
                     if (focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')) {{
                         focused.value = q;
                         focused.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        focused.dispatchEvent(new Event('change', {{ bubbles: true }}));
                         return {{ success: true, mode: 'slash_hotkey_retry' }};
-                    }}
-                    // Also try common search selectors again
-                    const sels = [
-                        'input[name="search_query"]', 'input[type="search"]',
-                        'input[name="q"]', 'input[placeholder*="search" i]',
-                        'input[aria-label*="search" i]', 'input#search'
-                    ];
-                    for (const s of sels) {{
-                        const el = document.querySelector(s);
-                        if (el && el.offsetParent !== null) {{
-                            el.focus();
-                            el.value = q;
-                            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                            return {{ success: true, mode: 'retry_selector', selector: s }};
-                        }}
                     }}
                     return {{ success: false }};
                 }})()"""

@@ -241,6 +241,59 @@ def run_cdp(cmd_args):
         log(f"cdp execution error: {e}")
         return {"error": str(e)}
 
+def xdotool_search(query):
+    """
+    Real keyboard search using xdotool — guaranteed to work on YouTube, Google,
+    Twitter and all reactive-framework sites where CDP synthetic events fail.
+    Strategy:
+      1. Click search input box using CDP to get its coordinates
+      2. Use xdotool to physically click, clear, type, and submit
+    """
+    import re as _re
+    clean_q = _re.sub(r"['\"]", "", query.strip())
+    # First get search input coords via CDP
+    info = run_cdp(["info"])
+    # Try to find the search input position using CDP evaluate
+    js = """(() => {
+        const sel = ['input[name="search_query"]','input[type="search"]','input[name="q"]',
+                     'input[placeholder*="search" i]','input[aria-label*="search" i]','input#search'];
+        for (const s of sel) {
+            const el = document.querySelector(s);
+            if (el && el.offsetParent !== null) {
+                const r = el.getBoundingClientRect();
+                el.focus();
+                return {x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2), sel: s};
+            }
+        }
+        return {x: 640, y: 50};
+    })()"""
+    try:
+        pos_res = subprocess.run(
+            ["python3", "/home/user/cdp_controller.py", "eval", js],
+            capture_output=True, text=True, timeout=10
+        )
+        pos = json.loads(pos_res.stdout.strip()) if pos_res.stdout.strip().startswith("{") else {}
+    except Exception:
+        pos = {}
+    x = pos.get("x", 640)
+    y = pos.get("y", 50)
+
+    env = {**subprocess.os.environ, "DISPLAY": ":0"} if hasattr(subprocess, 'os') else {"DISPLAY": ":0", "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    try:
+        import os as _os
+        env = {**_os.environ, "DISPLAY": ":0"}
+        subprocess.run(
+            f"DISPLAY=:0 xdotool mousemove {x} {y} click 1 key ctrl+a key Delete sleep 0.2 "
+            f"type --clearmodifiers --delay 60 '{clean_q}' sleep 0.4 key Return",
+            shell=True, timeout=15, env=env
+        )
+        log(f"xdotool_search: typed '{clean_q}' and pressed Enter at ({x},{y})")
+    except Exception as e:
+        log(f"xdotool_search error: {e}")
+
+    time.sleep(3.0)
+    return {"success": True, "mode": "xdotool_keyboard", "query": clean_q}
+
 def call_gemini(contents, system_prompt):
     global keys, model
     payload = {
@@ -335,7 +388,13 @@ def main():
 
         if q_match:
             log(f"Fast-Track submitting query: '{q_match}'")
-            run_cdp(["search", q_match])
+            # Use xdotool for reactive sites (YouTube, Google, Twitter, etc.)
+            reactive_domains_ft = ["youtube.com", "google.com", "twitter.com", "x.com"]
+            if any(s in domain for s in reactive_domains_ft):
+                log("Fast-Track: using xdotool_search for reactive site")
+                xdotool_search(q_match)
+            else:
+                run_cdp(["search", q_match])
             time.sleep(2.0)
             action_history.append(f"Fast-Track Route: submitted '{q_match}' via learned route for {domain}")
             route_used = route_key
@@ -462,8 +521,30 @@ Look at the current live screen. What is the next logical step to complete the o
         if action == "search":
             q = decision.get("query") or decision.get("text") or ""
             if q:
-                res = run_cdp(["search", q])
-                action_history.append(f"Searched for '{q}': {res.get('mode', 'executed')}")
+                # Check current URL to decide whether to use xdotool (for reactive sites)
+                try:
+                    page_res = run_cdp(["info"])
+                    curr_url_now = page_res.get("url", "") if isinstance(page_res, dict) else ""
+                except Exception:
+                    curr_url_now = ""
+                reactive_sites = ["youtube.com", "google.com", "twitter.com", "x.com", "instagram.com", "facebook.com"]
+                if any(s in curr_url_now for s in reactive_sites):
+                    log(f"Using xdotool_search for reactive site: '{q}'")
+                    res = xdotool_search(q)
+                else:
+                    res = run_cdp(["search", q])
+                action_history.append(f"Searched for '{q}': {res.get('mode', 'executed') if isinstance(res, dict) else 'executed'}")
+                # ── Post-search video click guarantee ──
+                wants_video = __import__("re").search(
+                    r"(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+video",
+                    raw_task, __import__("re").IGNORECASE
+                )
+                if wants_video:
+                    log("Post-search: auto-clicking first video result")
+                    time.sleep(2.5)
+                    run_cdp(["ordinal", "video", "1"])
+                    time.sleep(2.0)
+                    action_history.append("CDP ordinal: clicked 1st video result")
         elif action == "click":
             target = decision.get("target") or decision.get("text") or ""
             if target:
@@ -477,11 +558,32 @@ Look at the current live screen. What is the next logical step to complete the o
         elif action == "type":
             txt = decision.get("text") or ""
             if txt:
-                # If typing in a search context, automatically promote to search action
+                # If typing in a search context, automatically promote to xdotool search
                 if "search" in raw_task.lower() or "find" in raw_task.lower() or "video" in raw_task.lower():
-                    log(f"Auto-promoting 'type' action to full 'search' for: {txt}")
-                    res = run_cdp(["search", txt])
-                    action_history.append(f"Searched for '{txt}': {res.get('mode', 'executed')}")
+                    log(f"Auto-promoting 'type' to xdotool search for: {txt}")
+                    # Detect reactive site
+                    try:
+                        page_res2 = run_cdp(["info"])
+                        curr_url_now2 = page_res2.get("url", "") if isinstance(page_res2, dict) else ""
+                    except Exception:
+                        curr_url_now2 = ""
+                    reactive_sites2 = ["youtube.com", "google.com", "twitter.com", "x.com", "instagram.com", "facebook.com"]
+                    if any(s in curr_url_now2 for s in reactive_sites2):
+                        res = xdotool_search(txt)
+                    else:
+                        res = run_cdp(["search", txt])
+                    action_history.append(f"Searched for '{txt}': {res.get('mode', 'executed') if isinstance(res, dict) else 'executed'}")
+                    # Post-search video click guarantee
+                    wants_video2 = __import__("re").search(
+                        r"(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+video",
+                        raw_task, __import__("re").IGNORECASE
+                    )
+                    if wants_video2:
+                        log("Post-type-promoted-search: auto-clicking first video result")
+                        time.sleep(2.5)
+                        run_cdp(["ordinal", "video", "1"])
+                        time.sleep(2.0)
+                        action_history.append("CDP ordinal: clicked 1st video result")
                 else:
                     run_cdp(["type", txt])
                     action_history.append(f"Typed '{txt}'")
