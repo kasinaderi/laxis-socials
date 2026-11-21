@@ -729,7 +729,8 @@ export async function pauseAllAgentSandboxes(campaignId: string = "default_campa
     for (const s of allDbSandboxes) {
       if (isFreestyleAgent(s.agentId)) {
         try {
-          await pauseFreestyleSandbox(campaignId, s.agentId);
+          // Pass the stored sandboxId (= VM ID) so pause uses direct vmRef — no vms.list() needed
+          await pauseFreestyleSandbox(campaignId, s.agentId, s.sandboxId || undefined);
           console.log(`[AgencyActions] Freestyle persistent VM (${s.agentId}) paused to $0 cost.`);
         } catch (e: any) {
           console.warn(`[AgencyActions] Freestyle pause notice for ${s.agentId}:`, e.message);

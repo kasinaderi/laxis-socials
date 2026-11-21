@@ -411,7 +411,8 @@ export async function getOrCreateFreestyleSandbox(
 
 export async function pauseFreestyleSandbox(
   campaignId: string,
-  agentId: string
+  agentId: string,
+  knownVmId?: string // Pass the DB sandboxId directly — avoids slow vms.list() lookup
 ): Promise<{ status: string }> {
   const cacheKey = `${campaignId}_${agentId}`;
   const activeSandboxes: Map<string, any> =
@@ -422,22 +423,35 @@ export async function pauseFreestyleSandbox(
   if (wrapper) {
     await wrapper.pause();
     activeSandboxes.delete(cacheKey);
-  } else {
-    // Check if we can pause via direct Freestyle API
-    const freestyle = await getFreestyleClient();
-    if (freestyle) {
-      try {
+  }
+
+  // Always also pause via direct Freestyle API — catches VMs running outside this process
+  const freestyle = await getFreestyleClient();
+  if (freestyle) {
+    try {
+      let vmId = knownVmId;
+
+      if (!vmId) {
+        // Fallback: find by slug (slower — requires listing all VMs)
         const { slug } = getFreestyleConfigForAgent(agentId);
         const list = await freestyle.vms.list();
-        const rawVm = list.vms.find((v: any) => v.slug === slug);
-        if (rawVm && rawVm.state !== "paused") {
-          const vmRef = freestyle.vms.ref(rawVm.id);
-          console.log(`[Freestyle] Pausing VM ${rawVm.id} directly...`);
-          await vmRef.pause();
-        }
-      } catch (err: any) {
-        console.warn(`[Freestyle] Direct pause notice:`, err.message);
+        const rawVm = list.vms?.find((v: any) => v.slug === slug);
+        vmId = rawVm?.id;
       }
+
+      if (vmId) {
+        const vmRef = freestyle.vms.ref(vmId);
+        const vmData = await vmRef.data().catch(() => null);
+        if (vmData && vmData.state !== "paused") {
+          console.log(`[Freestyle] Pausing VM ${vmId} (${agentId}) directly...`);
+          await vmRef.pause();
+          console.log(`[Freestyle] VM ${vmId} paused successfully!`);
+        } else if (vmData?.state === "paused") {
+          console.log(`[Freestyle] VM ${vmId} already paused.`);
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[Freestyle] Direct pause notice for ${agentId}:`, err.message);
     }
   }
 
