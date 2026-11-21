@@ -1389,6 +1389,7 @@ export interface CompiledAgencyIntent {
   targetAgentId: string;
   targetAgentIds?: string[];
   allAgents?: boolean;
+  effectivePrompt?: string;
   baseUrl?: string;
   cleanTopic?: string;
   searchQuery?: string;
@@ -1403,11 +1404,13 @@ export interface CompiledAgencyIntent {
 /**
  * Autonomous Reasoning Brain (Cognitive Intent Compiler)
  * Interprets ANY instruction from Kelvin — regardless of typos, slang, questions, or non-standard syntax.
+ * Uses conversational history to resolve follow-ups like "do the task i asked" or "proceed".
  */
 export async function compileInstructionWithBrain(
   rawPrompt: string,
   contextId: string,
-  campaignId: string = "default_campaign"
+  campaignId: string = "default_campaign",
+  history: Array<{ sender: string; text: string }> = []
 ): Promise<CompiledAgencyIntent> {
   const activeMap: Map<string, any> = (global as any).__activeSandboxes;
   const lastActive = contextId ? lastActiveAgentByContext.get(contextId) : null;
@@ -1431,51 +1434,92 @@ export async function compileInstructionWithBrain(
   if (!fallbackAgent) fallbackAgent = "ig_shader";
 
   const cleanLower = rawPrompt.toLowerCase().trim().replace(/[?!.,]+$/, "");
-  const extracted = extractAllAgentsFromText(rawPrompt);
+
+  // ── CONVERSATIONAL REASONING & CONTEXTUAL RESOLUTION ───────────────────────
+  // If user says "okey do the task i have asked", "do what i told you", "proceed",
+  // scan conversation history to find the substantive task the user originally gave.
+  const isFollowUpTask =
+    /\b(do\s+(the\s+)?task|do\s+what\s+i\s+(have\s+)?asked|execute\s+(the\s+)?task|proceed\s+with\s+(the\s+)?task|as\s+i\s+(have\s+)?asked|carry\s+out\s+(the\s+)?task|perform\s+(the\s+)?task)\b/i.test(cleanLower) ||
+    ((cleanLower.startsWith("ok") || cleanLower.startsWith("okay") || cleanLower.startsWith("yes") || cleanLower.startsWith("sure") || cleanLower.startsWith("proceed") || cleanLower.startsWith("do it")) &&
+     /\b(task|asked|told\s+you|said|wanted|request|told)\b/i.test(cleanLower));
+
+  let effectivePrompt = rawPrompt;
+  if (isFollowUpTask && history && history.length > 0) {
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
+      if (msg && (msg.sender === "user" || msg.sender === "Kelvin") && msg.text) {
+        const prevText = msg.text.trim();
+        const prevLower = prevText.toLowerCase();
+        if (
+          !prevLower.startsWith("ok") &&
+          !prevLower.startsWith("yes") &&
+          !prevLower.startsWith("proceed") &&
+          prevText !== rawPrompt &&
+          prevText.length > 5
+        ) {
+          console.log(`[BrainCompiler] Resolved follow-up "${rawPrompt}" to previous conversational task: "${prevText}"`);
+          effectivePrompt = prevText;
+          break;
+        }
+      }
+    }
+  }
+
+  const cleanEffectiveLower = effectivePrompt.toLowerCase().trim().replace(/[?!.,]+$/, "");
+  const extracted = extractAllAgentsFromText(effectivePrompt);
   const targetIds = extracted.all ? ["all"] : (extracted.agentIds.length > 0 ? extracted.agentIds : [fallbackAgent]);
   const primaryTarget = targetIds[0] === "all" ? fallbackAgent : targetIds[0];
 
-  // Fast-path: 1-word affirmative confirmations
+  // Detect whether the prompt contains a substantive browser/workstation operation
+  // (e.g. "go to github and search mausbot", "search for forex", "visit facebook.com")
+  const hasSubstantiveAction =
+    /\b(go\s+to|search|open|navigate|visit|find|look\s+up|browse|click|type|check\s+out)\b/i.test(cleanEffectiveLower);
+
+  // Fast-path: 1-word affirmative confirmations (ONLY if NOT resolving a previous task)
   if (
-    cleanLower === "yes" ||
-    cleanLower === "confirm" ||
-    cleanLower === "proceed" ||
-    cleanLower === "do it" ||
-    cleanLower === "y" ||
-    cleanLower === "ok" ||
-    cleanLower === "okay" ||
-    cleanLower === "continue"
+    !isFollowUpTask &&
+    (cleanLower === "yes" ||
+     cleanLower === "confirm" ||
+     cleanLower === "proceed" ||
+     cleanLower === "do it" ||
+     cleanLower === "y" ||
+     cleanLower === "ok" ||
+     cleanLower === "okay" ||
+     cleanLower === "continue")
   ) {
     return {
       intent: "confirm_pending",
       targetAgentId: primaryTarget,
       targetAgentIds: targetIds,
+      effectivePrompt,
       reasoning: "User confirmed pending action",
     };
   }
 
-  // Fast-path: single word screenshot request
+  // Fast-path: single word screenshot request (ONLY if NOT a compound search/navigation command!)
   if (
-    cleanLower === "screenshot" ||
-    cleanLower === "screen" ||
-    cleanLower === "pic" ||
-    cleanLower === "photo" ||
-    cleanLower === "snapshot" ||
-    /^(take\s*(a\s*)?screenshot|send\s*(a\s*|me\s*a\s*)?screenshot|let\s*me\s*see|show\s*me|screenshot\??)$/i.test(cleanLower)
+    !hasSubstantiveAction &&
+    (cleanLower === "screenshot" ||
+     cleanLower === "screen" ||
+     cleanLower === "pic" ||
+     cleanLower === "photo" ||
+     cleanLower === "snapshot" ||
+     /^(take\s*(a\s*)?screenshot|send\s*(a\s*|me\s*a\s*)?screenshot|let\s*me\s*see|show\s*me|screenshot\??)$/i.test(cleanLower))
   ) {
     return {
       intent: "screenshot",
       targetAgentId: primaryTarget,
       targetAgentIds: targetIds,
+      effectivePrompt,
       reasoning: "Direct screenshot request",
     };
   }
 
   // Fast-path: PAUSE / STOP / POWER OFF / SLEEP (handles single, multiple, or all VMs!)
   const isPauseRegex =
-    /^(power\s*(it\s*|them\s*)?off|turn\s*(it\s*|them\s*)?off|shut\s*down|shutdown|switch\s*off|kill\s*pc|stop\s*pc|pause\s*pc|put\s*(it\s*|them\s*|everything\s*)?to\s*sleep|hibernate|sleep|pause|stop)$/i.test(cleanLower) ||
-    /\b(power\s*off|turn\s*off|shut\s*down|put\s*to\s*sleep|hibernate|stop\s*compute)\b/i.test(cleanLower) ||
-    ((cleanLower.startsWith("pause") || cleanLower.startsWith("stop") || cleanLower.startsWith("turn off") || cleanLower.startsWith("power off") || cleanLower.startsWith("shut down")) && !cleanLower.includes("post"));
+    /^(power\s*(it\s*|them\s*)?off|turn\s*(it\s*|them\s*)?off|shut\s*down|shutdown|switch\s*off|kill\s*pc|stop\s*pc|pause\s*pc|put\s*(it\s*|them\s*|everything\s*)?to\s*sleep|hibernate|sleep|pause|stop)$/i.test(cleanEffectiveLower) ||
+    /\b(power\s*off|turn\s*off|shut\s*down|put\s*to\s*sleep|hibernate|stop\s*compute)\b/i.test(cleanEffectiveLower) ||
+    ((cleanEffectiveLower.startsWith("pause") || cleanEffectiveLower.startsWith("stop") || cleanEffectiveLower.startsWith("turn off") || cleanEffectiveLower.startsWith("power off") || cleanEffectiveLower.startsWith("shut down")) && !cleanEffectiveLower.includes("post"));
 
   if (isPauseRegex) {
     return {
@@ -1483,15 +1527,18 @@ export async function compileInstructionWithBrain(
       targetAgentId: primaryTarget,
       targetAgentIds: targetIds,
       allAgents: extracted.all,
+      effectivePrompt,
       reasoning: `Direct pause/power-down request (target: ${extracted.all ? "ALL" : targetIds.join(", ")})`,
     };
   }
 
-  // Fast-path: WAKE / BOOT / TURN ON / SPIN UP (handles single, multiple, or all VMs!)
+  // Fast-path: WAKE / BOOT / TURN ON / SPIN UP (ONLY when NO substantive browser/search action follows!)
+  // If the prompt says "turn on instashader go to github and search mausbot", it is NOT a bare wake — it's a compound task!
   const isWakeRegex =
-    /^(power\s*(it\s*|them\s*)?on|turn\s*(it\s*|them\s*)?on|boot\s*(it\s*|them\s*)?up|wake\s*(it\s*|them\s*)?up|wake|turn\s*on|power\s*on|boot|spin\s*up)$/i.test(cleanLower) ||
-    /\b(turn\s*on|power\s*on|boot\s*up|wake\s*up|spin\s*up)\b/i.test(cleanLower) ||
-    ((cleanLower.startsWith("wake") || cleanLower.startsWith("turn on") || cleanLower.startsWith("power on") || cleanLower.startsWith("boot")) && !cleanLower.includes("post"));
+    !hasSubstantiveAction &&
+    (/^(power\s*(it\s*|them\s*)?on|turn\s*(it\s*|them\s*)?on|boot\s*(it\s*|them\s*)?up|wake\s*(it\s*|them\s*)?up|wake|turn\s*on|power\s*on|boot|spin\s*up)$/i.test(cleanEffectiveLower) ||
+     /\b(turn\s*on|power\s*on|boot\s*up|wake\s*up|spin\s*up)\b/i.test(cleanEffectiveLower) ||
+     ((cleanEffectiveLower.startsWith("wake") || cleanEffectiveLower.startsWith("turn on") || cleanEffectiveLower.startsWith("power on") || cleanEffectiveLower.startsWith("boot")) && !cleanEffectiveLower.includes("post")));
 
   if (isWakeRegex) {
     return {
@@ -1499,20 +1546,38 @@ export async function compileInstructionWithBrain(
       targetAgentId: primaryTarget,
       targetAgentIds: targetIds,
       allAgents: extracted.all,
+      effectivePrompt,
       reasoning: `Direct wake/boot request (target: ${extracted.all ? "ALL" : targetIds.join(", ")})`,
+    };
+  }
+
+  // Fast-path: NAVIGATE OR SEARCH (when prompt directs agent to visit a site, search, or open URL)
+  // Handles compound instructions like "turn on instashader go to github and search mausbot and take a screenshot"
+  const isNavigateOrSearchRegex =
+    hasSubstantiveAction ||
+    /\b(go\s+to|visit|open\s+(https?:\/\/|[a-z0-9.-]+\.[a-z]{2,}|chrome|browser|facebook|instagram|github|youtube|reddit|medium)|navigate|search\s+(for\s+)?[a-z0-9_ -]+)\b/i.test(cleanEffectiveLower);
+
+  if (isNavigateOrSearchRegex) {
+    return {
+      intent: "navigate_or_search",
+      targetAgentId: primaryTarget,
+      targetAgentIds: targetIds,
+      effectivePrompt,
+      reasoning: `Compound navigation/search request for ${primaryTarget}: "${effectivePrompt}"`,
     };
   }
 
   // Fast-path: STATUS / ANY PC ON inquiry
   const isStatusRegex =
-    /^(status|vms?|vms?\s+status|any\s+pc\s+on\??|is\s+any\s+pc\s+on\??|are\s+any\s+pcs?\s+on\??|which\s+pcs?\s+(is|are)\s+(on|running|active|awake)\??|what\s+(is|are)\s+running\??|who\s+(is|are)\s+awake\??|any\s+vm\s+awake\??)$/i.test(cleanLower) ||
-    /\b(any\s+pc\s+on|which\s+pcs?.*(on|running|active|awake)|vms?\s+(running|active|on)|workstations?\s+(running|active|on)|what('s|\s+is|\s+are)\s+running)\b/i.test(cleanLower);
+    /^(status|vms?|vms?\s+status|any\s+pc\s+on\??|is\s+any\s+pc\s+on\??|are\s+any\s+pcs?\s+on\??|which\s+pcs?\s+(is|are)\s+(on|running|active|awake)\??|what\s+(is|are)\s+running\??|who\s+(is|are)\s+awake\??|any\s+vm\s+awake\??)$/i.test(cleanEffectiveLower) ||
+    /\b(any\s+pc\s+on|which\s+pcs?.*(on|running|active|awake)|vms?\s+(running|active|on)|workstations?\s+(running|active|on)|what('s|\s+is|\s+are)\s+running)\b/i.test(cleanEffectiveLower);
 
   if (isStatusRegex) {
     return {
       intent: "status",
       targetAgentId: primaryTarget,
       targetAgentIds: targetIds,
+      effectivePrompt,
       reasoning: "Direct status inquiry",
     };
   }
@@ -1520,9 +1585,10 @@ export async function compileInstructionWithBrain(
   // Semantic Reasoning Compiler using Gemini
   try {
     const aiCompilerPrompt = `You are the Executive Reasoning Brain for AGENTLAX / Laxis Socials.
-Kelvin (the agency owner) gave this instruction: "${rawPrompt}".
+Kelvin (the agency owner) gave this instruction: "${effectivePrompt}".
 
 Understand Kelvin's TRUE human intent — whether expressed in slang, Sheng, typos, questions, multi-step phrasing, or direct commands.
+IMPORTANT: If Kelvin asks to "turn on X and go to Y" or "wake X and search Y", the TRUE GOAL is "navigate_or_search" (the workstation will be booted automatically).
 
 Specialist Agents available:
 - fb_laxdollar: LAXDOLLAR (Deriv trading, Boom & Crash, forex, money memes, Remotasks/Outlier hustles)
@@ -1537,9 +1603,9 @@ Currently active / last engaged agent: "${fallbackAgent}"
 
 INTENT CATEGORIES:
 1. "screenshot": User wants to see the screen, take a picture, inspect visual progress, or asked "screenshot?", "pic?", "let me see", "show me", "can i see what it's doing", "what is on the screen right now".
-2. "navigate_or_search": User wants to open a website (e.g. facebook.com, instagram.com, youtube.com, google.com, etc.), visit a URL, or search for something on a platform.
-   - baseUrl: Base root URL (e.g. "https://www.facebook.com", "https://www.instagram.com", "https://www.youtube.com", "https://www.google.com")
-   - searchQuery: Clean search query without instructions or typos (e.g. "forex trading", or empty/null if just opening the site)
+2. "navigate_or_search": User wants to open a website (e.g. facebook.com, instagram.com, github.com, youtube.com, google.com, etc.), visit a URL, or search for something on a platform.
+   - baseUrl: Base root URL (e.g. "https://www.facebook.com", "https://github.com", "https://www.instagram.com", "https://www.youtube.com", "https://www.google.com")
+   - searchQuery: Clean search query without instructions or typos (e.g. "mausbot", "forex trading", or empty/null if just opening the site)
    - targetTab: "people" | "groups" | "repositories" | "all"
 3. "click": User wants to click an element, video, button, link, tab, or profile.
    - targetElement: description of what to click
@@ -1548,7 +1614,7 @@ INTENT CATEGORIES:
    - pressEnter: boolean
 5. "scroll": User wants to scroll up or down.
    - scrollDirection: "down" | "up"
-6. "wake": User wants to wake, boot, turn on, spin up an agent PC. Can target single agent ("wake shader"), multiple agents ("wake shader and pintr"), or all ("turn on all vms").
+6. "wake": User wants ONLY to wake, boot, turn on, spin up an agent PC without any navigation or search task. Can target single agent ("wake shader"), multiple agents ("wake shader and pintr"), or all ("turn on all vms").
 7. "pause": User wants to pause, hibernate, shut down, put to sleep, power off, or stop compute on agent PC(s). Can target single agent ("power off shader", "turn off lax dollar"), multiple ("turn off shader and pintr"), or all ("put everything to sleep", "power off all").
 8. "status": User asks which VMs/agents are active, running, awake, or sleeping ("any pc on?", "which pcs are on?").
 9. "clear_posts": User wants to clear, delete, or reset scheduled posts.
@@ -1589,6 +1655,7 @@ Respond ONLY with valid JSON:
             targetAgentId: parsed.targetAgentId || primaryTarget,
             targetAgentIds: parsedIds,
             allAgents: Boolean(parsed.allAgents || parsed.targetAgentId === "all"),
+            effectivePrompt,
             baseUrl: parsed.baseUrl || undefined,
             cleanTopic: parsed.cleanTopic || undefined,
             searchQuery: parsed.searchQuery || undefined,
@@ -1607,11 +1674,12 @@ Respond ONLY with valid JSON:
   }
 
   // Graceful fallback
-  const targetAgent = extractAgentFromPrompt(rawPrompt, contextId) || fallbackAgent;
+  const targetAgent = extractAgentFromPrompt(effectivePrompt, contextId) || fallbackAgent;
   return {
     intent: "conversational",
     targetAgentId: targetAgent,
     targetAgentIds: [targetAgent],
+    effectivePrompt,
   };
 }
 
@@ -1622,7 +1690,8 @@ Respond ONLY with valid JSON:
 export async function handleAgencyExecutiveCommand(
   text: string,
   contextId: string,
-  campaignId: string = "default_campaign"
+  campaignId: string = "default_campaign",
+  history: Array<{ sender: string; text: string }> = []
 ): Promise<{ handled: boolean; replyText?: string; mediaUrl?: string }> {
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
@@ -1666,7 +1735,7 @@ export async function handleAgencyExecutiveCommand(
   }
 
   // 2. Invoke the Semantic Reasoning Brain to interpret the instruction
-  const compiled = await compileInstructionWithBrain(text, contextId, campaignId);
+  const compiled = await compileInstructionWithBrain(text, contextId, campaignId, history);
   const targetAgentId = compiled.targetAgentId || "ig_shader";
   const displayName = getAgentDisplayName(targetAgentId);
   if (contextId) lastActiveAgentByContext.set(contextId, targetAgentId);
@@ -1719,7 +1788,8 @@ export async function handleAgencyExecutiveCommand(
 
   // ── INTENT: NAVIGATE OR SEARCH ───────────────────────────────────────────
   if (compiled.intent === "navigate_or_search") {
-    const result = await executeAgentChromeTask(campaignId, targetAgentId, text);
+    const taskPrompt = compiled.effectivePrompt || text;
+    const result = await executeAgentChromeTask(campaignId, targetAgentId, taskPrompt);
     return {
       handled: true,
       replyText: result.replyText,

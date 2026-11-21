@@ -156,7 +156,7 @@ export async function askMasterAgent(
 ): Promise<{ text: string; plan?: AgentPlanResult; mediaUrl?: string }> {
   try {
     // 1. Executive Action Dispatcher (real DB post clearing, VM boot, Chrome search, double-authorization)
-    const execAction = await handleAgencyExecutiveCommand(userPrompt, contextId);
+    const execAction = await handleAgencyExecutiveCommand(userPrompt, contextId, undefined, history);
     if (execAction.handled && execAction.replyText) {
       return { text: execAction.replyText, mediaUrl: execAction.mediaUrl };
     }
