@@ -57,7 +57,7 @@ The script automatically executes:
 7. **Code & Clean Database Sync**:
    - Automatically registers `agentId` in `FREESTYLE_MIGRATED_AGENTS` inside `lib/sandbox.ts`.
    - Cleans old/stale E2B sandbox records in Turso SQLite `agent_sandboxes` (`DELETE ... WHERE agent_id = ?`) and inserts the new Freestyle VM ID (`vm-...`) and `vnc_lite.html` stream URL so status queries and pause/wake commands always find the real VM ID directly.
-8. **Pause to $0 Compute**: Pauses the VM immediately via `vm.pause()` to preserve all RAM, tabs, and cookies with $0 idle compute cost.
+8. **Pause to $0 Compute**: Stops `cloudflared-tunnel` (`systemctl stop cloudflared-tunnel`), disables `automaticRestart`, and pauses the VM via `vm.pause()` to guarantee the VM stays hibernated at $0 idle compute cost without Cloudflare edge heartbeats triggering auto-wake.
 
 ---
 
@@ -209,6 +209,9 @@ async function handleAgencyExecutiveCommand(
 - **Support for Both Migrated (Freestyle) and Non-Migrated (E2B) Agents**:
   - The brain treats all agents identically (`fb_laxdollar`, `fb_jotrainer`, `fb_contentor`, `ig_real`, `ig_shader`, `analytics`).
   - Under the hood, `isFreestyleAgent(agentId)` automatically routes to `pauseFreestyleSandbox()` (with direct `vmRef.pause()`) or `pauseAgentSandbox()` on E2B.
+- **Identical Dispatch Path to UI Dashboard**:
+  - The Telegram master agent (`lib/agency-actions.ts`) invokes `pauseAgentSandbox(campaignId, agId)` and `getOrCreateAgentSandbox(campaignId, agId, true)` directly.
+  - This shares 100% of the execution path with the web UI's "Power Off" and "Turn On" buttons in the Computer section (`POST /api/sandbox`), eliminating any discrepancy between web controls and Telegram commands.
 - **Freestyle Direct VM Pause Guarantee**:
   - `pauseFreestyleSandbox()` must NEVER rely solely on `freestyle.vms.list()` (which can fail or timeout on Vercel serverless cold starts).
   - It must query `agentSandboxes.sandboxId` from the DB (e.g. `vm-3cb555595b524fd8939eee9e5200a353`) and execute `freestyle.vms.ref(vmId).pause()` directly.
