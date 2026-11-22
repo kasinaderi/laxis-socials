@@ -645,7 +645,21 @@ export async function initSandboxBrowserAndCdp(sb: any, agentId?: string): Promi
       console.warn("[Hermes] Setup exception:", e?.message);
     }
 
-    // 5. If this is the analytics agent — also install the Deriv Pattern Engine
+    // 5. If this is ig_shader (Freestyle VM) — install a systemd drop-in so the
+    //    Cloudflare tunnel never auto-restarts. This ensures dashboard pause always works.
+    //    Uses a drop-in override file — does NOT touch the original service file.
+    if (agentId === "ig_shader") {
+      await sb.commands.run(`
+        mkdir -p /etc/systemd/system/cloudflared-tunnel.service.d
+        cat > /etc/systemd/system/cloudflared-tunnel.service.d/no-restart.conf << 'EOF'
+[Service]
+Restart=no
+EOF
+        systemctl daemon-reload
+      `).catch(() => {});
+    }
+
+    // 6. If this is the analytics agent — also install the Deriv Pattern Engine
     if (agentId === "analytics") {
       installDerivEngineInSandbox(sb).then((result) => {
         if (result.success) {
