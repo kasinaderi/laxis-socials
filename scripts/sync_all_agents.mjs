@@ -42,6 +42,28 @@ async function syncAll() {
     const hStatus = await checkHermesStatus(freestyleWrapper);
     console.log(`  Hermes configured: ${hStatus.configured} (${hStatus.version})`);
 
+    // Install a systemd pre-stop hook so dashboard-triggered pauses also kill the tunnel cleanly
+    console.log("  Installing cloudflared pre-stop hook...");
+    const preStopService = `[Unit]
+Description=Stop Cloudflare tunnel before Freestyle VM pause
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target suspend.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl stop cloudflared-tunnel
+RemainAfterExit=yes
+
+[Install]
+WantedBy=halt.target reboot.target shutdown.target suspend.target`;
+
+    await vmRef.exec({
+      command: `cat > /etc/systemd/system/stop-tunnel-on-pause.service << 'SVCEOF'\n${preStopService}\nSVCEOF\nsystemctl daemon-reload\nsystemctl enable stop-tunnel-on-pause.service`,
+      linuxUser: "root",
+      timeoutMs: 10000,
+    }).catch((e) => console.log("  pre-stop hook notice:", e.message));
+    console.log("  ✓ Pre-stop hook installed — tunnel will auto-stop on any pause/shutdown");
+
     // Safely freeze back into $0 compute mode
     await vmRef.exec({ command: "systemctl stop cloudflared-tunnel", linuxUser: "root", timeoutMs: 5000 }).catch(() => {});
     await vmRef.update({ automaticRestart: false }).catch(() => {});
