@@ -36,7 +36,8 @@ export default function AIAgentPage() {
 
   useEffect(() => {
     fetchAgents();
-    const interval = setInterval(fetchAgents, 10000);
+    // Poll every 3s for fast on/off detection (was 10s)
+    const interval = setInterval(fetchAgents, 3000);
     return () => clearInterval(interval);
   }, []);
 

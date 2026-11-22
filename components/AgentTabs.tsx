@@ -1036,6 +1036,9 @@ export function AgentTabs({
       console.error("Pause toggle error:", err);
     } finally {
       setIsTogglingPower(false);
+      // Immediately re-fetch true VM state so button reflects reality without waiting for next poll
+      setTimeout(fetchSandbox, 800);
+      setTimeout(fetchSandbox, 3000);
     }
   };
 
@@ -1112,7 +1115,7 @@ export function AgentTabs({
             )}
           </button>
           <button
-            onClick={() => setActiveTab("computer")}
+            onClick={() => { setActiveTab("computer"); fetchSandbox(); }}
             className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeTab === "computer"
                 ? "bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-xs ring-1 ring-blue-100 dark:ring-blue-900"
