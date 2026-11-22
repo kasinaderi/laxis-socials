@@ -1152,6 +1152,10 @@ export async function executeAgentChromeTask(
         await new Promise((r) => setTimeout(r, 3000));
       }
 
+      // Check if user requested clicking the first video or result
+      const wantsFirstVideo = /(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+video/i.test(rawPrompt);
+      const wantsFirstResult = /(?:click|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+(?:result|item|link)/i.test(rawPrompt);
+
       // Step E: Execute primary task intent via CDP (high-speed, rock-solid DOM automation)
       if (intentType === "search" && searchQuery) {
         console.log(`[AgencyActions] Executing CDP Smart Search for "${searchQuery}" (targetTab: ${targetTab || "all"})...`);
@@ -1159,9 +1163,6 @@ export async function executeAgentChromeTask(
         actionHistory.push(`CDP Smart Search: typed "${searchQuery}" into search box, submitted${targetTab && targetTab !== "all" ? ` & clicked ${targetTab} tab` : ""}`);
         await new Promise((r) => setTimeout(r, 2500));
 
-        // Auto-click first video or result if instructed by user
-        const wantsFirstVideo = /(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+video/i.test(rawPrompt);
-        const wantsFirstResult = /(?:click|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+(?:result|item|link)/i.test(rawPrompt);
         if (wantsFirstVideo) {
           console.log(`[AgencyActions] Auto-clicking first video result for: "${rawPrompt}"...`);
           if (activeSb.commands?.run) {
@@ -1194,18 +1195,34 @@ export async function executeAgentChromeTask(
         await new Promise((r) => setTimeout(r, 2000));
       }
 
-      // Step F: Iterative Autonomous Human-Like Reasoning Loop for ANY website
-      // Dynamic Step Budget: Multi-step or batch tasks get up to 25 steps; single-step tasks get up to 12 steps
-      const isMultiStepTask =
-        /\d+|several|multiple|few|top\s+\d+|first\s+\d+|all|each|every|and\s+then|after\s+that|follow|unfollow|sign\s+up|create|register|post|upload|extract|collect|buy|cart|compare|check\s+\d+|find\s+\d+/i.test(
-          rawPrompt
-        );
-      const maxSteps = isMultiStepTask ? 25 : 12;
+      // Direct Single-Action Guard:
+      // If user instructed to search, click the first video/result ONCE, and take a screenshot:
+      // The single click was already executed above in Step E.
+      // We explicitly skip the exploratory Step F reasoning loop so the agent NEVER overdoes it,
+      // NEVER tries to navigate around or "solve" secondary prompts (like sign-in blocks, age prompts, etc.),
+      // and directly captures the genuine screen state resulting from that one click.
+      const wantsVideoOrResultClick = wantsFirstVideo || wantsFirstResult;
+      const isSingleClickAndShot =
+        wantsVideoOrResultClick &&
+        /(?:screenshot|screen\s+shot|photo|picture|pic|see|show|give|bring)/i.test(rawPrompt) &&
+        !/(?:and\s+then\s+(?:comment|like|subscribe|buy|download|follow|message)|after\s+that)/i.test(rawPrompt);
+
       let lastShotBuffer: Uint8Array | null = null;
       let finalDecisionSummary = "";
-      let progressTracker = `Starting: ${cleanTopic}`;
 
-      for (let step = 1; step <= maxSteps; step++) {
+      if (isSingleClickAndShot) {
+        console.log(`[AgencyActions] Single click-and-screenshot objective fulfilled in Step E. Skipping exploratory loop so workstation does not over-navigate.`);
+      } else {
+        // Step F: Iterative Autonomous Human-Like Reasoning Loop for multi-step tasks
+        // Dynamic Step Budget: Multi-step or batch tasks get up to 25 steps; single-step tasks get up to 12 steps
+        const isMultiStepTask =
+          /\d+|several|multiple|few|top\s+\d+|first\s+\d+|all|each|every|and\s+then|after\s+that|follow|unfollow|sign\s+up|create|register|post|upload|extract|collect|buy|cart|compare|check\s+\d+|find\s+\d+/i.test(
+            rawPrompt
+          );
+        const maxSteps = isMultiStepTask ? 25 : 12;
+        let progressTracker = `Starting: ${cleanTopic}`;
+
+        for (let step = 1; step <= maxSteps; step++) {
         let shotBuffer: Uint8Array | null = null;
         if (typeof activeSb.screenshot === "function") {
           shotBuffer = await activeSb.screenshot().catch(() => null);
@@ -1237,16 +1254,16 @@ export async function executeAgentChromeTask(
         );
 
         if (decision.action === "done") {
-          // Anti-premature done guard: if user requested clicking/watching a video, ensure we actually reached watch?v=
+          // Anti-premature done guard: if user requested clicking/watching a video, ensure we actually clicked it once
           const wantsVideo = /(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st|\d+)?\s*video/i.test(rawPrompt);
-          if (wantsVideo) {
+          const hasClickedVid = actionHistory.some((h) => h.includes("video result"));
+          if (wantsVideo && !hasClickedVid) {
             const info = await cdpGetInfo(activeSb);
             if (!info?.url?.includes("watch?v=")) {
-              console.log("[AgencyActions] Premature done: video was requested but URL is not watch?v=. Auto-clicking first video...");
+              console.log("[AgencyActions] Premature done: video was requested but not clicked yet. Clicking first video ONCE...");
               const clickRes = await cdpClickOrdinal(activeSb, "video", 1);
               actionHistory.push(`Auto-clicked 1st video result (${clickRes?.clicked || clickRes?.href || "video"})`);
               await new Promise((r) => setTimeout(r, 3500));
-              continue;
             }
           }
           finalDecisionSummary = decision.summary || "";
@@ -1327,6 +1344,7 @@ export async function executeAgentChromeTask(
         }
 
         await new Promise((r) => setTimeout(r, 1000));
+      }
       }
 
       // Step G: Capture final verified workstation screenshot

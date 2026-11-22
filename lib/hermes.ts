@@ -434,6 +434,20 @@ def main():
                 log("Fast-Track auto-clicking first video result")
                 run_cdp(["ordinal", "video", "1"])
                 action_history.append("Fast-Track Route: clicked 1st video result")
+                if any(p in raw_task.lower() for p in ["screenshot", "photo", "screen", "picture", "pic"]):
+                    log("Fast-Track: Clicked 1st video result once. Finalizing screenshot without over-navigating.")
+                    time.sleep(3.0)
+                    final_b64 = take_screenshot()
+                    routes_dump = load_routes()
+                    print(json.dumps({
+                        "success": True,
+                        "summary": f"Searched for '{q_match}' and clicked the 1st video result once as requested. Screenshot captured directly.",
+                        "screenshot_b64": final_b64,
+                        "steps_taken": 2,
+                        "route_cached": True,
+                        "learned_routes": routes_dump
+                    }))
+                    return
 
     # System instruction including Procedural Memory context
     routes_context = json.dumps(learned_routes, indent=1) if learned_routes else "(No routes learned yet — explore freely)"
@@ -468,7 +482,8 @@ CRITICAL OPERATING DIRECTIVES:
    - If only search results or autocomplete suggestions are visible, do NOT mark "done"! Click the target video first.
 4. DISMISS OBSTACLES: If any popup, notification prompt ("wants to Show notifications"), cookie banner, or dropdown covers the screen, click Dismiss, Block, 'X', or send Escape.
 5. WORKSTATION IDENTITY: Names like 'instashader', 'laxdollar', 'pintr', 'contentor', 'instareal' are names of this AI agent workstation.
-   Never navigate to chrome://extensions."""
+   Never navigate to chrome://extensions.
+6. DO NOT OVERDO OR OVER-NAVIGATE: If the user asked to search and click on the first video (and take a screenshot), once the first video has been clicked once, STOP! Do not click secondary buttons like 'Sign in', 'Learn more', 'Subscribe', or try to bypass/solve platform screens. Mark action: "done" immediately so the screenshot captures the page as-is!"""
 
     for step in range(1, max_steps + 1):
         log(f"Step {step}/{max_steps}")
@@ -517,17 +532,17 @@ Look at the current live screen. What is the next logical step to complete the o
         log(f"Decision step {step}: {action} — {reason}")
 
         if action == "done":
-            # Anti-premature done guard: if user requested clicking/watching a video, ensure we reached watch?v=
+            # Anti-premature done guard: if user requested clicking/watching a video, ensure we actually clicked it once
             wants_vid = any(p in raw_task.lower() for p in ["first video", "1st video", "click video", "play video", "watch video"])
-            if wants_vid:
+            has_clicked_vid = any("video result" in act for act in action_history)
+            if wants_vid and not has_clicked_vid:
                 curr_info = run_cdp(["info"])
                 curr_url = curr_info.get("url", "") if isinstance(curr_info, dict) else ""
                 if "watch?v=" not in curr_url:
-                    log("Anti-premature done: video requested but URL lacks watch?v=. Clicking first video!")
+                    log("Anti-premature done: video requested but not clicked yet. Clicking first video ONCE!")
                     run_cdp(["ordinal", "video", "1"])
                     time.sleep(3.0)
-                    action_history.append("Auto-clicked 1st video result to fulfill video objective")
-                    continue
+                    action_history.append("Clicked 1st video result once")
 
             summary = decision.get("summary") or reason or "Task verified and completed successfully on workstation."
             final_b64 = take_screenshot() or last_b64
