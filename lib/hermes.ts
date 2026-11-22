@@ -300,11 +300,20 @@ def xdotool_search(query):
     try:
         import os as _os
         env = {**_os.environ, "DISPLAY": ":0"}
-        subprocess.run(
-            f"DISPLAY=:0 xdotool mousemove {x} {y} click 1 key ctrl+a key Delete sleep 0.2 "
-            f"type --clearmodifiers --delay 60 '{clean_q}' sleep 0.4 key Return",
-            shell=True, timeout=15, env=env
-        )
+        cmd = f'''
+        DISPLAY=:0 xdotool search --class "xfce4-appfinder" windowclose 2>/dev/null || true
+        DISPLAY=:0 xdotool search --class "thunar" windowclose 2>/dev/null || true
+        DISPLAY=:0 xdotool search --onlyvisible --class google-chrome windowactivate --sync 2>/dev/null || true
+        DISPLAY=:0 xdotool mousemove {x} {y} click 1
+        DISPLAY=:0 xdotool key ctrl+a key BackSpace
+        sleep 0.15
+        DISPLAY=:0 xdotool type --clearmodifiers --delay 45 '{clean_q}'
+        sleep 0.25
+        DISPLAY=:0 xdotool key Return
+        sleep 0.8
+        DISPLAY=:0 xdotool key Escape 2>/dev/null || true
+        '''
+        subprocess.run(cmd, shell=True, timeout=15, env=env)
         log(f"xdotool_search: typed '{clean_q}' and pressed Enter at ({x},{y})")
     except Exception as e:
         log(f"xdotool_search error: {e}")
@@ -508,6 +517,18 @@ Look at the current live screen. What is the next logical step to complete the o
         log(f"Decision step {step}: {action} — {reason}")
 
         if action == "done":
+            # Anti-premature done guard: if user requested clicking/watching a video, ensure we reached watch?v=
+            wants_vid = any(p in raw_task.lower() for p in ["first video", "1st video", "click video", "play video", "watch video"])
+            if wants_vid:
+                curr_info = run_cdp(["info"])
+                curr_url = curr_info.get("url", "") if isinstance(curr_info, dict) else ""
+                if "watch?v=" not in curr_url:
+                    log("Anti-premature done: video requested but URL lacks watch?v=. Clicking first video!")
+                    run_cdp(["ordinal", "video", "1"])
+                    time.sleep(3.0)
+                    action_history.append("Auto-clicked 1st video result to fulfill video objective")
+                    continue
+
             summary = decision.get("summary") or reason or "Task verified and completed successfully on workstation."
             final_b64 = take_screenshot() or last_b64
 

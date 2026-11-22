@@ -144,13 +144,23 @@ class CDPClient:
         x = rect.get("x", 640) if isinstance(rect, dict) and rect.get("found") else 640
         y = rect.get("y", 50) if isinstance(rect, dict) and rect.get("found") else 50
 
-        env = {"DISPLAY": ":0", "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        env = {**__import__('os').environ, "DISPLAY": ":0", "PATH": "/usr/bin:/bin:/usr/local/bin"}
         try:
-            # Click the input box, select all, delete, then type the query
-            subprocess.run(
-                f"DISPLAY=:0 xdotool mousemove {x} {y} click 1 key ctrl+a key Delete sleep 0.2 type --clearmodifiers --delay 60 '{clean_q}' sleep 0.3 key Return",
-                shell=True, timeout=15, env={**__import__('os').environ, "DISPLAY": ":0"}
-            )
+            # Multi-line shell script with discrete commands so xdotool type does NOT consume sleep or key Return as typed text!
+            cmd = f'''
+            DISPLAY=:0 xdotool search --class "xfce4-appfinder" windowclose 2>/dev/null || true
+            DISPLAY=:0 xdotool search --class "thunar" windowclose 2>/dev/null || true
+            DISPLAY=:0 xdotool search --onlyvisible --class google-chrome windowactivate --sync 2>/dev/null || true
+            DISPLAY=:0 xdotool mousemove {x} {y} click 1
+            DISPLAY=:0 xdotool key ctrl+a key BackSpace
+            sleep 0.15
+            DISPLAY=:0 xdotool type --clearmodifiers --delay 45 '{clean_q}'
+            sleep 0.25
+            DISPLAY=:0 xdotool key Return
+            sleep 0.8
+            DISPLAY=:0 xdotool key Escape 2>/dev/null || true
+            '''
+            subprocess.run(cmd, shell=True, timeout=15, env=env)
         except Exception as e:
             log(f"xdotool_search error: {e}")
 
@@ -425,18 +435,26 @@ class CDPClient:
                     href: href
                 }};
             }}
-            return {{ success: false, reason: f"Target item at position {index} not found. Found {{len(candidates)}} items." }};
+            return {{ success: false, reason: "Target item at position " + ({index}) + " not found. Found " + candidates.length + " items." }};
         }})()"""
-        res = self.evaluate(js)
+
+        # Retry up to 5 times (total ~3.5s) in case dynamic results are still streaming into DOM
+        res = None
+        for attempt in range(5):
+            res = self.evaluate(js)
+            if isinstance(res, dict) and res.get("success"):
+                break
+            time.sleep(0.7)
+
         # Guaranteed CDP navigation fallback if page did not transition
         if isinstance(res, dict) and res.get("href"):
             target_href = res["href"]
-            time.sleep(0.4)
+            time.sleep(0.5)
             curr = self.get_info()
             curr_url = curr.get("url", "") if isinstance(curr, dict) else ""
-            if target_href.startswith("http") and curr_url != target_href and ("watch?v=" in target_href or "/@" in target_href):
+            if target_href.startswith("http") and ("watch?v=" in target_href or "/@" in target_href) and curr_url != target_href:
                 self.navigate(target_href)
-                time.sleep(2.5)
+                time.sleep(3.0)
         time.sleep(1.5)
         return res
 
@@ -599,6 +617,8 @@ export async function initSandboxBrowserAndCdp(sb: any, agentId?: string): Promi
       killall -9 gnome-keyring-daemon 2>/dev/null || true
       DISPLAY=:0 xdotool search --class "gcr-prompter" windowclose 2>/dev/null || true
       DISPLAY=:0 xdotool search --name "keyring" windowclose 2>/dev/null || true
+      DISPLAY=:0 xdotool search --class "xfce4-appfinder" windowclose 2>/dev/null || true
+      DISPLAY=:0 xdotool search --class "thunar" windowclose 2>/dev/null || true
       sudo sed -i 's|google-chrome-stable %U|google-chrome-stable --password-store=basic %U|g' /usr/share/applications/google-chrome.desktop 2>/dev/null || true
       sudo sed -i 's|google-chrome %U|google-chrome --password-store=basic %U|g' /usr/share/applications/google-chrome.desktop 2>/dev/null || true
 
@@ -688,6 +708,8 @@ export async function launchChromeWithCdp(sb: any, initialUrl: string): Promise<
       killall -9 gnome-keyring-daemon 2>/dev/null || true
       DISPLAY=:0 xdotool search --class "gcr-prompter" windowclose 2>/dev/null || true
       DISPLAY=:0 xdotool search --name "keyring" windowclose 2>/dev/null || true
+      DISPLAY=:0 xdotool search --class "xfce4-appfinder" windowclose 2>/dev/null || true
+      DISPLAY=:0 xdotool search --class "thunar" windowclose 2>/dev/null || true
       rm -f /home/user/.config/chrome-cdp/SingletonLock /home/user/.config/chrome-cdp/SingletonCookie /home/user/.config/chrome-cdp/SingletonSocket 2>/dev/null || true
       
       # Ensure Chrome exit state is marked clean so "Restore pages?" crash recovery bubble NEVER appears

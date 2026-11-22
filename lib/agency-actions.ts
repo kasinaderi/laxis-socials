@@ -235,6 +235,7 @@ export function cleanAutonomousSearchQuery(raw: string): string {
   q = q.replace(/\s+(?:and\s+)?take\s+(?:a\s+)?screenshot.*$/i, "");
   q = q.replace(/\s+(?:and\s+)?bring(?:\s+me)?\s+(?:back\s+)?(?:the\s+)?(?:first\s+)?(?:video\s+)?(?:search\s+)?result.*$/i, "");
   q = q.replace(/\s+(?:and\s+)?show\s+(?:me\s+)?(?:the\s+)?results?.*$/i, "");
+  q = q.replace(/(?:\s+and)?\s+(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st|\d+)?\s*(?:video|result|item|link).*$/i, "");
   q = q.replace(/\s+(?:in\s+)?(?:the\s+)?(?:searchbox|search\s+box|search\s+bar)(?:\s+instead)?.*$/i, "");
   q = q.replace(/\s+instead$/i, "");
   q = q.replace(/\s+(?:in|on)\s+chrome.*$/i, "");
@@ -669,8 +670,9 @@ Examine the live screen pixels critically:
    - Explicitly state "Status: NOT_VERIFIED (Search suggestion dropdown is obstructing results; target item was not clicked)".
 5. If the requested platform or topic is NOT visible (e.g. wrong browser, wrong website, empty history, or desktop wallpaper):
    - Explicitly state "Status: NOT_VERIFIED (Reason why screen does not match requested objective)".
-6. If and ONLY IF the genuine requested content is rendered and all requested actions (such as clicking the target video/item) are verified on screen:
+6. If and ONLY IF the genuine requested content is rendered and ALL requested actions (such as clicking the target video/item and confirming video playback) are verified on screen:
    - State "Status: VERIFIED (Objective fulfilled on live screen)".
+   - UNDER NO CIRCUMSTANCES should you output "Status: VERIFIED" if an autocomplete dropdown is open or if a requested click on a video was not executed!
 Be completely truthful, concise, and razor-sharp. Never hallucinate completion.`;
 
     let promptText = "";
@@ -1134,7 +1136,13 @@ export async function executeAgentChromeTask(
         buttonTarget = "Log in";
       } else {
         const btnM = rawPrompt.match(/click\s+(?:the\s+)?["']?([a-zA-Z0-9_ ]+?)(?:\s+button)?["']?(?:\s+then|$)/i);
-        if (btnM) buttonTarget = btnM[1].trim();
+        if (btnM) {
+          const cand = btnM[1].trim();
+          // Avoid matching sub-actions like "click on the first video" or "take screenshot" as a button
+          if (!/(?:video|result|item|link|screenshot|photo|screen|picture|pic|first|1st|\d+)/i.test(cand)) {
+            buttonTarget = cand;
+          }
+        }
       }
 
       if (buttonTarget) {
@@ -1156,14 +1164,22 @@ export async function executeAgentChromeTask(
         const wantsFirstResult = /(?:click|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st)\s+(?:result|item|link)/i.test(rawPrompt);
         if (wantsFirstVideo) {
           console.log(`[AgencyActions] Auto-clicking first video result for: "${rawPrompt}"...`);
-          await cdpClickOrdinal(activeSb, "video", 1);
-          actionHistory.push(`CDP Click: clicked 1st video result`);
-          await new Promise((r) => setTimeout(r, 3000));
+          if (activeSb.commands?.run) {
+            await activeSb.commands.run(`DISPLAY=:0 xdotool key Escape 2>/dev/null || true`).catch(() => {});
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+          const clickRes = await cdpClickOrdinal(activeSb, "video", 1);
+          actionHistory.push(`CDP Click: clicked 1st video result (${clickRes?.clicked || clickRes?.href || "video"})`);
+          await new Promise((r) => setTimeout(r, 3500));
         } else if (wantsFirstResult) {
           console.log(`[AgencyActions] Auto-clicking first search result for: "${rawPrompt}"...`);
-          await cdpClickOrdinal(activeSb, "result", 1);
-          actionHistory.push(`CDP Click: clicked 1st search result`);
-          await new Promise((r) => setTimeout(r, 3000));
+          if (activeSb.commands?.run) {
+            await activeSb.commands.run(`DISPLAY=:0 xdotool key Escape 2>/dev/null || true`).catch(() => {});
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+          const clickRes = await cdpClickOrdinal(activeSb, "result", 1);
+          actionHistory.push(`CDP Click: clicked 1st search result (${clickRes?.clicked || clickRes?.href || "result"})`);
+          await new Promise((r) => setTimeout(r, 3500));
         }
       } else if (intentType === "unfollow" && searchQuery) {
         await cdpClickText(activeSb, "Following");
@@ -1221,6 +1237,18 @@ export async function executeAgentChromeTask(
         );
 
         if (decision.action === "done") {
+          // Anti-premature done guard: if user requested clicking/watching a video, ensure we actually reached watch?v=
+          const wantsVideo = /(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st|\d+)?\s*video/i.test(rawPrompt);
+          if (wantsVideo) {
+            const info = await cdpGetInfo(activeSb);
+            if (!info?.url?.includes("watch?v=")) {
+              console.log("[AgencyActions] Premature done: video was requested but URL is not watch?v=. Auto-clicking first video...");
+              const clickRes = await cdpClickOrdinal(activeSb, "video", 1);
+              actionHistory.push(`Auto-clicked 1st video result (${clickRes?.clicked || clickRes?.href || "video"})`);
+              await new Promise((r) => setTimeout(r, 3500));
+              continue;
+            }
+          }
           finalDecisionSummary = decision.summary || "";
           break;
         }
@@ -1338,6 +1366,16 @@ export async function executeAgentChromeTask(
       }
     } catch (err: any) {
       console.warn("[AgencyActions] Task execution notice:", err);
+    }
+  }
+
+  // Hard Anti-Hallucination Guard: If user asked to click/watch a video, require verified playback or watch?v= URL
+  const wantsVideo = /(?:click|play|watch|open)\s+(?:on\s+)?(?:the\s+)?(?:first|1st|\d+)?\s*video/i.test(rawPrompt);
+  if (wantsVideo) {
+    const hasWatchUrl = visualAnalysis.includes("/watch?v=") || visualAnalysis.toLowerCase().includes("watch?v=") || visualAnalysis.toLowerCase().includes("video playback") || visualAnalysis.toLowerCase().includes("video player");
+    const hasDropdown = visualAnalysis.toLowerCase().includes("dropdown") || visualAnalysis.toLowerCase().includes("autocomplete") || visualAnalysis.toLowerCase().includes("suggestion");
+    if (!hasWatchUrl || hasDropdown) {
+      visualAnalysis = visualAnalysis.replace(/Status:\s*VERIFIED[^\n]*/gi, "Status: NOT_VERIFIED (User requested clicking the first video, but screen shows search dropdown/results instead of video playback)");
     }
   }
 
