@@ -59,7 +59,8 @@ async function main() {
     const created = await freestyle.vms.create({
       firewall: { rules: [{ action: 'allow', source: {}, destination: { public: true } }] },
       slug,
-      idleTimeoutSeconds: null
+      idleTimeoutSeconds: 300,
+      automaticRestart: false,
     });
     vm = created.vm;
     console.log(`[1/7] ✓ Created VM ID: ${vm.id}`);
@@ -285,8 +286,32 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
+# Install drop-in override so cloudflared-tunnel NEVER auto-restarts on crash or stop
+mkdir -p /etc/systemd/system/cloudflared-tunnel.service.d
+cat > /etc/systemd/system/cloudflared-tunnel.service.d/no-restart.conf << 'EOF'
+[Service]
+Restart=no
+EOF
+
+# Install systemd pre-stop hook so dashboard-triggered pauses always kill the tunnel cleanly
+cat > /etc/systemd/system/stop-tunnel-on-pause.service << 'SVCEOF'
+[Unit]
+Description=Stop Cloudflare tunnel before Freestyle VM pause
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target suspend.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl stop cloudflared-tunnel
+RemainAfterExit=yes
+
+[Install]
+WantedBy=halt.target reboot.target shutdown.target suspend.target
+SVCEOF
+
 systemctl daemon-reload
 systemctl enable --now xvfb openbox tint2 x11vnc novnc cloudflared-tunnel chrome-cdp
+systemctl enable stop-tunnel-on-pause.service
 
 touch /var/run/freestyle_desktop_ready
 echo "PROVISIONING_COMPLETE"
@@ -403,7 +428,7 @@ echo "PROVISIONING_COMPLETE"
   console.log(`\n[8/8] Pausing VM to $0 compute standby...`);
   // ⚠️ CRITICAL: Must stop cloudflared-tunnel before pause, otherwise Cloudflare edge heartbeats auto-wake it within 2s
   await vm.exec({ command: 'systemctl stop cloudflared-tunnel', linuxUser: 'root', timeoutMs: 5000 }).catch(() => {});
-  await vm.update({ automaticRestart: false }).catch(() => {});
+  await vm.update({ automaticRestart: false, idleTimeoutSeconds: 300 }).catch(() => {});
   await vm.pause();
   console.log(`[8/8] ✓ VM is hibernated. Ready for on-demand sub-second wake up!`);
 

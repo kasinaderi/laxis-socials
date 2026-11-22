@@ -44,9 +44,11 @@ node scripts/migrate_agent_to_freestyle.mjs fb_laxdollar
 ```
 
 The script automatically executes:
-1. **VM Provisioning**: Locates or creates a persistent Freestyle VM with `slug: "laxis-<agentId>"`.
+1. **VM Provisioning**: Locates or creates a persistent Freestyle VM with `slug: "laxis-<agentId>"`, `idleTimeoutSeconds: 300` (5-minute auto-pause safety net), and `automaticRestart: false` (NEVER `true` or `null`).
 2. **TLS Routing**: Attaches an edge rule routing `laxis-<agentId>-vnc.style.dev` to port `6080` (noVNC websockify) as secondary backup.
 3. **Headless Workstation Setup**: Installs Chrome Stable, Xvfb (`DISPLAY=:0`), Openbox, `tint2`, `feh`, `wmctrl`, `xdotool`, `x11vnc`, `novnc`, `websockify`, `scrot`, `python3-pil`, and `python3-websocket`.
+   - **Systemd Drop-in**: Adds `/etc/systemd/system/cloudflared-tunnel.service.d/no-restart.conf` (`Restart=no`) so systemd never attempts to revive the tunnel after it's stopped.
+   - **Systemd Pre-Stop Hook**: Enables `stop-tunnel-on-pause.service` (runs before `halt.target`, `reboot.target`, `shutdown.target`, `suspend.target`) to guarantee `cloudflared-tunnel` is stopped even if the VM is paused directly from the Freestyle web dashboard.
 4. **Hermes Autonomous Engine Provisioning**:
    - Deploys `/home/user/hermes_agent.py` and `/home/user/hermes_task.sh` with `export DISPLAY=:0` so `scrot` never fails with exit code 1.
    - Deploys `/home/user/.hermes/.env` with dedicated pooled Gemini API keys and sub-second model selection (`gemini-3.5-flash-lite` / `gemini-3.1-flash-lite`).
@@ -57,7 +59,7 @@ The script automatically executes:
 7. **Code & Clean Database Sync**:
    - Automatically registers `agentId` in `FREESTYLE_MIGRATED_AGENTS` inside `lib/sandbox.ts`.
    - Cleans old/stale E2B sandbox records in Turso SQLite `agent_sandboxes` (`DELETE ... WHERE agent_id = ?`) and inserts the new Freestyle VM ID (`vm-...`) and `vnc_lite.html` stream URL so status queries and pause/wake commands always find the real VM ID directly.
-8. **Pause to $0 Compute**: Stops `cloudflared-tunnel` (`systemctl stop cloudflared-tunnel`), disables `automaticRestart`, and pauses the VM via `vm.pause()` to guarantee the VM stays hibernated at $0 idle compute cost without Cloudflare edge heartbeats triggering auto-wake.
+8. **Pause to $0 Compute**: Stops `cloudflared-tunnel` (`systemctl stop cloudflared-tunnel`), ensures `automaticRestart: false` and `idleTimeoutSeconds: 300`, and pauses the VM via `vm.pause()` to guarantee the VM stays hibernated at $0 idle compute cost without Cloudflare edge heartbeats or hypervisor restarts triggering auto-wake.
 
 ---
 
@@ -278,53 +280,55 @@ function getCleanStreamUrl(url?: string | null): string {
 
 ---
 
-### 9. VM Pause Bounce-Back Fix — The Complete Solution
+### 9. VM Pause Bounce-Back & Unsolicited Auto-Wake Fix — Complete Architecture & Guarantees
 
-> **Root Cause Identified & Verified**: The bounce-back from `paused` to `running` within ~2 seconds was caused by **`cloudflared-tunnel.service`**! Cloudflare edge servers (`trycloudflare.com`) continuously maintain an active QUIC/TCP tunnel connection with the daemon inside the VM and send keepalive heartbeats every 1-2 seconds. When `vm.pause()` freezes the VM, Cloudflare's incoming tunnel heartbeats hit the VM's network interface, and Freestyle's hypervisor detects inbound traffic and auto-resumes the VM!
+> **The Problem**: A Freestyle VM would either bounce back from `paused` to `running` within ~2 seconds, or turn itself back on and stay running for hours (e.g., 1 hour unattended) even when the user manually paused it from the Freestyle dashboard or AGENTLAX confirmed no VM was on.
 
-#### The Full Root Cause Chain
+#### The 4 Root Causes Identified & Solved
 
-```
-Kelvin says "power it off" / "close the vm"
-  → pauseFreestyleSandbox() calls vm.pause()
-  → VM freezes and state becomes "paused"
-  → 1-2 seconds later: Cloudflare edge sends tunnel keepalive packets
-  → Freestyle hypervisor detects inbound network packets on listening tunnel
-  → Freestyle auto-wakes the VM back to "running"!
-  → Kelvin sees the VM still active in provider dashboard ($$ compute continues)
-```
+1. **`automaticRestart: true` Hypervisor Behavior**:
+   - In Freestyle's VM specification, `automaticRestart` means: *"Whether the VM is booted again when it stops without being asked to."*
+   - If set to `true`, pausing from the Freestyle web dashboard or CLI triggers Freestyle's hypervisor to immediately reboot the VM back into `"running"` state!
+   - **Resolution**: `automaticRestart: false` is permanently enforced on VM creation, VM resume, and VM pause.
 
-#### The Complete Fix (Applied across codebase)
+2. **`idleTimeoutSeconds: null` Left VM Running Indefinitely**:
+   - If a VM is created with `idleTimeoutSeconds: null`, Freestyle will NEVER auto-hibernate it when idle.
+   - **Resolution**: `idleTimeoutSeconds: 300` (5 minutes) is enforced on all Freestyle VMs. If any command completes or an unexpected wake occurs, the hypervisor automatically hibernates the VM after 5 minutes of idle.
 
-**1. Stop `cloudflared-tunnel` before pause (`lib/freestyle-sandbox.ts` & `migrate_agent_to_freestyle.mjs`):**
+3. **Cloudflare Quick Tunnel Inbound Heartbeats**:
+   - `cloudflared-tunnel.service` continuously maintains an active QUIC/TCP tunnel connection with Cloudflare edge servers (`trycloudflare.com`). Keepalive packets arrive every 1-2s, detecting inbound network traffic and waking the VM.
+   - **Resolution**:
+     - **Pre-pause Stop**: `systemctl stop cloudflared-tunnel` runs before every `vm.pause()`.
+     - **Drop-in Override**: `/etc/systemd/system/cloudflared-tunnel.service.d/no-restart.conf` sets `Restart=no` so systemd never revives the tunnel after it's stopped.
+     - **Pre-Stop Hook**: `/etc/systemd/system/stop-tunnel-on-pause.service` intercepts `suspend.target`, `halt.target`, `shutdown.target`, and `reboot.target` so pauses triggered directly on the Freestyle web dashboard also kill `cloudflared-tunnel` before freezing!
+
+4. **Read-Only Status Checks Auto-Waking the VM**:
+   - In `lib/freestyle-sandbox.ts`, `if (!launchIfMissing && !wrapper)` was flawed: if an in-memory session `wrapper` existed, read-only GET requests fell through into `vmRef.start()`.
+   - In `/api/sandbox/screen`, if VM state check failed, it attempted `vm.exec(scrot)` on a paused VM, which auto-wakes it.
+   - **Resolution**: `if (!launchIfMissing)` unconditionally returns status without starting the VM, and `/api/sandbox/screen` returns 503 if VM state cannot be verified.
+
+#### Code Implementation Checklist for Every Migrated Agent
+
 ```typescript
-// ⚠️ MUST stop cloudflared-tunnel daemon BEFORE pausing!
-await vmRef.exec({
-  command: "systemctl stop cloudflared-tunnel",
-  linuxUser: "root",
-  timeoutMs: 5000,
-}).catch(() => {});
+// 1. VM Creation (scripts/migrate_agent_to_freestyle.mjs & lib/freestyle-sandbox.ts)
+const created = await freestyle.vms.create({
+  firewall: { rules: [{ action: "allow", source: {}, destination: { public: true } }] },
+  slug,
+  idleTimeoutSeconds: 300,   // ⚠️ Mandatory: 5-minute auto-pause
+  automaticRestart: false,   // ⚠️ Mandatory: Hypervisor must NEVER self-reboot
+});
 
-await vmRef.update({ automaticRestart: false }).catch(() => {});
+// 2. VM Resume (lib/freestyle-sandbox.ts)
+if (rawVm.state === "paused") {
+  await vmRef.update({ automaticRestart: false, idleTimeoutSeconds: 300 });
+  await vmRef.start();
+}
+
+// 3. VM Pause (pauseFreestyleSandbox & scripts)
+await vmRef.exec({ command: "systemctl stop cloudflared-tunnel", linuxUser: "root", timeoutMs: 5000 }).catch(() => {});
+await vmRef.update({ automaticRestart: false, idleTimeoutSeconds: 300 }).catch(() => {});
 await vmRef.pause();
 ```
-When `cloudflared-tunnel` is stopped, there is ZERO inbound network traffic hitting the VM, so Freestyle keeps the VM permanently paused in $0 compute standby!
-
-**2. Auto-restart `cloudflared-tunnel` on wake (`lib/freestyle-sandbox.ts`):**
-When the VM wakes up (`getOrCreateFreestyleSandbox`), the service startup sequence automatically restarts it:
-```bash
-systemctl is-active cloudflared-tunnel || systemctl restart cloudflared-tunnel
-```
-
-**3. Direct equivalence between UI button and Telegram Master Agent (`lib/agency-actions.ts`):**
-When Kelvin commands AGENTLAX on Telegram (`"power it off"`, `"close the vm"`), AGENTLAX calls `pauseAgentSandbox(campaignId, agId)`, which is the EXACT same function called by `POST /api/sandbox` when the user clicks the "Power Off" button in the Computer section of the dashboard.
-
-**4. Screen polling guard (`app/api/sandbox/screen/route.ts` & `components/AgentTabs.tsx`):**
-`screen/route.ts` checks DB status and returns 503 without executing `vm.exec()` if the VM is paused, and `AgentTabs.tsx` immediately halts screen polling on 503.
-
-#### Key Insight for Future Migrations
-Any persistent daemon maintaining an open connection to an external edge router (Cloudflare, ngrok, reverse SSH tunnels) **must be stopped before pausing a Freestyle VM**. Failing to stop it will cause the edge router's heartbeats to wake the VM continuously.
-- Any background service check that calls `wrapper.commands.run()` — these all go through `vmRef.exec()`
 
 ---
 
