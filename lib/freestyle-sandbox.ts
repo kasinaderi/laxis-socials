@@ -233,7 +233,7 @@ export async function getOrCreateFreestyleSandbox(
   const { slug, vncDomain, streamUrl } = getFreestyleConfigForAgent(agentId);
 
   // STRICTLY READ-ONLY on page loads: Do not wake or start VM if not requested
-  if (!launchIfMissing && !wrapper) {
+  if (!launchIfMissing) {
     const isRunning = existing?.status === "running";
     let activeStreamUrl = existing?.streamUrl || streamUrl;
     if (!activeStreamUrl || activeStreamUrl.includes("style.dev")) {
@@ -284,7 +284,8 @@ export async function getOrCreateFreestyleSandbox(
       const created = await freestyle.vms.create({
         firewall: { rules: [{ action: "allow", source: {}, destination: { public: true } }] },
         slug,
-        idleTimeoutSeconds: null,
+        idleTimeoutSeconds: 300,
+        automaticRestart: false,
       });
       vmRef = freestyle.vms.ref(created.vm.id);
       vmId = created.vm.id;
@@ -293,9 +294,9 @@ export async function getOrCreateFreestyleSandbox(
       vmRef = freestyle.vms.ref(rawVm.id);
       if (rawVm.state === "paused") {
         console.log(`[Freestyle] Resuming paused VM ${vmId} for ${agentId}...`);
-        // Re-enable automaticRestart before waking (pauseFreestyleSandbox disables it before pause)
+        // Keep automaticRestart = false and idleTimeoutSeconds = 300 so VM never self-wakes or runs indefinitely
         try {
-          await vmRef.update({ automaticRestart: true });
+          await vmRef.update({ automaticRestart: false, idleTimeoutSeconds: 300 });
         } catch {}
         await vmRef.start();
         console.log(`[Freestyle] VM ${vmId} resumed!`);
@@ -486,11 +487,11 @@ export async function pauseFreestyleSandbox(
             timeoutMs: 5000,
           }).catch(() => {});
 
-          // Disable automaticRestart so Freestyle won't bounce the VM back to "running"
+          // Disable automaticRestart and set 5-minute idle timeout so Freestyle won't bounce the VM back to "running"
           try {
-            await vmRef.update({ automaticRestart: false });
+            await vmRef.update({ automaticRestart: false, idleTimeoutSeconds: 300 });
           } catch (e: any) {
-            console.warn(`[Freestyle] Could not disable automaticRestart:`, e?.message);
+            console.warn(`[Freestyle] Could not update automaticRestart / idleTimeout:`, e?.message);
           }
 
           // Issue the actual pause

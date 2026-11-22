@@ -66,7 +66,7 @@ WantedBy=halt.target reboot.target shutdown.target suspend.target`;
 
     // Safely freeze back into $0 compute mode
     await vmRef.exec({ command: "systemctl stop cloudflared-tunnel", linuxUser: "root", timeoutMs: 5000 }).catch(() => {});
-    await vmRef.update({ automaticRestart: false }).catch(() => {});
+    await vmRef.update({ automaticRestart: false, idleTimeoutSeconds: 300 }).catch(() => {});
     await vmRef.pause();
     console.log("  ✓ ig_shader synced & safely frozen in $0 compute mode!\n");
   } catch (err) {

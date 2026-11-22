@@ -77,7 +77,11 @@ export async function GET(req: Request) {
         );
       }
     } catch {
-      // If we can't check state, skip — better to try screenshot than to block forever
+      // If we cannot verify VM state, do NOT exec scrot — executing on a paused VM auto-wakes it!
+      return NextResponse.json(
+        { error: "Cannot verify VM state" },
+        { status: 503, headers: { "X-VM-State": "unknown", "Cache-Control": "no-store" } }
+      );
     }
 
     // Take a screenshot via scrot and return raw PNG bytes
